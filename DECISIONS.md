@@ -3419,3 +3419,18 @@ values, each role's contrast tested against its background, 4.5:1 for text and 3
 file `cockpit.toml` (per-role overrides, bad values refused by name), then `NO_COLOR`, then
 terminal. A test walks every golden screen for the rules. The `toml` crate joined harness-tui (it
 was already in the workspace). Code views lost their syntax colours: keywords bold, comments muted.
+
+## 2026-10-19 — Sections, status and notices get their own hues; a hand-off pause is "waiting"
+
+The person's screenshot of a green-on-black terminal showed nearly all text green: with the
+terminal theme, plain text is the terminal's foreground. Decided, on the person's thought that the
+parts of a screen need telling apart: four more roles, each with its own hue in every theme —
+section (pane titles and headings), notice (informational lines), status (the Ready/Last line),
+label (secondary text) — so a screen reads as headings, states, the next step, notices and plain
+text, in five hues rather than one; the rules became tests (a section colour starts its line, a
+notice is a whole line, a label never carries a mark). The light theme's accent is colour 23: 31
+measured under the 4.5:1 floor. And the pass that made failures honest had mislabelled a hand-off
+pause as "failed"; a pause now says "waiting for your answer: <file>" with the way forward, in the
+attention colour. Next, agreed with the person: model work in the cockpit goes through the chat on
+their Claude subscription, with a sign-in walk-through when Claude Code is not installed or not
+signed in, so the cockpit never sends a person to a file path when what they needed was a sign-in.

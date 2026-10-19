@@ -51,18 +51,23 @@ screen (the Next step label and the recommended item), no dim, no dark grey, no 
 yellows became 18 attention, 15 bold, 3 muted, 4 plain, 1 accent. Code views lost syntax colours
 (keywords bold, comments muted). The headless driver tags the accent as `A`.
 
-## In progress (2026-10-19): sections, status and notices get their own hues; the hand-off pause
+## Done (2026-10-19): sections, status and notices have their own hues; a hand-off pause is "waiting"
 
-The person's screenshot (a green-on-black terminal) showed nearly all text green: the terminal
-theme's plain text is the terminal's foreground. One Opus pass adds roles with their own hue in
-every theme — section (pane titles, headings), status (the Ready/Last line), notice, label — and
-fixes a bug the screenshot showed: a hand-off pause (`project ask` exit 1 with "awaiting
-response") was labelled "failed"; it must read "waiting for your answer: <file> — …".
+After the person's screenshot (nearly all text green on a green-on-black terminal), four roles
+joined the palette — section (pane titles, headings: the terminal's blue bold / 75 / 25), notice
+(magenta / 176 / 127), status (the Ready/Last line), label (secondary text) — applied across every
+screen, with the rule tests extended (a section colour starts its line; a notice is a whole line; a
+label never holds a mark or "Next step:"). A hand-off pause (exit 1 with "awaiting response", or the
+`awaiting` event) now reads "waiting for your answer: <file> — write the reply there, then run Ask a
+model again (or answer it in the chat)" in the attention colour, never "failed"; the status line
+shortens long paths to their last three parts and keeps the sentence's end. The light theme's
+accent is 23, not 31 (31 fails 4.5:1 on white). Left: a newly started cockpit does not remember
+that a hand-off is waiting.
 
-## Queued (2026-10-19): model work in the cockpit goes through the chat, with a sign-in walk-through
+## In progress (2026-10-19): model work in the cockpit goes through the chat, with a sign-in walk-through
 
 The person's "Ask a model" from the Project view ran the command-line hand-off and stopped on a
-file nobody writes. Next pass, after the colour pass merges: "Ask a model" becomes "Ask in chat"
+file nobody writes. One Opus pass (running): "Ask a model" becomes "Ask in chat"
 with the question pre-typed (the chat agent answers through the harness and the cockpit runs
 `project ask` again; the command-line hand-off stays for the CLI); before any model act the
 cockpit checks Claude Code is installed and signed in, and if not shows a plain walk-through (open
