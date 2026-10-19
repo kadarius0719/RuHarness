@@ -42,8 +42,9 @@ not clear the screen when the cockpit goes full-screen and drops key bursts sent
 The person found the colours hard to read (text blending into the terminal; the cockpit used the
 terminal's named colours, yellow in 41 places, and dim text). One Opus pass builds a palette of
 named roles (text, muted, heading, accent, good, bad, attention, selected, disabled, border) with
-three themes (dark default, `--theme light`, `--theme mono`/`NO_COLOR`), contrast tests against
-each theme's background, and the rule that colour means a state only, beside a mark or word, with
+four themes (terminal — the default, the terminal's own colours by role, the person's idea;
+`--theme dark|light` designed and contrast-tested; `--theme mono`/`NO_COLOR`), per-role overrides in
+a small config file, and the rule that colour means a state only, beside a mark or word, with
 one accent per screen for the next step.
 
 ## The work, in order
