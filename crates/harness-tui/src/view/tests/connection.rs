@@ -158,6 +158,7 @@ fn the_walk_through_says_what_failed_and_the_steps() {
         app.chat.problem = Some(Problem {
             trouble,
             seen: seen.into(),
+            fix: None,
         });
         app.chat_trouble_seen();
         let (t, body) = dialog(&app);
@@ -174,7 +175,43 @@ fn the_walk_through_says_what_failed_and_the_steps() {
             .collect();
         assert_eq!(buttons, ["Cancel Esc", "Check again y"]);
     }
+    // An old harness-mcp beside a newer cockpit: a rebuild, said as one —
+    // its own title, the line to paste as step 2, never the sign-in steps.
+    app.mode = Mode::Normal;
+    app.chat.problem = Some(Problem {
+        trouble: Trouble::OldTools,
+        seen: "harness-mcp at /w/target/debug/harness-mcp lacks harness_map_questions".into(),
+        fix: Some("cd /w && cargo build -p harness-mcp".into()),
+    });
+    app.chat_trouble_seen();
+    let (t, body) = dialog(&app);
+    assert_eq!(t, "The chat's harness tools are out of date");
+    assert_eq!(
+        body,
+        [
+            "The chat reads the project through harness-mcp, and the one the cockpit found is \
+             older than the cockpit: it lacks a tool the chat needs. Rebuild it:",
+            "1. Open a new Terminal window.",
+            "2. Paste this line and press Return: cd /w && cargo build -p harness-mcp",
+            "3. Wait for it to finish (about a minute).",
+            "4. Come back here and choose Check again.",
+            "What the cockpit saw: harness-mcp at /w/target/debug/harness-mcp lacks \
+             harness_map_questions",
+        ]
+    );
+    assert_eq!(
+        app.chat_unavailable().as_deref(),
+        Some(
+            "The chat's harness tools are out of date — choose Check the chat's connection to \
+             see how to fix it"
+        )
+    );
     // While a dialog of another kind is open, the notice says it instead.
+    app.chat.problem = Some(Problem {
+        trouble: Trouble::Stopped,
+        seen: "Error: something broke".into(),
+        fix: None,
+    });
     app.mode = Mode::Help { scroll: 0 };
     app.chat_trouble_seen();
     assert!(matches!(app.mode, Mode::Help { .. }));
@@ -197,6 +234,7 @@ fn while_the_chat_is_unavailable_its_items_are_greyed_and_never_recommended() {
     app.chat.problem = Some(Problem {
         trouble: Trouble::NotSignedIn,
         seen: "Claude Code said authentication_failed".into(),
+        fix: None,
     });
     let reason =
         "Claude Code is not signed in — choose Check the chat's connection to see how to fix it";
@@ -264,6 +302,7 @@ fn check_again_looks_again_and_sends_the_last_message_again() {
     app.chat.problem = Some(Problem {
         trouble: Trouble::NotInstalled,
         seen: "claude not found".into(),
+        fix: None,
     });
     app.chat.bins = Err("claude not found: install Claude Code or pass --chat-runtime".into());
     app.open_menu();
@@ -300,6 +339,7 @@ fn check_again_looks_again_and_sends_the_last_message_again() {
     app.chat.problem = Some(Problem {
         trouble: Trouble::NotSignedIn,
         seen: "Claude Code said authentication_failed".into(),
+        fix: None,
     });
     app.focus = Focus::Files;
     app.mode = Mode::Normal;

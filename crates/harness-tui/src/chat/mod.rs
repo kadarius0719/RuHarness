@@ -25,7 +25,7 @@ use runtime::{Binaries, Ending, Out, Procs, Runtime};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use stream::{Block, In};
 use transcript::{Tone, Transcript};
@@ -67,6 +67,10 @@ pub enum Trouble {
     /// Claude Code ended by itself, or the cockpit refused what it started
     /// with.
     Stopped,
+    /// harness-mcp started, but lacks a tool the cockpit expects: it is an
+    /// older build than the cockpit (`cargo run -p harness-tui` builds the
+    /// cockpit alone). The fix is a rebuild, not a sign-in.
+    OldTools,
 }
 
 /// The connection's problem and what the cockpit saw of it.
@@ -76,6 +80,9 @@ pub struct Problem {
     pub trouble: Trouble,
     /// What was seen: the runtime's or the check's own words, one line.
     pub seen: String,
+    /// The one line that fixes it, when it is a command to paste (the
+    /// rebuild of an old harness-mcp); the dialog's step 2.
+    pub fix: Option<String>,
 }
 
 impl Problem {
@@ -84,6 +91,30 @@ impl Problem {
         Problem {
             trouble,
             seen: line.chars().take(300).collect(),
+            fix: None,
+        }
+    }
+
+    /// An old harness-mcp: what it lacks, and the line that rebuilds it.
+    fn old_tools(mcp: &Path, missing: &str) -> Problem {
+        let short = missing.strip_prefix("mcp__harness__").unwrap_or(missing);
+        let mut p = Problem::new(
+            Trouble::OldTools,
+            &format!("harness-mcp at {} lacks {short}", mcp.display()),
+        );
+        p.fix = Some(rebuild_line(mcp));
+        p
+    }
+
+    /// The chat pane's line when the chat is ended for this problem.
+    pub fn said(&self) -> String {
+        match (&self.trouble, &self.fix) {
+            (Trouble::OldTools, Some(fix)) => format!(
+                "the chat's harness tools are out of date: {} — rebuild it ({fix}), then \
+                 Check again — the chat is off",
+                self.seen
+            ),
+            _ => self.seen.clone(),
         }
     }
 
@@ -93,6 +124,7 @@ impl Problem {
             Trouble::NotInstalled => "Claude Code is not installed",
             Trouble::NotSignedIn => "Claude Code is not signed in",
             Trouble::Stopped => "Claude Code stopped",
+            Trouble::OldTools => "The chat's harness tools are out of date",
         }
     }
 
@@ -119,6 +151,20 @@ impl Problem {
                 "The chat's Claude Code stopped (what it said is below). When it is the \
                  sign-in:"
             }
+            Trouble::OldTools => {
+                let fix = self.fix.as_deref().unwrap_or("cargo build -p harness-mcp");
+                return vec![
+                    "The chat reads the project through harness-mcp, and the one the cockpit \
+                     found is older than the cockpit: it lacks a tool the chat needs. Rebuild \
+                     it:"
+                    .into(),
+                    "1. Open a new Terminal window.".into(),
+                    format!("2. Paste this line and press Return: {fix}"),
+                    "3. Wait for it to finish (about a minute).".into(),
+                    "4. Come back here and choose Check again.".into(),
+                    format!("What the cockpit saw: {}", self.seen),
+                ];
+            }
         };
         vec![
             lead.to_string(),
@@ -129,6 +175,29 @@ impl Problem {
             format!("What the cockpit saw: {}", self.seen),
         ]
     }
+}
+
+/// The line that rebuilds harness-mcp where it was found: a workspace
+/// build (`…/target/debug/harness-mcp`) by `cargo build` in that checkout,
+/// anything else by `cargo install` from the person's RuHarness folder.
+pub fn rebuild_line(mcp: &Path) -> String {
+    let mut parts = mcp.components().rev();
+    let name = parts.next();
+    let profile = parts.next().and_then(|c| match c.as_os_str().to_str() {
+        Some("debug") => Some(""),
+        Some("release") => Some(" --release"),
+        _ => None,
+    });
+    let target = parts.next().is_some_and(|c| c.as_os_str() == "target");
+    if let (Some(_), Some(profile), true) = (name, profile, target) {
+        if let Some(repo) = mcp.ancestors().nth(3) {
+            return harness_core::text::safe_line(&format!(
+                "cd {} && cargo build{profile} -p harness-mcp",
+                repo.display()
+            ));
+        }
+    }
+    "cd <your RuHarness folder> && cargo install --locked --path crates/harness-mcp".into()
 }
 
 /// How the binaries were found, to look again on Check again.
@@ -504,7 +573,14 @@ impl Chat {
         if self.problem.is_some() {
             return;
         }
-        let p = Problem::new(trouble, seen);
+        self.trouble_with(Problem::new(trouble, seen), events);
+    }
+
+    /// Note a problem already built (an old harness-mcp, with its fix).
+    fn trouble_with(&mut self, p: Problem, events: &mut Vec<Event>) {
+        if self.problem.is_some() {
+            return;
+        }
         self.problem = Some(p.clone());
         events.push(Event::Unavailable { problem: p });
     }
@@ -851,14 +927,14 @@ impl Chat {
 
     /// End the chat for a reason found in its stream (a failed `init`
     /// check): said, and the process ended quickly.
-    fn fail(&mut self, why: String, now: Instant, events: &mut Vec<Event>) {
-        self.say(Tone::Bad, why.clone());
+    fn fail(&mut self, p: Problem, now: Instant, events: &mut Vec<Event>) {
+        self.say(Tone::Bad, p.said());
         if let Some(e) = self.end(now, Duration::ZERO, Duration::from_millis(300)) {
             events.push(e);
         }
         // The title says "ended", not "not started" (fix check N8).
         self.ended_by_itself = true;
-        self.trouble(Trouble::Stopped, &why, events);
+        self.trouble_with(p, events);
     }
 
     fn check_init(
@@ -866,35 +942,47 @@ impl Chat {
         permission_mode: Option<&str>,
         tools: &[String],
         servers: &[(String, String)],
-    ) -> Result<(), String> {
+    ) -> Result<(), Problem> {
         let version = self.version.as_deref().unwrap_or("?");
         if permission_mode != Some("default") {
-            return Err(format!(
-                "Claude Code {version} runs in permission mode {} — the chat is off",
-                permission_mode.unwrap_or("(none)")
+            return Err(Problem::new(
+                Trouble::Stopped,
+                &format!(
+                    "Claude Code {version} runs in permission mode {} — the chat is off",
+                    permission_mode.unwrap_or("(none)")
+                ),
             ));
         }
         match servers {
             [(name, status)] if name == "harness" => match status.as_str() {
                 "connected" | "pending" => {}
                 other => {
-                    return Err(format!(
+                    return Err(Problem::new(
+                        Trouble::Stopped,
+                        &format!(
                         "the harness tools did not start: harness-mcp is {other} — the chat is off"
+                    ),
                     ))
                 }
             },
             _ => {
                 let names: Vec<&str> = servers.iter().map(|(n, _)| n.as_str()).collect();
-                return Err(format!(
-                    "Claude Code {version} attached other tool servers ({}) — the chat is off",
-                    names.join(", ")
+                return Err(Problem::new(
+                    Trouble::Stopped,
+                    &format!(
+                        "Claude Code {version} attached other tool servers ({}) — the chat is off",
+                        names.join(", ")
+                    ),
                 ));
             }
         }
         if let Some(extra) = tools.iter().find(|t| !COCKPIT_TOOLS.contains(&t.as_str())) {
-            return Err(format!(
+            return Err(Problem::new(
+                Trouble::Stopped,
+                &format!(
                 "Claude Code {version} offers a tool the cockpit does not expect: {extra} — the \
                  chat is off"
+            ),
             ));
         }
         let connected = servers.iter().all(|(_, s)| s == "connected");
@@ -903,9 +991,13 @@ impl Chat {
                 .iter()
                 .find(|t| !tools.iter().any(|x| x == *t))
             {
-                return Err(format!(
-                    "the harness tools are incomplete ({missing} is missing) — the chat is off"
-                ));
+                // An older harness-mcp beside a newer cockpit: a rebuild,
+                // said as one, never the sign-in walk-through.
+                let mcp = match &self.bins {
+                    Ok(b) => b.mcp.clone(),
+                    Err(_) => PathBuf::from("harness-mcp"),
+                };
+                return Err(Problem::old_tools(&mcp, missing));
             }
         }
         Ok(())
@@ -929,8 +1021,8 @@ impl Chat {
                     self.turn = true;
                     self.turn_started = Some(now);
                 }
-                if let Err(why) = self.check_init(permission_mode.as_deref(), &tools, &servers) {
-                    return self.fail(why, now, events);
+                if let Err(p) = self.check_init(permission_mode.as_deref(), &tools, &servers) {
+                    return self.fail(p, now, events);
                 }
                 self.model = model;
                 self.api_key_source = api_key_source;

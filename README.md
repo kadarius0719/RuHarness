@@ -121,8 +121,11 @@ NAME` (`terminal`, the default, uses your terminal's own colours; `dark` or `lig
 palettes, `mono` has none; also `RUHARNESS_THEME`; `NO_COLOR` picks `mono`; a settings file
 `cockpit.toml` can keep the theme and change any colour: [docs/topics/cockpit.md](docs/topics/cockpit.md)), `--no-chat`,
 `--chat-runtime PATH` (the `claude` to run), `--harness-mcp PATH` (default next to the cockpit,
-else on PATH), `--chat-model NAME`. `cargo build` at the root skips it (`cargo build -p
-harness-tui`). Install the three programs (`harness`, `harness-tui`, `harness-mcp`) with the three
+else on PATH), `--chat-model NAME`. `cargo build` at the root skips it. Without installing,
+build the three programs together and run the cockpit from the build folder:
+`cargo build -p harness-cli -p harness-tui -p harness-mcp && target/debug/harness-tui --target
+DIR` (built apart, a cockpit newer than its `harness-mcp` says so in the chat's connection dialog,
+with the rebuild line to paste). Install the three programs (`harness`, `harness-tui`, `harness-mcp`) with the three
 `cargo install --locked --path crates/…` lines of the testing guide's Step 0.19
 ([docs/TESTING-GUIDE.md](docs/TESTING-GUIDE.md), Part 0); reinstall the cockpit whenever you
 reinstall harness-cli, as it uses the `harness` first on your PATH.

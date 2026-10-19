@@ -83,6 +83,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-10-19 — **The cockpit's colours: roles, four themes, a settings file** — named roles; terminal (default), dark, light, mono; `--theme`, `RUHARNESS_THEME`, `cockpit.toml` overrides; contrast and rule tests.
 - 2026-10-19 — **Sections, status and notices get their own hues; a hand-off pause is "waiting"** — section, notice, status and label roles with their own hues; a hand-off pause says "waiting for your answer", never "failed".
 - 2026-10-19 — **Model work in the cockpit goes through the chat, with a sign-in walk-through** — the Project view's Ask items type their question into the chat; harness-mcp's two map tools; the connection check and its dialog.
+- 2026-10-19 — **An old harness-mcp beside a newer cockpit is said as a rebuild, not a sign-in** — its own dialog, with the rebuild line to paste as step 2; the init check returns the problem itself.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -3485,3 +3486,23 @@ connecting should not walk the user through signing in. Decided and built (one p
   exact set once connected); the live chat tests should be run once by the person
   (`RUHARNESS_LIVE_CHAT=1 …`, briefing §18) to confirm the real Claude Code lists them.
 
+## 2026-10-19 — An old harness-mcp beside a newer cockpit is said as a rebuild, not a sign-in
+
+**Seen.** The person ran `cargo run -p harness-tui` on a fresh pull: that builds the cockpit alone,
+so the `harness-mcp` next to it was the morning's build, without the two map tools. The chat ended
+with "the harness tools are incomplete (mcp__harness__harness_map_questions is missing)", and the
+cockpit opened the **Claude Code stopped** dialog: four sign-in steps for a problem that had nothing
+to do with signing in. Five Check agains later, the same.
+
+**Decided.** A missing cockpit tool is its own case, `The chat's harness tools are out of date`:
+the dialog says harness-mcp is older than the cockpit, and its step 2 is the one line to paste —
+`cd <that checkout> && cargo build -p harness-mcp` when harness-mcp was found under a `target/`
+folder (`--release` kept), else `cargo install --locked --path crates/harness-mcp`. The chat pane's
+line says the same, with the path and the tool. Check again re-finds the binaries and resends, as
+before. The init check now returns the problem itself, so the four other refusals stay "stopped" and
+this one does not. README's cockpit section tells the uninstalled run to build the three programs
+together; the cockpit topic names the dialog.
+
+**Not done.** The cockpit does not compare build times to warn before the chat starts: a cockpit
+rebuilt with no change to harness-mcp would be a false alarm. The tool check at start is the honest
+detector, and it now says what to do.

@@ -66,6 +66,13 @@ that a hand-off is waiting.
 
 ## Done (2026-10-19): model work in the cockpit goes through the chat, with a sign-in walk-through
 
+The person's first run of it found a snag the fake Claude Code could not: `cargo run -p harness-tui`
+builds the cockpit alone, so the `harness-mcp` beside it was stale and the sign-in dialog opened for
+a rebuild problem. Fixed the same day: an old harness-mcp is its own dialog, with the rebuild line
+to paste (DECISIONS 2026-10-19, "An old harness-mcp beside a newer cockpit…"). The uninstalled run
+is now `cargo build -p harness-cli -p harness-tui -p harness-mcp && target/debug/harness-tui
+--target DIR`.
+
 Built as queued below (DECISIONS 2026-10-19, CHAT-PANE-DESIGN §1.6 and §3.6, MCP-DESIGN §R7). Open from it: run the live chat tests once (the real Claude Code must list the two new map tools), and the person's own try of "Ask for advice — ask in chat" signed in.
 
 What was queued:

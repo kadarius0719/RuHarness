@@ -62,6 +62,8 @@ What the cockpit saw: Claude Code said: Not logged in · Please run /login
  [ Cancel  Esc ] [ Check again  y ]
 ```
 
+One more dialog is not about signing in: `The chat's harness tools are out of date`. The chat reads the project through a second program, `harness-mcp`, and when the cockpit was rebuilt but that program was not (`cargo run -p harness-tui` or `cargo build -p harness-tui` builds the cockpit alone), it lacks a tool the chat needs. The dialog's step 2 is the one line to paste, for example `cd ~/code/RuHarness && cargo build -p harness-mcp`; then Check again. Building the three programs together avoids it: `cargo build -p harness-cli -p harness-tui -p harness-mcp`.
+
 **Check again** looks for `claude` again and, after a failed sign-in, sends your last message again in a new chat. While the chat cannot be used, its items (**Migrate — ask in chat**, the Project view's ask-in-chat items, **Ask in chat…**) are greyed with that reason, the menu offers **Check the chat's connection…** to open the dialog again, and the Next step never recommends them.
 
 | The chat can ask to… | Only you can… |

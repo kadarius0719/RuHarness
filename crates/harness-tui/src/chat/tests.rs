@@ -310,7 +310,7 @@ fn an_unexpected_init_ends_the_chat() {
             COCKPIT_TOOLS[..3].to_vec(),
             "connected",
             "default",
-            "the harness tools are incomplete",
+            "the chat's harness tools are out of date: harness-mcp at",
         ),
     ] {
         let tmp = TmpDir::new("chat-init");
@@ -328,6 +328,23 @@ fn an_unexpected_init_ends_the_chat() {
         assert!(!c.alive());
         let t = text(&mut c);
         assert!(t.contains(words), "{words}: {t}");
+        // A missing tool is an old build, with its rebuild line; the rest
+        // are "stopped".
+        let p = c.problem.clone().unwrap();
+        if words.contains("out of date") {
+            assert_eq!(p.trouble, Trouble::OldTools);
+            assert!(p.seen.ends_with("lacks harness_migrate"), "{}", p.seen);
+            assert!(
+                p.fix.as_deref().is_some_and(|f| f.contains("harness-mcp")),
+                "{p:?}"
+            );
+            assert!(
+                t.contains("— rebuild it (") && t.contains("Check again — the chat is off"),
+                "{t}"
+            );
+        } else {
+            assert_eq!(p.trouble, Trouble::Stopped);
+        }
         end(&mut c);
     }
     // A pending server passes with a subset of the tools.
@@ -1206,4 +1223,23 @@ fn the_map_answer_is_allowed_under_the_chats_model_only() {
         .unwrap();
     assert_eq!(deny["response"]["response"]["behavior"], "deny");
     end(&mut c);
+}
+
+/// The rebuild line names where harness-mcp was found: a workspace build
+/// by `cargo build` in that checkout (release kept), anything else by
+/// `cargo install`.
+#[test]
+fn the_rebuild_line_follows_where_harness_mcp_was_found() {
+    assert_eq!(
+        rebuild_line(Path::new("/w/RuHarness/target/debug/harness-mcp")),
+        "cd /w/RuHarness && cargo build -p harness-mcp"
+    );
+    assert_eq!(
+        rebuild_line(Path::new("/w/RuHarness/target/release/harness-mcp")),
+        "cd /w/RuHarness && cargo build --release -p harness-mcp"
+    );
+    assert_eq!(
+        rebuild_line(Path::new("/usr/local/bin/harness-mcp")),
+        "cd <your RuHarness folder> && cargo install --locked --path crates/harness-mcp"
+    );
 }
