@@ -21,10 +21,8 @@ pub fn node_name(app: &App, sel: &Selection) -> String {
     match sel {
         Selection::MapProject if map.is_some() => "Map the project again".into(),
         Selection::MapProject => "Map the project".into(),
-        // The id alone: what it is sits on the line under it (its file, the
-        // map's guess, a model's label).
-        Selection::Program(id) => id.clone(),
-        Selection::Tool(id) => format!("Open tool {}", crate::project::tool_label(map, id)),
+        // The id alone: the card says what it is.
+        Selection::Program(id) | Selection::Tool(id) => id.clone(),
         Selection::ProjectHome => "◂ Back to the project view".into(),
         _ => String::new(),
     }

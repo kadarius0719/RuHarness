@@ -37,9 +37,9 @@ pub const FILES_WIDE: u16 = 32;
 /// The Files pane at 80–119 columns.
 pub const FILES_NARROW: u16 = 24;
 /// The Project view's left pane at [`WIDE_FROM`] columns or more.
-pub const PROJECT_WIDE: u16 = 48;
+pub const PROJECT_WIDE: u16 = 36;
 /// The Project view's left pane below [`WIDE_FROM`] columns.
-pub const PROJECT_NARROW: u16 = 36;
+pub const PROJECT_NARROW: u16 = 30;
 /// The C and the Rust sit side by side when the View is at least this wide.
 pub const SPLIT_VIEW_MIN: u16 = 78;
 /// The dialog's width (narrower terminals get what they have).
@@ -734,11 +734,28 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
                 section_role(),
             ));
         }
-        RowKind::Detail(text) => {
-            return Line::from(Span::styled(
-                ellipsis(&format!("{indent}{text}"), width),
-                label_role(),
-            ));
+        // A file holding a `main` that did not compile: a program's row,
+        // its mark and its state at the right.
+        RowKind::Failed(path) => {
+            let lead = format!("{indent}  ");
+            let word = "did not compile";
+            let room = width.saturating_sub(width_of(&lead) + 2);
+            let show_word = room > 8 + word.len();
+            let name = if show_word {
+                ellipsis(path, room - word.len() - 1)
+            } else {
+                ellipsis(path, room)
+            };
+            let mut spans = vec![
+                Span::raw(lead),
+                Span::styled("✗ ", glyph_style("✗")),
+                Span::raw(name.clone()),
+            ];
+            if show_word {
+                spans.push(Span::raw(" ".repeat(room - width_of(&name) - word.len())));
+                spans.push(Span::styled(word, muted()));
+            }
+            return Line::from(spans);
         }
         RowKind::Node(sel) => sel,
     };
@@ -896,8 +913,12 @@ fn draw_files(frame: &mut Frame, app: &mut App, area: Rect) {
     let height = inner.height as usize;
     // The tree's default folds follow its height (a group folded where its
     // rows would push the other headings off).
-    if app.layout.tree_page != height {
+    // The Project view's headings wrap to the tree's width.
+    if app.layout.tree_page != height
+        || (app.in_project_view() && app.layout.tree_width != inner.width as usize)
+    {
         app.layout.tree_page = height;
+        app.layout.tree_width = inner.width as usize;
         app.rebuild_rows();
     }
     let cursor = app.cursor().unwrap_or(0);

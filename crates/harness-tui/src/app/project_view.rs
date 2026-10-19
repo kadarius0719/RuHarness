@@ -107,25 +107,26 @@ fn heading(text: String) -> Row {
     }
 }
 
-/// A program's file, dim, under its row.
-fn detail(path: &str) -> Row {
-    Row {
-        depth: 3,
-        kind: RowKind::Detail(safe_line(path)),
-        expandable: false,
-        open: false,
+/// A group's heading and its counts ("Programs (3) · 1 accepted · 2 need a
+/// decision"), wrapped at the counts to the tree's `width` (0: one row);
+/// the rows after the first indented.
+fn headings(head: String, counts: &[String], width: usize) -> Vec<Row> {
+    let mut lines = vec![head];
+    for c in counts {
+        let last = lines.last_mut().expect("one line at least");
+        let joined = format!("{last} · {c}");
+        if width == 0 || joined.chars().count() <= width {
+            *last = joined;
+        } else {
+            lines.push(format!("  {c}"));
+        }
     }
+    lines.into_iter().map(heading).collect()
 }
 
-/// A program's lines under its row, dim: its file and what the map knows
-/// it is ("src/tools/lzg.c (a tool, by its folder)"), then the model's
-/// label when a model has answered.
-fn program_details(o: &Offered, label: Option<&project::Label>) -> Vec<Row> {
-    let mut rows = vec![detail(&format!("{} ({})", o.path, o.what()))];
-    if let Some(l) = label {
-        rows.push(detail(&l.words()));
-    }
-    rows
+/// A count in words: "1 needs a decision", "2 need a decision".
+fn count(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
 }
 
 fn node(depth: usize, sel: Selection) -> Row {
@@ -223,52 +224,96 @@ impl App {
         self.link = None;
     }
 
-    /// The Project view's rows: one row "Map the project" before a map (or
-    /// when the map is unreadable or offers nothing); after a map the
-    /// programs, the libraries, then the accepted tools, each group under
-    /// its heading.
+    /// The Project view's rows (§9.3 of the cockpit design: one list): one
+    /// row "Map the project" before a map (or when the map is unreadable or
+    /// offers nothing); after a map the heading with its counts, one row
+    /// per program — an accepted program's row is its tool's row — then the
+    /// libraries when there are any. A tool the map does not name keeps a
+    /// row of its own.
     pub(crate) fn project_rows(&self) -> Vec<Row> {
         let mut rows = Vec::new();
         let Some(p) = &self.project else {
             return rows;
         };
+        let width = self.layout.tree_width;
         let map = p.map();
         if map.is_none_or(|m| m.offered.is_empty() && m.not_compiled.is_empty()) {
             rows.push(node(0, Selection::MapProject));
         }
-        if let Some(m) = map {
-            let programs: Vec<&Offered> =
-                m.offered.iter().filter(|o| o.kind != "library").collect();
-            rows.push(heading(format!(
+        let accepted = |o: &Offered| p.tools.contains(&o.id);
+        // Tools the map does not name (or no map is read).
+        let others: Vec<&String> = p
+            .tools
+            .iter()
+            .filter(|id| map.is_none_or(|m| m.get(id).is_none()))
+            .collect();
+        let Some(m) = map else {
+            if !others.is_empty() {
+                rows.extend(headings(format!("Tools ({})", others.len()), &[], width));
+                rows.extend(
+                    others
+                        .iter()
+                        .map(|id| node(1, Selection::Tool((*id).clone()))),
+                );
+            }
+            return rows;
+        };
+        let programs: Vec<&Offered> = m.offered.iter().filter(|o| o.kind != "library").collect();
+        let by = |f: &dyn Fn(&Offered) -> bool| programs.iter().filter(|o| f(o)).count();
+        let n_accepted = by(&|o| accepted(o)) + others.len();
+        let n_held = by(&|o| !accepted(o) && o.state == State::Held);
+        let n_links = by(&|o| !accepted(o) && o.state == State::Linked);
+        let n_not_compiled =
+            by(&|o| !accepted(o) && o.state == State::DidNotCompile) + m.not_compiled.len();
+        let n_not_linked = by(&|o| !accepted(o) && o.state == State::DidNotLink);
+        let counts: Vec<String> = [
+            (n_accepted, count(n_accepted, "accepted", "accepted")),
+            (n_held, count(n_held, "needs a decision", "need a decision")),
+            (n_links, count(n_links, "links", "link")),
+            (
+                n_not_compiled,
+                count(n_not_compiled, "did not compile", "did not compile"),
+            ),
+            (
+                n_not_linked,
+                count(n_not_linked, "did not link", "did not link"),
+            ),
+        ]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(_, words)| words)
+        .collect();
+        rows.extend(headings(
+            format!(
                 "Programs ({})",
-                programs.len() + m.not_compiled.len()
-            )));
-            for o in programs {
-                rows.push(node(1, Selection::Program(o.id.clone())));
-                rows.extend(program_details(o, p.labels.get(&o.id)));
-            }
-            for path in &m.not_compiled {
-                rows.push(Row {
-                    depth: 1,
-                    kind: RowKind::Note(format!("{} — did not compile", safe_line(path))),
-                    expandable: false,
-                    open: false,
-                });
-            }
-            let libraries: Vec<&Offered> =
-                m.offered.iter().filter(|o| o.kind == "library").collect();
-            if !libraries.is_empty() {
-                rows.push(heading(format!("Libraries ({})", libraries.len())));
-                for o in libraries {
-                    rows.push(node(1, Selection::Program(o.id.clone())));
-                    rows.extend(program_details(o, p.labels.get(&o.id)));
-                }
-            }
+                programs.len() + m.not_compiled.len() + others.len()
+            ),
+            &counts,
+            width,
+        ));
+        for o in programs {
+            rows.push(node(1, Selection::Program(o.id.clone())));
         }
-        if !p.tools.is_empty() {
-            rows.push(heading(format!("Accepted tools ({})", p.tools.len())));
-            for id in &p.tools {
-                rows.push(node(1, Selection::Tool(id.clone())));
+        for id in others {
+            rows.push(node(1, Selection::Tool(id.clone())));
+        }
+        for path in &m.not_compiled {
+            rows.push(Row {
+                depth: 1,
+                kind: RowKind::Failed(safe_line(path)),
+                expandable: false,
+                open: false,
+            });
+        }
+        let libraries: Vec<&Offered> = m.offered.iter().filter(|o| o.kind == "library").collect();
+        if !libraries.is_empty() {
+            rows.extend(headings(
+                format!("Libraries ({})", libraries.len()),
+                &[],
+                width,
+            ));
+            for o in libraries {
+                rows.push(node(1, Selection::Program(o.id.clone())));
             }
         }
         rows
@@ -919,10 +964,14 @@ impl App {
         self.pairs.clear();
         self.source = None;
         self.reload_project();
-        // The tool just left is selected.
-        match tool.map(Selection::Tool) {
-            Some(sel) if crate::tree::row_of(&self.rows, &sel).is_some() => self.selection = sel,
-            _ => self.select_first_project_row(),
+        // The tool just left is selected: its program's row, or its own.
+        match tool
+            .into_iter()
+            .flat_map(|id| [Selection::Program(id.clone()), Selection::Tool(id)])
+            .find(|sel| crate::tree::row_of(&self.rows, sel).is_some())
+        {
+            Some(sel) => self.selection = sel,
+            None => self.select_first_project_row(),
         }
         self.scroll = 0;
         self.link = None;

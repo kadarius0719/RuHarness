@@ -88,8 +88,8 @@ impl State {
     /// The state in words, as the rows and the View say it.
     pub fn words(self) -> &'static str {
         match self {
-            State::Linked => "linked",
-            State::Held => "held on a choice",
+            State::Linked => "links",
+            State::Held => "needs a decision",
             State::DidNotCompile => "did not compile",
             State::DidNotLink => "did not link",
             State::Incomplete => "incomplete",
@@ -141,6 +141,9 @@ pub struct Offered {
     /// Its index in the map (`p1…`, a `main` program's; empty otherwise):
     /// a model's label is keyed by it.
     pub index: String,
+    /// What failed, in one line, when it did not compile or link: the
+    /// map's first error ("src/a.c:3: a syntax error"); empty otherwise.
+    pub problem: String,
 }
 
 impl Offered {
@@ -335,12 +338,22 @@ pub fn read_map(root: &Path) -> Result<Option<MapView>, String> {
     let empty = Vec::new();
     let list = |v: &serde_json::Value| v.as_array().unwrap_or(&empty).clone();
     let shapes = || bad("holds an id or an index that is not one the map writes");
-    // The files that did not compile under the configuration.
-    let failed: Vec<String> = list(&v["files"])
+    // The files that did not compile under the configuration, each with
+    // what the map says of it.
+    let failures: Vec<(String, serde_json::Value)> = list(&v["files"])
         .iter()
         .filter(|f| !f["compiled"].is_null() && f["compiled"].as_str() != Some("ok"))
-        .map(|f| s(&f["path"]))
+        .map(|f| (s(&f["path"]), f["compiled"].clone()))
         .collect();
+    let failed: Vec<String> = failures.iter().map(|(p, _)| p.clone()).collect();
+    // The first of `files` that did not compile, in words.
+    let compile_problem = |files: &[String]| {
+        files
+            .iter()
+            .find_map(|f| failures.iter().find(|(p, _)| p == f))
+            .map(|(p, c)| compile_words(p, c))
+            .unwrap_or_default()
+    };
     let mut offered = Vec::new();
     for p in list(&v["programs"]) {
         let id = s(&p["id"]);
@@ -352,6 +365,7 @@ pub fn read_map(root: &Path) -> Result<Option<MapView>, String> {
             .into_iter()
             .find(|c| c["program"].as_str() == Some(id.as_str()));
         let mut held = Vec::new();
+        let mut problem = String::new();
         let mut state = match kind.as_str() {
             "fuzz" => State::Fuzzer,
             "driver" => State::Driver,
@@ -392,6 +406,10 @@ pub fn read_map(root: &Path) -> Result<Option<MapView>, String> {
             }
             if kind == "main" {
                 let files: Vec<String> = list(&c["files"]).iter().map(s).collect();
+                problem = compile_problem(&files);
+                if problem.is_empty() && c["linked"].is_object() {
+                    problem = link_words(&c["linked"]);
+                }
                 state = if files.iter().any(|f| failed.contains(f)) {
                     State::DidNotCompile
                 } else if !held.is_empty() {
@@ -429,6 +447,7 @@ pub fn read_map(root: &Path) -> Result<Option<MapView>, String> {
             state,
             held,
             index,
+            problem,
         });
     }
     for l in list(&v["libraries"]) {
@@ -449,6 +468,7 @@ pub fn read_map(root: &Path) -> Result<Option<MapView>, String> {
             },
             held: Vec::new(),
             index: String::new(),
+            problem: compile_problem(&files),
         });
     }
     let c = &v["configuration"];
@@ -467,6 +487,57 @@ pub fn read_map(root: &Path) -> Result<Option<MapView>, String> {
             harness_oracle::projectmap::config::example_from(&build_files),
         ),
     }))
+}
+
+/// A file's compile failure in words, from the map's record: where, then
+/// what ("src/a.c:3: a syntax error").
+fn compile_words(path: &str, compiled: &serde_json::Value) -> String {
+    let at = compiled["at"].as_str().unwrap_or(path);
+    let what = match compiled["reason"].as_str() {
+        Some("missing-header") => match compiled["header"].as_str() {
+            Some(h) => format!("the header {h} is not found"),
+            None => "a header is not found".into(),
+        },
+        Some("syntax") => "a syntax error".into(),
+        _ => match compiled["detail"].as_str() {
+            Some(d) => format!("it does not compile ({d})"),
+            None => "it does not compile".into(),
+        },
+    };
+    format!("{at}: {what}")
+}
+
+/// A link failure in words, from the map's record: what nothing provides,
+/// else what is defined twice, else what did not compile for the link.
+fn link_words(linked: &serde_json::Value) -> String {
+    let names = |key: &str| -> Vec<String> {
+        linked[key]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let some = |v: &[String]| {
+        let shown = v.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+        match v.len() {
+            0..=3 => shown,
+            n => format!("{shown} and {} more", n - 3),
+        }
+    };
+    let (missing, doubled, not_compiled) =
+        (names("missing"), names("doubled"), names("not_compiled"));
+    if !missing.is_empty() {
+        format!("nothing it links defines {}", some(&missing))
+    } else if !doubled.is_empty() {
+        format!("defined twice: {}", some(&doubled))
+    } else if !not_compiled.is_empty() {
+        format!("did not compile for the link: {}", some(&not_compiled))
+    } else {
+        "some symbols could not be checked".into()
+    }
 }
 
 /// A model's advice on one held set, from the reply file.
@@ -822,7 +893,8 @@ pub(crate) mod tests {
         assert_eq!(state("l-bad"), State::DidNotCompile);
         assert_eq!(map.not_compiled, ["tools/broken.c"]);
         assert_eq!(map.get("t-lzg").unwrap().kind_guess, "tool");
-        assert_eq!(State::Held.words(), "held on a choice");
+        assert_eq!(State::Held.words(), "needs a decision");
+        assert_eq!(State::Linked.words(), "links");
         assert_eq!(map.configuration_words(), "stated (make)");
         assert!(!map.unstated() && map.held());
         // d2 is reached only when d1.1 is kept.
@@ -950,6 +1022,7 @@ pub(crate) mod tests {
                     })
                     .collect(),
                 index: "p1".into(),
+                problem: String::new(),
             }],
             ..MapView::default()
         };

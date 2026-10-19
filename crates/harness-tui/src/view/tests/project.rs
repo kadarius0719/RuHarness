@@ -689,9 +689,9 @@ fn the_project_view_after_a_map_with_a_held_choice() {
         "⚠ t-unlzg",
         "held on a choice",
         "tools/unlzg.c (a tool, by its folder)",
-        "t-lzg — tools/lzg.c (a tool, by its folder): linked",
+        "t-lzg — tools/lzg.c (a tool, by its folder): links",
         "held on a choice: two files define the same function; Accept asks which to keep.",
-        "tools/broken.c — did not compile",
+        "✗ tools/broken.c",
         "Libraries (2)",
         "src/bad.c (a library)",
         "Configuration: stated (make)",
@@ -809,7 +809,8 @@ fn after_an_accept_the_next_step_is_the_new_tool() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("harness.toml"), "schema_version = 2\n").unwrap();
     app.on_child_exit(std::process::ExitStatus::from_raw(0));
-    assert_eq!(app.selection, Selection::Tool("t-lzg".into()));
+    // An accepted program's row is its tool's row.
+    assert_eq!(app.selection, Selection::Program("t-lzg".into()));
     let next = app.project_next().unwrap();
     assert_eq!(
         next.text,
@@ -854,7 +855,7 @@ fn opening_a_tool_with_a_conversation_asks_instead_of_refusing() {
         .you("u1", "Which file should t-benchmark keep?");
     app.chat.spoke = true;
     assert!(app.chat.has_conversation());
-    app.select(Selection::Tool("t-lzg".into()));
+    app.select(Selection::Program("t-lzg".into()));
     code(&mut app, KeyCode::Enter);
     let open = menu(&app)
         .items
@@ -923,19 +924,36 @@ fn the_project_view_after_an_accept() {
     golden("project-accepted.txt", &app, &buffer);
     let screen = text(&render(&mut app, 220, 44));
     for words in [
-        "Accepted tools (1)",
-        "Open tool t-lzg — tools/lzg.c",
-        "t-lzg — tools/lzg.c — press Enter on its row and choose Open tool",
+        "│Programs (4) · 1 accepted ",
+        "│  1 needs a decision ",
+        "│  1 did not compile ",
         "t-lzg — tools/lzg.c (a tool, by its folder): accepted",
     ] {
         assert!(screen.contains(words), "{words}\n{screen}");
     }
-    app.select(Selection::Tool("t-lzg".into()));
+    // One list: the accepted program's row is its tool's row; no group
+    // lists it a second time.
+    assert!(
+        !app.rows
+            .iter()
+            .any(|r| matches!(&r.kind, crate::tree::RowKind::Heading(h) if h.contains("Accepted"))),
+        "{screen}"
+    );
+    assert_eq!(
+        selectable(&app)
+            .iter()
+            .filter(|s| matches!(s, Selection::Program(id) | Selection::Tool(id) if id == "t-lzg"))
+            .count(),
+        1
+    );
+    app.select(Selection::Program("t-lzg".into()));
     code(&mut app, KeyCode::Enter);
     assert_eq!(
         menu_labels(&app),
         [
             "Open tool t-lzg".to_string(),
+            "Accept this program".into(),
+            "Accept it under a run name of your own…".into(),
             write_item(&app),
             "Map the project again".into(),
             "Ask for advice — ask in chat".into()

@@ -672,6 +672,9 @@ pub struct Layout {
     pub page: usize,
     /// Rows visible at once in the tree.
     pub tree_page: usize,
+    /// The tree's width inside its frame (the Project view's headings wrap
+    /// to it).
+    pub tree_width: usize,
     /// Below 80 columns: one pane at a time.
     pub single_pane: bool,
     /// The whole frame: mouse events outside it are ignored (§7).
@@ -2104,8 +2107,11 @@ impl App {
         }
         self.request_load(LoadWhy::Reaped);
         if let Some(id) = accepted {
-            let sel = Selection::Tool(id);
-            if crate::tree::row_of(&self.rows, &sel).is_some() {
+            // An accepted program's row is its tool's row.
+            if let Some(sel) = [Selection::Program(id.clone()), Selection::Tool(id)]
+                .into_iter()
+                .find(|sel| crate::tree::row_of(&self.rows, sel).is_some())
+            {
                 self.selection = sel;
             }
         }
@@ -5042,9 +5048,9 @@ impl App {
     /// The glyph and word of the node `sel` (for rows, titles and tests).
     pub fn node_label(&self, sel: &Selection) -> (&'static str, String) {
         match sel {
-            Selection::MapProject | Selection::Tool(_) | Selection::ProjectHome => {
-                ("", String::new())
-            }
+            Selection::MapProject | Selection::ProjectHome => ("", String::new()),
+            // A tool the map does not name.
+            Selection::Tool(_) => ("✓", "accepted".into()),
             Selection::Program(id) => match self.project_offered(id) {
                 Some(_) if self.project_tools().contains(id) => ("✓", "accepted".into()),
                 Some(o) => (o.state.glyph(), o.state.words().into()),

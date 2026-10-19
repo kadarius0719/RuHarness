@@ -192,9 +192,10 @@ pub enum RowKind {
     /// A group's heading in the Project view ("Programs (3)"): never
     /// selected.
     Heading(String),
-    /// A line under the row above, dim (a program's file in the Project
-    /// view): never selected.
-    Detail(String),
+    /// A file holding a `main` that did not compile, in the Project view:
+    /// drawn as a program's row (`✗ <file>`, its state at the right), never
+    /// selected (it has no id to act on).
+    Failed(String),
 }
 
 /// One row of the flattened tree.
@@ -215,7 +216,7 @@ impl Row {
     pub fn selection(&self) -> Option<&Selection> {
         match &self.kind {
             RowKind::Node(sel) => Some(sel),
-            RowKind::Note(_) | RowKind::Heading(_) | RowKind::Detail(_) => None,
+            RowKind::Note(_) | RowKind::Heading(_) | RowKind::Failed(_) => None,
         }
     }
 }
