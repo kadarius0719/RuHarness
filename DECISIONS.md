@@ -3403,3 +3403,19 @@ nothing. Four Opus passes, in sequence because they share the view code:
 Every screen string is pinned by a test and 22 goldens; docs/topics/cockpit.md, the tutorial, the
 guide's Parts 4, 9 and 12 and the designs follow the screens. fmt, clippy and the workspace green
 after each pass.
+
+## 2026-10-19 — The cockpit's colours: roles, four themes, a settings file
+
+The person found the cockpit's text hard to read: it blended into the terminal. The cause: the
+screens used the terminal's sixteen named colours (yellow in 41 places) and dim text, so
+readability was whatever the theme gave. Decided, with the person's amendment that the default
+should respect the terminal's own configuration and let people adjust: colour means a state only
+(good, bad, needs attention), always beside a mark or word; one accent colour per screen, for the
+Next step label and the recommended menu item; headings bold, everything else plain; muted text
+still readable, never dim, never dark grey on dark; nothing blinks. Ten named roles in one place;
+four themes: terminal (the default: the terminal's own colours by role), dark and light (designed
+values, each role's contrast tested against its background, 4.5:1 for text and 3:1 for marks), mono
+(no colour; `NO_COLOR` selects it); chosen by `--theme`, then `RUHARNESS_THEME`, then the settings
+file `cockpit.toml` (per-role overrides, bad values refused by name), then `NO_COLOR`, then
+terminal. A test walks every golden screen for the rules. The `toml` crate joined harness-tui (it
+was already in the workspace). Code views lost their syntax colours: keywords bold, comments muted.

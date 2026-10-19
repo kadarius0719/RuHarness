@@ -37,15 +37,19 @@ every goal in under eight minutes. Open from it: the headless driver (devtools/c
 not clear the screen when the cockpit goes full-screen and drops key bursts sent as one command
 (driver issues, not cockpit ones).
 
-## In progress (2026-10-19): the cockpit's colours
+## Done (2026-10-19): the cockpit's colours
 
-The person found the colours hard to read (text blending into the terminal; the cockpit used the
-terminal's named colours, yellow in 41 places, and dim text). One Opus pass builds a palette of
-named roles (text, muted, heading, accent, good, bad, attention, selected, disabled, border) with
-four themes (terminal — the default, the terminal's own colours by role, the person's idea;
-`--theme dark|light` designed and contrast-tested; `--theme mono`/`NO_COLOR`), per-role overrides in
-a small config file, and the rule that colour means a state only, beside a mark or word, with
-one accent per screen for the next step.
+The person found the colours hard to read. Now (`crates/harness-tui/src/theme.rs`): ten named
+roles (text, muted, heading, accent, good, bad, attention, selected, disabled, border); four
+themes — terminal (the default, the terminal's own green/red/yellow/cyan by role, nothing dim, the
+person's idea), dark and light (designed, contrast-tested against their backgrounds), mono (no
+colour; `NO_COLOR` picks it); `--theme`, `RUHARNESS_THEME`, and a settings file
+(`~/Library/Application Support/ruharness/cockpit.toml`, `$RUHARNESS_COCKPIT_CONFIG`) with
+`[theme] name` and per-role `[colors]` overrides, bad values refused by name. Rules enforced by a
+test over every golden screen: colour only on a state beside its mark or word, one accent per
+screen (the Next step label and the recommended item), no dim, no dark grey, no blink. The 41
+yellows became 18 attention, 15 bold, 3 muted, 4 plain, 1 accent. Code views lost syntax colours
+(keywords bold, comments muted). The headless driver tags the accent as `A`.
 
 ## The work, in order
 
