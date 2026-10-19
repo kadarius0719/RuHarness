@@ -356,12 +356,14 @@ pub fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect, column: bool, str
     // The transcript, or what the pane is before the first message.
     let lines: Vec<Line<'static>> = if app.chat.transcript.is_empty() {
         let intro = match &app.chat.bins {
-            Ok(bins) => format!(
-                "Ask for model work here — for example \"migrate this\". The chat reads the \
-                 project through the harness and asks before it runs anything; you confirm \
-                 every act. It will use {} (claude at {}).",
-                app.chat.sign_in,
-                bins.claude.display()
+            // What the chat is, in the design's sense: it only reads and
+            // asks; the harness runs; the person confirms every act. The
+            // claude binary's path is not shown: noise to a newcomer.
+            Ok(_) => format!(
+                "Ask for model work here — for example \"migrate this\". The chat only reads \
+                 the project and asks; the harness runs what you confirm, and you confirm \
+                 every act. It will use {}.",
+                app.chat.sign_in
             ),
             Err(why) => format!("The chat is unavailable: {why}"),
         };
@@ -773,13 +775,39 @@ mod tests {
         }
     }
 
+    /// Pass 1 of the 2026-10-18 critique: before the first message the pane
+    /// says what the chat is — it only reads and asks, the harness runs, you
+    /// confirm — and no longer prints the claude binary's path.
+    #[test]
+    fn the_empty_chat_says_it_only_asks() {
+        let mut a = app("chat-intro");
+        a.chat_on = true;
+        a.chat.bins = Ok(crate::chat::runtime::Binaries {
+            claude: "/somewhere/bin/claude".into(),
+            mcp: "/somewhere/bin/harness-mcp".into(),
+        });
+        a.chat.sign_in = "your Claude subscription".into();
+        a.focus = crate::app::Focus::Chat;
+        let screen = text(&render(&mut a, 200, 30));
+        assert!(
+            screen.contains(
+                "Ask for model work here — for example \"migrate this\". The chat only reads the \
+                 project and asks; the harness runs what you confirm, and you confirm every act."
+            ),
+            "{screen}"
+        );
+        assert!(screen.contains("use your Claude subscription."), "{screen}");
+        assert!(!screen.contains("/somewhere/bin"), "{screen}");
+        assert!(!screen.contains("claude at"), "{screen}");
+    }
+
     /// Review USE-14: Help says why the chat is unavailable.
     #[test]
     fn help_says_why_the_chat_is_unavailable() {
         let mut a = app("chat-help-why");
         a.chat_on = true;
         a.chat.bins = Err("no `claude` on PATH".into());
-        a.mode = Mode::Help { scroll: 0 };
+        a.mode = Mode::Help { scroll: 1 };
         let b = render(&mut a, 120, 200);
         assert!(
             text(&b).contains("The chat is unavailable here: no `claude` on PATH."),

@@ -12,7 +12,7 @@ A row with `▸` is folded and `▾` is open; `→` and `←` open and close. `E
 
 ## The Enter menu and the dialogs
 
-Select a row and press `Enter`: a short menu lists what you can do with it now. An item that cannot run is greyed, and says why when you choose it. Items that ask a model sit below the line `── Uses a model — can take minutes ──`.
+Every View starts with a **Next step** line: what to do now, in one sentence (on the project: scan, plan, the unit that needs attention and why, the first unit to migrate, …). Select a row and press `Enter`: a short menu lists what you can do with it now, the Next step's item first and highlighted, with a `↳ recommended: …` line saying why. The row is already shown in the View, so there is no Open item (except on a window too narrow to show both). An item that cannot run is greyed, and says why when you choose it. Items that ask a model sit below the line `── Uses a model — can take minutes ──`.
 
 Every item that changes something opens a **dialog** (a confirming box). It says in words what it will write, then shows the exact command. It starts on the safe button, must be scrolled to its end, and only after a moment whole on screen says `ready: → then Enter`. Confirming takes two keys, `→` then `Enter`, so one stray `Enter` never runs anything; keys typed or pasted before `ready` are ignored. Only one command runs at a time. Nothing is ever accepted automatically: making a GREEN attempt the unit's Rust is always your **Accept**.
 
@@ -24,7 +24,7 @@ The chat is your own Claude Code, signed in with your own account. The cockpit s
 |---|---|
 | Migrate a unit (a new translation) | Scan the project |
 | Modify an attempt with a note | Refresh the plan |
-| Retry an attempt | Re-check with the oracle |
+| Retry an attempt | Re-check with the judge |
 | Answer the model's questions during a migration (Continue) | Accept an attempt |
 
 A request appears on a yellow line above the input, such as `Asks: Migrate u-checksum — a model call, answered here in chat`, and ignores keys for its first second. `Enter` reviews it in the same dialog as your own actions; `Esc` declines it. Everything the chat asked for is recorded as "asked in chat".
@@ -39,13 +39,13 @@ These boxes assume the guided liblzg run, with `u-checksum` verified. Make the w
 harness-tui --target targets/lzg
 ```
 
-Look for: Files on the left with `lzg` as its first row and a summary such as `✓2/5` at its right edge, the View on the right, and `Ready.` under the panes.
+Look for: Files on the left with `lzg` as its first row and a summary such as `✓2/5` at its right edge (2 of its 5 C files are in Rust; the View's title says it in words), the View on the right starting with `Next step:`, and `Ready — ↑↓ to choose a row, Enter for what you can do` under the panes.
 
 ```text
 ?
 ```
 
-Look for: every key and every symbol, each with its meaning; any key closes it.
+Look for: a first page of six keys and three marks (`◇` planned, `✓` in Rust, `⚠` needs attention); `↓` shows every key and every symbol, each with its meaning; any other key closes it.
 
 ```text
 v      (with u-checksum, under Units (5), selected)
@@ -54,7 +54,7 @@ v      (with u-checksum, under Units (5), selected)
 Look for: **Show the checks**, each check in words with `✓`, such as `✓ same outputs as C`; `Esc` closes it.
 
 ```text
-Enter  (on u-checksum), then choose Re-check with the oracle
+Enter  (on u-checksum), then choose Re-check with the judge
 ```
 
 Look for: a dialog that shows `… verify u-checksum --target=…` and, after a moment, `ready`; `→` then `Enter` runs it, and the activity line ends `Ready. Last: Re-check u-checksum — GREEN — all … checks passed`. `Esc` instead backs out without running anything.

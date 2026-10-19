@@ -2639,8 +2639,8 @@ harness-tui --target targets/lzg
 **You should see** a full-screen view:
 
 - the **Files** pane on the left, with the project row `lzg`, the folders and files under `src/`, then `Units (5)`, then `Features (none yet)`;
-- the **View** on the right, with a summary such as `7 files scanned`, `Units (5): 5 ◇ planned` and `Features: none yet — see Features`;
-- the line `Ready.` under the panes;
+- the **View** on the right, starting with a line `Next step: 5 units have no Rust yet — migrate the first, u-checksum: press Enter and choose Migrate — ask in chat`, then a summary such as `7 files scanned`, `Units (5): 5 ◇ planned` and `Features: none yet — see Features`; its title says in words how many of the C files are in Rust (`0 of … C files in Rust`);
+- the line `Ready — ↑↓ to choose a row, Enter for what you can do` under the panes;
 - a key bar at the bottom, like `↑↓ move   ←→ fold/open   Enter actions   Tab pane   …   q quit`.
 
 **What it means.** The cockpit read the ledger. It changes nothing until you confirm an action.
@@ -2668,9 +2668,10 @@ The cockpit acts on whatever is selected, so you select the unit first.
 
 **You should see** in the View:
 
-- `◇ u-checksum planned · status pending`;
-- `No crate yet`;
-- the C of `_LZG_CalcChecksum`, with `no crate` on the Rust side;
+- `◇ u-checksum planned`;
+- `Next step: No Rust yet — ask the chat to migrate it (a model writes the Rust, the judge checks it, you accept it)`;
+- `No Rust yet`;
+- the C of `_LZG_CalcChecksum`, with `no Rust yet` on the Rust side;
 - `Checks  none yet for what is shown` at the bottom.
 
 **What it means.** The unit is planned and has no Rust yet. You only moved the selection.
@@ -2685,20 +2686,18 @@ The cockpit acts on whatever is selected, so you select the unit first.
 
 **You should see** a menu with:
 
-- `Open` and `Re-read the project`;
-- `Re-check with the oracle`, greyed out, because the unit has no crate yet;
-- below the line `── Uses a model — can take minutes ──`: `Migrate — ask in chat` and `Ask in chat…`.
+- first and highlighted, **Migrate — ask in chat**, with the line `↳ recommended: no Rust yet · uses a model` under it: the cockpit puts the View's Next step first;
+- `Re-check with the judge`, greyed out, because the unit has no Rust yet;
+- `Re-read the project`;
+- below the line `── Uses a model — can take minutes ──`: `Ask in chat…`.
 
-**Do** these, one press at a time:
-
-1. Press `↓` until **Migrate — ask in chat** is highlighted. **You should see** the highlight move down the menu, one item per press.
-2. Press `Enter`. **You should see** the menu close.
+**Do.** Press `Enter`. **You should see** the menu close.
 
 **You should see** the chat pane in focus, with `Migrate u-checksum` already typed into its input line.
 
 **What it means.** Nothing has been sent yet; the request is only typed for you.
 
-**If you do not see that.** No `Migrate — ask in chat` item, or it is greyed out: the unit has no validated driver, so Part 3 is not complete. Press `Esc` to close the menu.
+**If you do not see that.** `Migrate — ask in chat` is not first, or is greyed out: the chat cannot start (the greyed item says why), or the unit has no validated driver, so Part 3 is not complete. Press `Esc` to close the menu.
 
 ---
 
@@ -2857,13 +2856,13 @@ Accepting is your decision, so look first.
 
 **Do.** Wait until the dialog says `ready`, then press `→` and `Enter`.
 
-**You should see** the activity line say `Running the oracle…`, then end as:
+**You should see** the activity line say `Running the judge…`, then end as:
 
 ```text
 Ready. Last: Accept a-<4hex> into u-checksum — GREEN — all 8 checks passed (<time>)
 ```
 
-In Files, `u-checksum` and `checksum.c` now show `✓`. The View's first line reads `✓ u-checksum migrated (asked in chat) · status verified`. The attempt row reads `✓ a-<4hex> green *c asked in chat` (`*c` marks the attempt the unit's crate came from).
+In Files, `u-checksum` and `checksum.c` now show `✓`. The View's first line reads `✓ u-checksum migrated (asked in chat)`. The attempt row reads `✓ a-<4hex> green *c asked in chat` (`*c` marks the attempt the unit's crate came from).
 
 **What it means.** The cockpit ran `harness --json promote u-checksum a-<12hex> --target=…`. That created the crate `migration/units/u-checksum/u_checksum_rs/`, ran every check again in that final place, wrote the verdict files (`oracle-latest.json`, `oracle-latest.md`, `oracle-last-green.json`) and set `status = "verified"` in `plan.toml`. This answers the part's question: yes.
 
@@ -3884,7 +3883,7 @@ Press one key at a time, and check the screen after each:
 
 1. In Files, press `↓` until `u-version`, under `Units (5)`, is highlighted (if `Units (5)` shows `▸`, press `→` on it first, as in Step 4.3). **You should see** the highlight on `u-version`, and the View change to that unit.
 2. Press `Enter`. **You should see** the menu of Step 4.4, now for `u-version`.
-3. Press `↓` until **Migrate — ask in chat** is highlighted, then press `Enter`. **You should see** the chat pane in focus, with `Migrate u-version` typed into its input line.
+3. **Migrate — ask in chat** is first and highlighted, as in Step 4.4: press `Enter`. **You should see** the chat pane in focus, with `Migrate u-version` typed into its input line.
 4. Press `Enter` to send it. **You should see** the chat start, as in Step 4.5, and then the line below.
 
 **You should see** the yellow line `Asks: Migrate u-version — a model call, answered here in chat`, with `[Review Enter]` and `[Decline Esc]`.
@@ -3928,7 +3927,7 @@ Press one key at a time, and check the screen after each:
 3. Press `↓` until the attempt row is highlighted. **You should see** the View's first line start `Attempt a-<12hex> · green`, and the checks at the bottom all with `✓`. You do not need to judge the Rust: the checks did that.
 4. Press `Enter`. **You should see** a menu with `Accept a-<4hex> into u-version`.
 5. Press `↓` until that item is highlighted, then press `Enter`. **You should see** the dialog `Accept a-<12hex> into u-version?`, as in Step 4.11.
-6. When the dialog says `ready`, press `→` and then `Enter`. **You should see** the activity line say `Running the oracle…`.
+6. When the dialog says `ready`, press `→` and then `Enter`. **You should see** the activity line say `Running the judge…`.
 
 **You should see** the activity line end as:
 
@@ -3936,7 +3935,7 @@ Press one key at a time, and check the screen after each:
 Ready. Last: Accept a-<4hex> into u-version — GREEN — all 8 checks passed (<time>)
 ```
 
-and the View's first line read `✓ u-version migrated (asked in chat) · status verified`.
+and the View's first line read `✓ u-version migrated (asked in chat)`.
 
 **What it means.** Accept created the crate `u_version_rs`, checked it again in place, and set the status to `verified`, as in Part 4.
 
@@ -4610,9 +4609,9 @@ git status --short
 |---|---|
 | **Files** | The list on the left of the cockpit: the project, its folders and files, then the groups `Units`, `Features` and `Speed`. The highlighted row is the one you have **selected**. |
 | **View** | The large area on the right. It shows details of the selected row. |
-| `✓` | Migrated: this piece is Rust now. `✓2/5` means 2 of 5 units. |
+| `✓` | Migrated: this piece is Rust now. On a folder, `✓2/5` means 2 of its 5 C files are Rust; the View's title says it in words. |
 | `◇` | Planned: the unit is still C. |
-| `◉` / `◌` | For a feature: it runs some Rust (`◉`), or only C (`◌`). |
+| `◉` / `◌` | For a feature: it runs Rust now (`◉`), or is still all C (`◌`). |
 
 **Where.** Still in the Terminal window you used for Part 8? Then you are already in `~/code/RuHarness` on the branch `practice-lzg`, and there is nothing to type. In a new window, first run the folder boxes of Part 2's "Before you start" (`cd ~/code/RuHarness`, then `git switch practice-lzg`).
 
@@ -4640,9 +4639,10 @@ harness-tui --target targets/lzg
 
 **Do** these, one press at a time, and check the screen after each:
 
-1. Press `?`. **You should see** a list of every key and of every symbol the cockpit uses (`✓`, `◇`, `◉`, `◌` and more), each with its meaning. Whenever a symbol in this part is unclear, `?` explains it.
-2. Press any key. **You should see** the help close.
-3. Press `↑` until the first row, `lzg`, is highlighted (it usually is already). **You should see** at the right edge of that row a summary like `✓2/5`: 2 of the 5 units are Rust now. The View shows a summary: the files scanned, the units by state, and a line beginning `Features: 3 — …`.
+1. Press `?`. **You should see** the help's first page: six keys (`↑ ↓`, `Enter`, `Tab`, `Esc`, `?`, `q`), the three marks you meet first (`◇` planned, `✓` in Rust, `⚠` needs attention), and `↓ more: every key, the mouse, every mark, features, speed, the chat` at its foot.
+2. Press `↓`. **You should see** the rest: every key and every symbol the cockpit uses (`◉`, `◌` and more), each with its meaning. Whenever a symbol in this part is unclear, `?` then `↓` explains it.
+3. Press any other key (`Esc`, say). **You should see** the help close.
+4. Press `↑` until the first row, `lzg`, is highlighted (it usually is already). **You should see** at the right edge of that row a summary like `✓2/5`, and the View's title saying it in words: `lzg · 2 of 5 C files in Rust`. The View starts with a `Next step:` line, then a summary: the files scanned, the units by state, and a line beginning `Features: 3 — …`.
 
 **What it means.** The other 3 units stay in C in this version of RuHarness (Part 7 explains why).
 
@@ -4684,7 +4684,8 @@ harness-tui --target targets/lzg
 
 **You should see** in the View:
 
-- `✓ u-checksum migrated (asked in chat) · status verified`;
+- `✓ u-checksum migrated (asked in chat)`;
+- a `Next step:` line, such as `Next step: In Rust and checked — nothing to do`;
 - a line about the crate that ends `verdict green, fresh`;
 - a cyan line saying how many of your features run this unit (the colour depends on your Terminal's theme);
 - at the bottom, a row of checks similar to `✓ same exports ✓ allowed calls only ✓ driver shape ✓ same outputs as C ✓ whole program ×3 ✓ sanitizers ✓ scenarios ×3 (1 run this unit)`.
@@ -4709,9 +4710,9 @@ harness-tui --target targets/lzg
 
 **Do** these, one press at a time, and check the screen after each:
 
-1. With `u-checksum` highlighted, press `Enter`. **You should see** a menu of actions for this unit, one of them **Re-check with the oracle**. Every action in the cockpit starts from a menu like this one.
-2. Press `↓` until **Re-check with the oracle** is highlighted, then press `Enter`. **You should see** a dialog that says what it will write and shows the command, `… verify u-checksum --target=…`. After a moment the dialog says `ready`. The cockpit always shows the exact command before it runs it; it is the same `harness verify` you ran in Part 5.
-3. Press `→`, then `Enter`. **You should see** the activity line at the bottom say `Running the oracle…`.
+1. With `u-checksum` highlighted, press `Enter`. **You should see** a menu of actions for this unit, one of them **Re-check with the judge**. Every action in the cockpit starts from a menu like this one; when the View has a Next step that an item does, that item is first and highlighted, with a `↳ recommended: …` line under it.
+2. Press `↓` until **Re-check with the judge** is highlighted, then press `Enter`. **You should see** a dialog that says what it will write and shows the command, `… verify u-checksum --target=…`. After a moment the dialog says `ready`. The cockpit always shows the exact command before it runs it; it is the same `harness verify` you ran in Part 5.
+3. Press `→`, then `Enter`. **You should see** the activity line at the bottom say `Running the judge…`.
 
 **You should see**, once the same checks as Part 5's `harness verify` have run:
 
@@ -4766,9 +4767,9 @@ Ready. Last: Re-check u-checksum — GREEN — all 11 checks passed (<time>)
 
 **You should see:**
 
-- `compress`: it runs code in 3 units (checksum, encode and lzg), and 1 of them is Rust. It shows a mark like `◉ holds so far · 1 of 3 units`. "Holds so far" means every check of that Rust against this feature has passed.
+- `compress`: it runs code in 3 units (checksum, encode and lzg), and 1 of them is Rust. It shows a mark like `◉ holds so far · 1 of 3 units`, and under it the mark in words: `◉ runs Rust now: 1 of its 3 units is in Rust, and each passed this feature's checks`.
 - `version`: the same, with `u-version` as its Rust unit.
-- `no-file`: it reaches only C, shown as `◌ all C`.
+- `no-file`: it reaches only C, shown as `◌ still all C`, and in words `◌ still all C: none of the units it runs is in Rust yet`.
 
 **What it means.** This is Part 8's feature map, shown per feature.
 

@@ -1303,7 +1303,7 @@ U+FFFF), so the stream holds none raw and reads back as the same text.
 
 perf only measures: it never changes a verdict, an attempt, the plan or a unit's crate sources.
 A target without `migration/perf/workloads.toml` is unchanged by it in every byte; the cockpit
-shows `Speed (no file)` and harness-mcp's `speed` is `null`. macOS only for now: elsewhere every
+shows `Speed — not set up` and harness-mcp's `speed` is `null`. macOS only for now: elsewhere every
 `perf run` is refused by name ("perf runs on macOS only for now — the Linux launcher is not built
 yet").
 

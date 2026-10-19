@@ -188,7 +188,7 @@ pub enum Act {
     Plan,
     /// `detect`: rewrites the observer findings.
     Detect,
-    /// `verify <unit>`: Re-check with the oracle.
+    /// `verify <unit>`: Re-check with the judge.
     Verify,
     /// `a`: promote a green attempt.
     Accept,
@@ -231,7 +231,7 @@ impl Act {
         match self {
             Act::Scan => "Scan the project",
             Act::Plan => "Refresh the plan",
-            Act::Detect => "Find hazards",
+            Act::Detect => "Find risky patterns",
             Act::Verify => "Re-check",
             Act::Accept => "Accept",
             Act::Modify => "Modify",
@@ -427,6 +427,9 @@ pub struct Menu {
     pub focus: usize,
     /// The full reason of a greyed item `Enter` was pressed on.
     pub footer: Option<String>,
+    /// Why the first item is recommended (the View's Next step), when it
+    /// is: shown beside it.
+    pub reason: Option<String>,
 }
 
 /// An overlay or prompt.
@@ -2372,7 +2375,7 @@ impl App {
                 ],
             ),
             Act::Detect => (
-                "Find hazards in the project?".into(),
+                "Find risky patterns in the C?".into(),
                 vec!["Runs the detectors and rewrites the observer findings.".into()],
             ),
             Act::MapFeatures => {
@@ -2402,7 +2405,7 @@ impl App {
                 )
             }
             Act::Verify => (
-                format!("Re-check {unit} with the oracle?"),
+                format!("Re-check {unit} with the judge?"),
                 vec![
                     if self.config.allow_unsandboxed {
                         format!("Builds {unit}'s Rust and runs it against the C.")
@@ -2556,7 +2559,7 @@ impl App {
             Act::HandEdit => (
                 format!("Record your hand edit of {unit}?"),
                 vec![
-                    "Records a human attempt, judged by the oracle; never promotes it.".into(),
+                    "Records a human attempt, checked by the judge; never accepts it.".into(),
                     "The edit is staged as exactly src/logic.rs + src/ffi.rs. Keep for later \
                      keeps it (E offers it again); Discard removes it."
                         .into(),
@@ -2851,8 +2854,8 @@ impl App {
             Ok(())
         } else {
             Err(
-                "the crate differs from every recorded attempt and from what the oracle last \
-                 judged — restore it, or record it with `harness override` (see Help)"
+                "its Rust differs from every recorded attempt and from what the judge last \
+                 checked — restore it, or record it with `harness override` (see Help)"
                     .into(),
             )
         }
@@ -2955,39 +2958,17 @@ impl App {
     // ----- the menu ----------------------------------------------------------
 
     /// `Enter`: the selection's menu, opened with a fresh check of the lock
-    /// holder, focused on the recommended item.
+    /// holder, its recommended item first and focused, with its reason.
     pub fn open_menu(&mut self) {
         self.refresh_holder();
-        let items = self.menu_items();
-        let next = self.next_step().and_then(|(_, act)| act);
-        let want = match &self.selection {
-            Selection::Features => match self.features.group {
-                featmap::Group::NoFile | featmap::Group::Invalid(_) => {
-                    Some(menu::Action::EditFeatures)
-                }
-                featmap::Group::Valid => None,
-            },
-            Selection::Speed => match self.speed.group {
-                crate::speed::Group::NoFile
-                | crate::speed::Group::NoWorkload
-                | crate::speed::Group::FileError(_) => Some(menu::Action::EditWorkloads),
-                crate::speed::Group::NotYetRun => Some(menu::Action::Act(Act::Measure)),
-                _ => None,
-            },
-            Selection::Feature(id) => self.features.feature(id).and_then(|f| match f.state {
-                featmap::FeatureState::NotMapped | featmap::FeatureState::MapOutOfDate => {
-                    Some(menu::Action::Act(Act::MapFeatures))
-                }
-                featmap::FeatureState::ScenarioCannotRun => Some(menu::Action::EditFeatures),
-                _ => None,
-            }),
-            _ => None,
-        };
-        let focus = menu::recommended(&items, &self.selection, next, want);
+        let mut items = self.menu_items();
+        let advice = self.advice(&self.selection);
+        let reason = menu::recommend(&mut items, advice.as_ref());
         self.mode = Mode::Menu(Menu {
             items,
-            focus,
+            focus: 0,
             footer: None,
+            reason,
         });
     }
 
@@ -3170,14 +3151,16 @@ impl App {
 
     // ----- the project summary --------------------------------------------
 
-    /// The Next step, stated as a fact (§3), and the act it points to — never
-    /// model work.
-    pub fn next_step(&self) -> Option<(String, Option<Act>)> {
+    /// The project's Next step, stated as a fact (§3), and the menu item it
+    /// points to — model work only ever recommended, never started.
+    pub fn next_step(&self) -> Option<crate::next::Advice> {
+        use crate::next::Advice;
+        let say = |text: String, action: Option<Action>| Some(Advice { text, action });
         let Some(state) = &self.snapshot.facts_state else {
-            return Some((
+            return say(
                 "Nothing is scanned yet — press Enter and choose Scan the project".into(),
-                Some(Act::Scan),
-            ));
+                Some(Action::Act(Act::Scan)),
+            );
         };
         // The stale paths hold the missing files too (review ENG-6).
         let changed = state.stale
@@ -3188,20 +3171,23 @@ impl App {
                 .filter(|f| f.state == FileState::New)
                 .count();
         if changed > 0 {
-            return Some((
+            return say(
                 format!(
                     "{changed} file{} changed since the scan — Scan the project again",
                     if changed == 1 { "" } else { "s" }
                 ),
-                Some(Act::Scan),
-            ));
+                Some(Action::Act(Act::Scan)),
+            );
         }
         // Only a missing plan: a plan with no units is a plan (review ENG-3).
         if self.snapshot.units.is_empty()
             && self.snapshot.note.as_deref()
                 == Some(crate::model::no_plan(&self.snapshot.ledger_rel()).as_str())
         {
-            return Some(("No plan yet — Refresh the plan".into(), Some(Act::Plan)));
+            return say(
+                "No plan yet — press Enter and choose Refresh the plan".into(),
+                Some(Action::Act(Act::Plan)),
+            );
         }
         // A blocked unit's files left: refreshing the plan never makes it
         // fresh, so it is no next step.
@@ -3211,14 +3197,36 @@ impl App {
             .iter()
             .find(|u| !u.report.source_fresh && u.report.status != "blocked")
         {
-            return Some((
+            return say(
                 format!(
                     "{}'s C changed since it was planned — scan, refresh the plan, then review \
                      its diff",
                     u.unit.id
                 ),
-                Some(Act::Plan),
-            ));
+                Some(Action::Act(Act::Plan)),
+            );
+        }
+        let states: Vec<(&str, &UnitState)> = self
+            .snapshot
+            .units
+            .iter()
+            .zip(&self.files.units)
+            .map(|(u, i)| (u.unit.id.as_str(), &i.state))
+            .collect();
+        // A unit that needs attention: its cause and what to do, on it.
+        for (id, s) in &states {
+            if let UnitState::Attention(cause) = s {
+                return say(
+                    format!("{id} needs attention: {} — open it", cause.short()),
+                    Some(Action::OpenUnit(id.to_string())),
+                );
+            }
+        }
+        if let Some((id, _)) = states.iter().find(|(_, s)| **s == UnitState::Failing) {
+            return say(
+                format!("{id} is failing: its last check was red — open it"),
+                Some(Action::OpenUnit(id.to_string())),
+            );
         }
         // 5. The person's features, not mapped (or the map out of date).
         let scenarios = match &self.snapshot.features {
@@ -3228,20 +3236,96 @@ impl App {
             _ => 0,
         };
         if scenarios > 0 && !self.features.map.current() && !self.features.no_single_main {
-            return Some((
+            return say(
                 "Map the features — press Enter and choose Map the features".into(),
-                Some(Act::MapFeatures),
-            ));
+                Some(Action::Act(Act::MapFeatures)),
+            );
         }
         // 6. A unit with Rust whose verdict does not cover the features —
         // the F3 rule's units (review C3).
         if let Some(u) = self.features.recheck.first() {
-            return Some((
+            return say(
                 format!("Re-check {u} — your features are not checked on it (open it: Units)"),
-                None,
-            ));
+                Some(Action::OpenUnit(u.clone())),
+            );
         }
-        None
+        // A GREEN attempt waiting for the person, on a unit with no Rust
+        // accepted yet (on a verified one it would be a Replace).
+        let no_rust = |s: &UnitState| matches!(s, UnitState::Planned | UnitState::Tried);
+        if let Some(u) = self
+            .snapshot
+            .units
+            .iter()
+            .zip(&self.files.units)
+            .find(|(u, i)| no_rust(&i.state) && crate::next::acceptable(u).is_some())
+            .map(|(u, _)| u)
+        {
+            return say(
+                format!(
+                    "{} has a GREEN attempt waiting for you — open it and Accept it",
+                    u.unit.id
+                ),
+                Some(Action::OpenUnit(u.unit.id.clone())),
+            );
+        }
+        // Units with no Rust yet that can move: the first, in the plan's
+        // order. A unit that calls other units stays C in this version (the
+        // judge tests each unit alone — the guide's Part 7).
+        let leaf = |id: &str| {
+            self.snapshot
+                .unit(id)
+                .is_some_and(|u| u.unit.depends_on.is_empty())
+        };
+        let movable = |(id, s): &&(&str, &UnitState)| no_rust(s) && leaf(id);
+        let waiting = states.iter().filter(movable).count();
+        if let Some((id, _)) = states.iter().find(movable) {
+            return say(
+                format!(
+                    "{waiting} unit{} no Rust yet — migrate the first, {id}: press Enter and \
+                     choose Migrate — ask in chat",
+                    if waiting == 1 { " has" } else { "s have" }
+                ),
+                Some(Action::Migrate),
+            );
+        }
+        // Everything that can move is in Rust and green: what a person
+        // sees, then speed.
+        let in_rust =
+            |s: &UnitState| matches!(s, UnitState::Migrated(_) | UnitState::OriginUnknown);
+        if !states.iter().any(|(_, s)| in_rust(s))
+            || !states
+                .iter()
+                .all(|(id, s)| in_rust(s) || **s == UnitState::Blocked || !leaf(id))
+        {
+            return None;
+        }
+        let done = if states
+            .iter()
+            .all(|(_, s)| in_rust(s) || **s == UnitState::Blocked)
+        {
+            "Every unit is in Rust and checked"
+        } else {
+            "Every unit that can move to Rust is in Rust and checked (the others call other units)"
+        };
+        if matches!(self.features.group, featmap::Group::NoFile)
+            && !self.features.no_single_main
+            && self.snapshot.facts.is_some()
+        {
+            return say(
+                format!(
+                    "{done} — write your features, to check what a person sees: press Enter \
+                     and choose Write your features file"
+                ),
+                Some(Action::EditFeatures),
+            );
+        }
+        if matches!(self.speed.group, crate::speed::Group::NoFile) {
+            return say(
+                format!("{done} — measure its speed: choose Speed, at the end of the tree"),
+                None,
+            );
+        }
+        say(format!("{done} — nothing to do"), None)
     }
 
     // ----- keys ---------------------------------------------------------------
@@ -4591,7 +4675,7 @@ impl App {
                     if u.crate_dir.is_some() {
                         provenance_words(u)
                     } else {
-                        "no crate yet".into()
+                        "no Rust yet".into()
                     },
                 ),
                 None => ("", String::new()),
@@ -4864,7 +4948,7 @@ fn pair_view(
         rust.extend(code_lines(highlighter, Lang::Rust, logic));
     }
     match p.rust.note {
-        Some(RustNote::NoCrate) => rust.push(CodeLine::Note("no crate".into())),
+        Some(RustNote::NoCrate) => rust.push(CodeLine::Note("no Rust yet".into())),
         Some(RustNote::NotFound) => rust.push(CodeLine::Note(format!("not found in {crate_name}"))),
         Some(RustNote::LogicNotIdentified) => {
             rust.push(CodeLine::Note("logic fn not identified".into()))
@@ -5967,28 +6051,43 @@ pub(crate) mod tests {
     #[test]
     fn the_next_step_is_a_fact() {
         let mut app = app("next");
-        assert_eq!(app.next_step(), None);
+        // Every unit in Rust and green: speed is what is left.
+        let all_green = app.next_step().unwrap();
+        assert_eq!(
+            all_green.text,
+            "Every unit is in Rust and checked — measure its speed: choose Speed, at the end \
+             of the tree"
+        );
+        assert_eq!(all_green.action, None);
         let lib = app.config.target.join(LIB_C);
         let c = std::fs::read_to_string(&lib).unwrap();
         std::fs::write(&lib, format!("{c}\n")).unwrap();
         app.reload(true);
-        let (text, act) = app.next_step().unwrap();
+        let next = app.next_step().unwrap();
         assert_eq!(
-            text,
+            next.text,
             "1 file changed since the scan — Scan the project again"
         );
-        assert_eq!(act, Some(Act::Scan));
+        assert_eq!(next.action, Some(Action::Act(Act::Scan)));
         std::fs::remove_file(app.config.target.join("migration/plan.toml")).unwrap();
         std::fs::write(&lib, c).unwrap();
         app.reload(true);
-        assert_eq!(app.next_step().unwrap().1, Some(Act::Plan));
+        assert_eq!(
+            app.next_step().unwrap().action,
+            Some(Action::Act(Act::Plan))
+        );
         std::fs::remove_file(app.config.target.join("migration/facts.jsonl")).unwrap();
         app.reload(true);
-        assert_eq!(app.next_step().unwrap().1, Some(Act::Scan));
-        // The project menu opens focused on it.
+        assert_eq!(
+            app.next_step().unwrap().action,
+            Some(Action::Act(Act::Scan))
+        );
+        // The project menu opens with it first, focused, with its reason.
         app.open_menu();
         let Mode::Menu(m) = &app.mode else { panic!() };
-        assert_eq!(m.items[m.focus].action, Action::Act(Act::Scan));
+        assert_eq!(m.focus, 0);
+        assert_eq!(m.items[0].action, Action::Act(Act::Scan));
+        assert_eq!(m.reason.as_deref(), Some("Nothing is scanned yet"));
     }
 
     /// §4 `e`, §R2 5: after a changed edit the optional note is asked for,
@@ -6306,7 +6405,7 @@ pub(crate) mod tests {
         let Mode::Dialog(c) = &app.mode else {
             panic!("{:?}", app.notice)
         };
-        assert_eq!(c.title, "Re-check u-lib with the oracle?");
+        assert_eq!(c.title, "Re-check u-lib with the judge?");
         arm(&mut app);
         let Command::Spawn(again) = key(&mut app, 'y') else {
             panic!("refused: {}", said(&app));
@@ -6492,7 +6591,7 @@ pub(crate) mod tests {
         std::fs::remove_file(app.config.target.join("test_case/include/lib.h")).unwrap();
         assert!(app.reload(true));
         assert_eq!(
-            app.next_step().unwrap().0,
+            app.next_step().unwrap().text,
             "1 file changed since the scan — Scan the project again"
         );
     }

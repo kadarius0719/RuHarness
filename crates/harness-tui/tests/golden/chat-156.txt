@@ -1,14 +1,14 @@
-┌ Files ───────────────────────┐┌ harness-tui-chat-goldens-0000000000 · ✓1/1 ──────────────────────────────────┐┌ Chat — waiting for you · …──[New]─[?]─[×]┐
-│▾ harness-tui-chat-golde… ✓1/1││2 files scanned                                                               ││› Please migrate u-lib.                   │
-│  ▾ test_case/            ✓1/1││Units (1): 1 ✓ migrated                                                       ││                                          │
+┌ Files ───────────────────────┐┌ harness-tui-chat-goldens-0000000000 · 1 of 1 C file in Rus…──────────────────┐┌ Chat — waiting for you · …──[New]─[?]─[×]┐
+│▾ harness-tui-chat-golde… ✓1/1││Next step: Every unit is in Rust and checked — measure its speed: choose      ││› Please migrate u-lib.                   │
+│  ▾ test_case/            ✓1/1││Speed, at the end of the tree                                                 ││                                          │
 │    ▾ include/                ││                                                                              ││I will ask to migrate u-lib.              │
-│        · lib.h         header││                                                                              ││                                          │
-│    ▾ src/                ✓1/1││                                                                              ││  · read the project's status — done      │
+│        · lib.h         header││2 files scanned                                                               ││                                          │
+│    ▾ src/                ✓1/1││Units (1): 1 ✓ migrated                                                       ││  · read the project's status — done      │
 │      ▸ ✓ lib.c       migrated││                                                                              ││                                          │
 │  ▾ Units (1)                 ││                                                                              ││                                          │
 │    ▸ ✓ u-lib         migrated││                                                                              ││                                          │
 │    Features (none yet)       ││                                                                              ││                                          │
-│    Speed (no file)           ││                                                                              ││                                          │
+│    Speed — not set up        ││                                                                              ││                                          │
 │                              ││                                                                              ││                                          │
 │                              ││                                                                              ││                                          │
 │                              ││                                                                              ││                                          │
@@ -19,6 +19,6 @@
 │                              ││                                                                              ││About: the project                        │
 │                              ││                                                                              ││› Enter reviews the request — or type     │
 └──────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────┘└──────────────────────────────────────────┘
- Ready.
+ Ready — ↑↓ to choose a row, Enter for what you can do
 
  Enter review   Esc decline   Ctrl-J new line   ↑↓ scroll   Tab pane   F1 help   Ctrl-C quit

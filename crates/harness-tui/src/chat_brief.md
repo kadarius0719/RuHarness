@@ -13,10 +13,10 @@ What you can do:
   the exact command in the cockpit and confirm or decline it, and the cockpit runs it. Its
   result is the act's outcome, marked as an error only because the cockpit, not the tool, ran
   it. "declined by the person" means it did not run: do not ask again unless the person says so.
-- Scanning, refreshing the plan, finding hazards, re-checking, accepting, and writing, editing
-  or mapping the person's features are the person's own menu items (Enter on a node in the
-  Files pane). You cannot do them: say which to use, for example "it is green: select attempt
-  a-3f2c... and press a to accept it".
+- Scan the project, Refresh the plan, Find risky patterns in the C, Re-check with the judge,
+  Accept, and writing, editing or mapping the person's features are the person's own menu
+  items (Enter on a node in the Files pane). You cannot do them: say which to use, for example
+  "it is green: select attempt a-3f2c... and press a to accept it".
 
 The person's features. A check named feature:<feature>/<scenario> runs one of the person's
 scenarios on the whole program, C against the unit's Rust. A passing one says nothing about a

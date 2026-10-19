@@ -34,7 +34,7 @@ Cancel, the signal path, hand edits never lost and honest provenance all hold un
 
 **The split** (TUI-DESIGN §9): model work through the chat, deterministic work through the
 menus. The chat may ask for **Migrate**, **Modify** (a steer attempt), **Retry**, and
-**Continue** (its answer to a hand-off of one of those). Scan, Refresh the plan, Find hazards,
+**Continue** (its answer to a hand-off of one of those). Scan, Refresh the plan, Find risky patterns in the C,
 Re-check and Accept stay the person's: the chat reads the state and says which menu item to
 use ("it is green — select a-3f2c… and press a to accept it"). So nothing the chat asks for
 promotes, verifies or rewrites the plan, and "Accept never promotes unseen code" (§R3 ENG-5)
@@ -591,9 +591,10 @@ output. So the chat is visible and one click away at every width, before it was 
 The pane's title: "Chat — <state> · <short model>", the state first (not started, starting…,
 ready, thinking…, waiting for you, running a command for the chat, stopped, ended), `[?]` for
 Help. Before the first message the pane says what it is: "Ask for model work here — for
-example "migrate this". The chat reads the project through the harness and asks before it runs
-anything; you confirm every act. It will use <the sign-in the environment implies, §1.1>
-(claude at <path>)."
+example "migrate this". The chat only reads the project and asks; the harness runs what you
+confirm, and you confirm every act. It will use <the sign-in the environment implies, §1.1>."
+(The claude binary's path was dropped, and the first sentence corrected, in pass 1 of
+docs/reviews/2026-10-18-cockpit-usability-critique.md.)
 
 ### 5.2 The transcript
 

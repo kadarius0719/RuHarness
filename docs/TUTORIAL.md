@@ -94,7 +94,7 @@ Two more commands find the risky parts, so they are not missed:
 - **Detect** flags C patterns that are known to be tricky to translate: **macros** (shorthands the compiler expands into code before compiling), **function pointers** (handing a function to another function, to be called back later), and data shared across the whole program. Each flag is a **hazard**.
 - **Observe** asks a model to review each flag, keeping the real ones, and ranks the units by risk in `observations.md`. This model gives advice only: a flag it dismisses still counts until a person agrees (`harness review` records that person's word).
 
-In the cockpit, scan, plan and detect are the project's menu items Scan the project, Refresh the plan and Find hazards (run the detectors); migrate is what the chat asks for; Accept is a menu item of a GREEN attempt.
+In the cockpit, scan, plan and detect are the project's menu items Scan the project, Refresh the plan and Find risky patterns in the C; migrate is what the chat asks for; Accept is a menu item of a GREEN attempt.
 
 **Why some units wait.** In this version only a **leaf unit** can be migrated: one whose C calls nothing in the project's other `.c` files. A unit that calls another unit's functions cannot be tested alone, because its test program would not link without the other unit's C. That is what Part 7 shows for liblzg's other three units.
 
@@ -227,7 +227,7 @@ The **cockpit** (the program `harness-tui`) is a full-screen view of the project
 
 You work left to right: pick something in **Files**, read about it in the **View**, and ask the **Chat** for model work. Each area is a **pane**; the one your keys go to has the **focus** and a highlighted border, and `Tab` moves it. A row with `▸` is folded and `▾` is open. The symbol beside each row is its state (section 16 lists them). On a window narrower than 156 **columns** (the window's width, counted in letters) the chat shares the right side, and a `View │ Chat` tab on its border switches.
 
-**Every action waits in a dialog.** Select a row and press `Enter`: a short menu lists what you can do with it now (an item that cannot run is greyed, and says why). Every item that changes something opens a dialog that says in words what it will write, then the exact command. It starts on the safe button, must be scrolled to its end, and only after a moment whole on screen says "ready: → then Enter". Keys typed or pasted before that, and a held-down `Enter`, never confirm anything. Only one command runs at a time.
+**Every action waits in a dialog.** Every View starts with a **Next step** line: what to do now, in one sentence. Select a row and press `Enter`: a short menu lists what you can do with it now, the Next step's item first and highlighted, with a `↳ recommended: …` line saying why (an item that cannot run is greyed, and says why). Every item that changes something opens a dialog that says in words what it will write, then the exact command. It starts on the safe button, must be scrolled to its end, and only after a moment whole on screen says "ready: → then Enter". Keys typed or pasted before that, and a held-down `Enter`, never confirm anything. Only one command runs at a time.
 
 **The chat** is an AI assistant (your own Claude Code) that can look up the project's state (its units, verdicts, attempts and pending questions) and ask the cockpit to do model work for you, but never runs anything itself. The cockpit starts Claude Code when you send your first message, with the line "starting Claude Code (signed in with …)"; it uses your own sign-in, never a key of the cockpit's.
 
@@ -235,7 +235,7 @@ You work left to right: pick something in **Files**, read about it in the **View
 |---|---|
 | Migrate a unit (a new translation) | Scan the project |
 | Modify an attempt with a note | Refresh the plan |
-| Retry an attempt | Re-check with the oracle |
+| Retry an attempt | Re-check with the judge |
 | Answer the model's questions during a migration (Continue) | Accept an attempt |
 
 For anything in the right column the chat tells you which menu item to use. A request appears on a yellow line above the input, "Asks: …", and ignores keys for its first second; `Enter` reviews it in the same dialog as your own actions, `Esc` declines it. Everything the chat asked for is recorded as "asked in chat".
@@ -428,7 +428,7 @@ Common options of `migrate`: `--model <name>` names who answers; `--provider <na
 | `10` | the judge said RED |
 | `130` | stopped with Ctrl-C; the harness stopped everything it had started |
 
-**The cockpit's keys**, as its help screen (`?`) lists them:
+**The cockpit's keys.** The help's first page (`?`) shows the six you need to start — `↑ ↓` choose a row, `Enter` what you can do with it, `Tab` the next pane, `Esc` close or step back, `?` the help, `q` quit — and the three marks you meet first (`◇` planned, `✓` in Rust, `⚠` needs attention); `↓` then lists them all:
 
 | Key | What it does |
 |---|---|
@@ -458,7 +458,7 @@ In the chat, letters are text. `Enter` sends (or, on an empty input, reviews a w
 | `✓` | migrated (steered / by hand when a note or an edit made it) |
 | `✓?` | verified, origin not recorded: judged, but no attempt is known to have produced it |
 | `◐` | tried: attempts exist, none accepted |
-| `◇` | planned: no attempt yet |
+| `◇` | planned: no Rust yet, no attempt |
 | `⊘` | blocked |
 | `!` | changed since the scan |
 | `+` | not scanned yet |
@@ -467,16 +467,17 @@ In the chat, letters are text. `Enter` sends (or, on an empty input, reviews a w
 | `–` | no exported functions (never planned) |
 | `○` | not in the plan |
 | `⊖` | not part of this tool: a project file the open tool does not list |
+| `✓0/13` | on a folder: 0 of its 13 C files are in Rust (`⚠1`: one needs attention); the View's title says it in words |
 
-Beside an attempt row (under its unit), `✓` is GREEN, `✗` is RED, and `◐` is an attempt that has not finished (it stopped at a hand-off). Beside a feature, `◉` holds so far (its migrated units pass), `◌` all its code is still C, `✗` a unit's check of it failed, and `↻` needs a re-check; the help screen lists the rest.
+Beside an attempt row (under its unit), `✓` is GREEN, `✗` is RED, and `◐` is an attempt that has not finished (it stopped at a hand-off). Beside a feature, `◉` holds so far (it runs Rust now, and its migrated units pass), `◌` still all C, `✗` a unit's check of it failed, and `↻` needs a re-check; the help screen lists the rest.
 
 **The menu items** (`Enter` on a row; the name shows what it applies to):
 
 | Menu item | Where | What it does |
 |---|---|---|
-| Scan the project · Refresh the plan · Find hazards (run the detectors) | The project | Scan, plan and detect, section 4. |
+| Scan the project · Refresh the plan · Find risky patterns in the C | The project | Scan, plan and detect, section 4. |
 | Migrate — ask in chat · Ask in chat… | A unit, or anywhere | Puts a request in the chat, or moves you there to ask. |
-| Re-check with the oracle · Show the checks | A unit, or an attempt with a verdict | Runs the judge again; lists every check in words, passed or failed. |
+| Re-check with the judge · Show the checks | A unit, or an attempt with a verdict | Runs the judge again; lists every check in words, passed or failed. |
 | Accept … into … · Replace …'s verified crate with … | A GREEN attempt | Makes it the unit's Rust (only you can); on a verified unit, swaps it in for the one in use (used with Speed). |
 | Compare with the promoted attempt | An attempt | What differs from the Rust already accepted. |
 | Modify with a note · Retry · Resume | An attempt | A new attempt with your note; the same again; continue a paused one. |
@@ -484,6 +485,7 @@ Beside an attempt row (under its unit), `✓` is GREEN, `✗` is RED, and `◐` 
 | Write your features file · Map the features | Features | Section 10. |
 | Write your workloads file · Measure speed · Measure this unit's speed · Compare the outputs | Speed, or a verified unit | Section 12. |
 | Map the project · Ask a model for advice · Accept a program | A project with no tool yet | Section 13. |
+| Open unit … | The project, when its Next step names a unit | Goes to that unit. |
 | Cancel the running command · Re-read the project | Anywhere | Stop it (asked first); load the ledger again. |
 
 **When something looks wrong.** The cockpit says what went wrong in words, usually with what to do; `c` shows the exact command and everything it reported, which is what to share when you ask for help. The common cases:

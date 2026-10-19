@@ -171,6 +171,27 @@ pub enum Cause {
 }
 
 impl Cause {
+    /// The cause and its action in a few words, for a list of units
+    /// ("verdict made elsewhere — Re-check with the judge").
+    pub fn short(&self) -> &'static str {
+        match self {
+            Cause::Contradiction => "status and verdict disagree — Re-check with the judge",
+            Cause::PromotionInterrupted { .. } => {
+                "an Accept was interrupted — Re-check with the judge"
+            }
+            Cause::SourceChanged => "its C changed since the plan — Refresh the plan",
+            Cause::StaleVerdict => "verdict out of date — Re-check with the judge",
+            Cause::ChangedOutside => {
+                "its Rust changed outside the harness — restore it, or record it (harness \
+                 override)"
+            }
+            Cause::NoEvidence => {
+                "its verdict is missing — restore it (git), or record its Rust (harness override)"
+            }
+            Cause::MadeElsewhere { .. } => "verdict made elsewhere — Re-check with the judge",
+        }
+    }
+
     /// The cause and its next step, in words; `ledger_rel` is the open
     /// ledger (`migration`, or `migration/tools/<id>`), so the commands
     /// named carry its tool.
@@ -380,6 +401,44 @@ impl Rollup {
             parts.push(format!("(+{} ✓?)", self.origin_unknown));
         }
         parts.join(" ")
+    }
+
+    /// The same counts in words, for the View's title and summary: "1
+    /// needs attention · 0 of 13 C files in Rust". Files, not units: a unit
+    /// may hold several files, and a file no unit holds yet counts too.
+    pub fn words(&self) -> String {
+        let mut parts = Vec::new();
+        let files = |n: usize| if n == 1 { "file" } else { "files" };
+        for (n, one, many) in [
+            (self.failing, "failing", "failing"),
+            (self.attention, "needs attention", "need attention"),
+            (
+                self.changed,
+                "changed since the scan",
+                "changed since the scan",
+            ),
+            (self.new, "not scanned yet", "not scanned yet"),
+            (self.missing, "missing", "missing"),
+        ] {
+            if n > 0 {
+                parts.push(format!("{n} {}", if n == 1 { one } else { many }));
+            }
+        }
+        if self.migratable > 0 {
+            parts.push(format!(
+                "{} of {} C {} in Rust",
+                self.migrated,
+                self.migratable,
+                files(self.migratable)
+            ));
+        }
+        if self.origin_unknown > 0 {
+            parts.push(format!(
+                "{} more verified, origin not recorded",
+                self.origin_unknown
+            ));
+        }
+        parts.join(" · ")
     }
 }
 
@@ -623,7 +682,7 @@ pub fn build(snapshot: &Snapshot, walk: &TreeWalk) -> Files {
 }
 
 /// The tree's mark for a project file the open tool does not list: a mark
-/// of its own (the Features legend's `◌` means "all its code is still C"),
+/// of its own (the Features legend's `◌` means "still all C"),
 /// listed in the help's States.
 pub const NOT_IN_TOOL: &str = "⊖";
 
@@ -868,6 +927,11 @@ mod tests {
         assert!(snap.units[0].report.made_elsewhere);
         let cause = Cause::MadeElsewhere { unit: id.clone() };
         assert_eq!(files.units[0].state, UnitState::Attention(cause.clone()));
+        // The needs-attention list's words: the cause and the action.
+        assert_eq!(
+            cause.short(),
+            "verdict made elsewhere — Re-check with the judge"
+        );
         assert_eq!(
             cause.words("migration"),
             format!(
@@ -1093,6 +1157,11 @@ mod tests {
             "judged by the oracle (the verdict's rust_crate)"
         );
         assert_eq!(t.read().1.rollup("").text(), "✓0/1 (+1 ✓?)");
+        // The same counts in words, for the View (files, not units).
+        assert_eq!(
+            t.read().1.rollup("").words(),
+            "0 of 1 C file in Rust · 1 more verified, origin not recorded"
+        );
     }
 
     /// Rule 7, SAFE-4: a crate edited outside the harness matches neither a
