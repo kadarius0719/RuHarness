@@ -525,7 +525,12 @@ pub(crate) mod tests {
             })
             .expect("an init");
         assert_eq!(init.0.as_deref(), Some("claude-haiku-4-5-20251001"));
-        assert_eq!(init.1.len(), 7, "{:?}", init.1);
+        assert_eq!(
+            init.1.len(),
+            super::super::COCKPIT_TOOLS.len(),
+            "{:?}",
+            init.1
+        );
         assert!(init.1.iter().all(|t| t.starts_with("mcp__harness__")));
         assert_eq!(init.2, vec![("harness".into(), "connected".into())]);
         assert_eq!(init.3.as_deref(), Some("default"));

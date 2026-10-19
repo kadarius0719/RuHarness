@@ -1715,7 +1715,7 @@ fn feature_mark_words(state: &featmap::FeatureState) -> String {
 /// action, each a link.
 fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
-    if let Some(next) = app.next_step() {
+    if let Some(next) = app.next_step().map(|a| app.unless_chat_down(a)) {
         lines.extend(next_step(&next.line(), width));
         lines.push(Line::from(""));
     }
@@ -4562,7 +4562,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // The chat (docs/CHAT-PANE-DESIGN.md §5.1): a column of its own from
     // 156 columns once opened; below that the right column shows it only
     // while it has the focus, and a tab strip keeps it one click away.
-    let chat = app.chat_on && !app.in_project_view();
+    let chat = app.chat_on;
     if single {
         match app.focus {
             // The strip on whichever pane shows: the chat is one click away
@@ -4632,6 +4632,8 @@ mod tests {
     use super::*;
     use crate::app::tests::{app, app_of, arm, attempt, key, LIB_C, PROVENANCE};
 
+    /// The chat's connection, and the Project view's model work in chat.
+    mod connection;
     /// The Project view (pass 3 of the 2026-10-18 critique).
     mod project;
     use crate::app::{Act, Command, Purpose, RunLine, RunPanel};

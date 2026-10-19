@@ -64,10 +64,14 @@ shortens long paths to their last three parts and keeps the sentence's end. The 
 accent is 23, not 31 (31 fails 4.5:1 on white). Left: a newly started cockpit does not remember
 that a hand-off is waiting.
 
-## In progress (2026-10-19): model work in the cockpit goes through the chat, with a sign-in walk-through
+## Done (2026-10-19): model work in the cockpit goes through the chat, with a sign-in walk-through
+
+Built as queued below (DECISIONS 2026-10-19, CHAT-PANE-DESIGN §1.6 and §3.6, MCP-DESIGN §R7). Open from it: run the live chat tests once (the real Claude Code must list the two new map tools), and the person's own try of "Ask for advice — ask in chat" signed in.
+
+What was queued:
 
 The person's "Ask a model" from the Project view ran the command-line hand-off and stopped on a
-file nobody writes. One Opus pass (running): "Ask a model" becomes "Ask in chat"
+file nobody writes. One Opus pass (done): "Ask a model" became "Ask in chat"
 with the question pre-typed (the chat agent answers through the harness and the cockpit runs
 `project ask` again; the command-line hand-off stays for the CLI); before any model act the
 cockpit checks Claude Code is installed and signed in, and if not shows a plain walk-through (open

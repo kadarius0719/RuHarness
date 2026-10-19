@@ -2067,7 +2067,7 @@ file holding a `main` that did not compile as a note, "Libraries (n)" likewise (
 each. Its right pane: the folder's name (never the full path), the configuration's state in
 words (a guess / proposed / stated), the programs, libraries and tools again in full, what the
 selected program is (its held choices, the model's advice), and a Next step: no map → Map; a
-guess → Write the build configuration (or Ask for a proposal); a configuration written since
+guess → Write the build configuration (or Ask for a proposal — ask in chat); a configuration written since
 the map → Map the project again; right after an Accept → open the new tool; a held choice → pick
 it in Accept; a program ready → Accept it; a tool → open it. `Enter` on a row opens its menu, the
 recommended item first (a menu that would hold only that item is skipped: its dialog opens):
@@ -2077,10 +2077,13 @@ tool <id>" on an accepted one, once a map exists "Write the build configuration 
 starting from the map's own example — `[[configuration]]`, `name`, `from`, `flags = []` with its
 comment — checked on return by the map's own reader and written by the cockpit only while the
 file is still what the edit started from), "Map the project" (then "Map the project again"), and
-once a map exists "Ask for a proposal" (`--build`, while the configuration is a guess or nothing
-is held) or "Ask a model for advice". While the configuration is a guess (or came with the
+once a map exists, under the model separator, "Ask for a proposal — ask in chat" (while the
+configuration is a guess or nothing is held) or "Ask for advice — ask in chat", then "Ask in
+chat…": the question is typed into the chat, which answers through harness-mcp's
+`harness_map_questions` and `harness_map_answer` (docs/CHAT-PANE-DESIGN.md §3.6; `harness project
+ask` stays the command line's). While the configuration is a guess (or came with the
 project) Accept is greyed with "Accept needs a stated configuration, and this map's is a guess
-(or came with the project): choose Write the build configuration (or Ask for a proposal), then
+(or came with the project): choose Write the build configuration (or Ask for a proposal — ask in chat), then
 Map the project again". Accept asks each held choice first, in a menu titled "Accept <id>":
 "<id> holds the choice d1: two files define the same function, so keep which one?", the
 definers as items, none suggested, skipping a set whose `under` names no choice made so far; a

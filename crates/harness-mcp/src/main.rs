@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 mod acts;
+mod map;
 mod policy;
 mod reads;
 mod rpc;

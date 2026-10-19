@@ -448,6 +448,8 @@ name = "harness-mcp"
 version = "0.1.0"
 dependencies = [
  "harness-core",
+ "harness-llm",
+ "harness-oracle",
  "harness-tui",
  "serde_json",
  "signal-hook 0.4.4",

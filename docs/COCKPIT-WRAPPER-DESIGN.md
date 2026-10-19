@@ -700,8 +700,10 @@ and no map opens that tool, as the command line does.
   greyed with why), **Open tool <id>** on a tool's row (or an accepted program's), **Map the
   project** / **Map the project again**, once a map exists **Write the build configuration (in
   nano)** ("Edit …" once the file exists; recommended, above Ask, while the configuration is a
-  guess), and, under the model separator, **Ask for a proposal** (`--build`) or **Ask a model for
-  advice** (the held choices). A menu that would hold only the Next step's own item is skipped:
+  guess), and, under the model separator, **Ask for a proposal — ask in chat** or **Ask for advice —
+  ask in chat** (the held choices), then **Ask in chat…** (2026-10-19: model work goes through the
+  chat, docs/CHAT-PANE-DESIGN.md §3.6 — the question typed into the chat's input, no dialog, as
+  **Migrate — ask in chat**; `harness project ask` stays the command line's). A menu that would hold only the Next step's own item is skipped:
   `Enter` does it (the Map row before a map, the tool's row back here). The model rule is one
   everywhere: the recommended item is first, with "· uses a model" after its reason when it asks
   one; the separator heads every other model item.
@@ -731,8 +733,8 @@ and no map opens that tool, as the command line does.
   the tool's tree then starts with a row **◂ Back to the project view**, whose Enter (menu: "Back
   to the project view") returns, the tool just left selected. Neither move is offered while a
   command runs, a hand edit or a draft is kept, a hand-off waits, or the chat holds a
-  conversation (each greyed with why). The chat has no pane in the Project view: it works on a
-  tool.
+  conversation (each greyed with why). The chat has its pane in the Project view too (2026-10-19):
+  started there, its harness-mcp serves the project with no tool open (the map's tools only).
 
 ### 9.2 Colours and themes (2026-10-19)
 

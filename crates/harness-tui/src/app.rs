@@ -15,6 +15,7 @@
 
 mod adopt_offer;
 pub mod asks;
+mod connect;
 pub mod features_edit;
 mod project_view;
 pub mod speed_acts;
@@ -435,6 +436,9 @@ pub enum Purpose {
     /// The adoption question, offered again after a command was refused
     /// because the folder's results were made elsewhere.
     Adopt,
+    /// The chat's connection walk-through (docs/CHAT-PANE-DESIGN.md §1.6):
+    /// Claude Code not installed, not signed in, or stopped.
+    Connection,
 }
 
 /// An open dialog: its words and its latch.
@@ -2851,6 +2855,12 @@ impl App {
                 "Start a new chat?".into(),
                 vec!["The chat forgets this conversation.".into()],
             ),
+            Purpose::Connection => {
+                let Some(p) = self.chat.problem.clone() else {
+                    return;
+                };
+                (Kind::Connection, p.title().to_string(), p.body())
+            }
             Purpose::OpenEditor | Purpose::EditAgain | Purpose::FeaturesChanged => (
                 Kind::OpenEditor,
                 format!("Open the {} file?", self.editing.noun()),
@@ -2867,7 +2877,11 @@ impl App {
             ),
         };
         let mut dialog = Dialog::new(kind, self.now);
-        dialog.chat_rules = self.focus == Focus::Chat;
+        // The walk-through opens from the chat too, and its Check again
+        // keeps its letter: it runs nothing but the check (and the person's
+        // own last message again); typed-ahead keys before it arms are still
+        // dropped.
+        dialog.chat_rules = self.focus == Focus::Chat && kind != Kind::Connection;
         self.mode = Mode::Dialog(Box::new(Confirm {
             dialog,
             title,
@@ -3179,6 +3193,20 @@ impl App {
                 self.chat_new_chat();
                 Command::None
             }
+            (Purpose::Connection, Choice::CheckAgain) => {
+                self.chat_check_again();
+                Command::None
+            }
+            (Purpose::Connection, _) => {
+                if let Some(p) = &self.chat.problem {
+                    self.notice = notice(format!(
+                        "{} — the chat's items wait; choose Check the chat's connection when it \
+                         is fixed",
+                        p.title()
+                    ));
+                }
+                Command::None
+            }
             (Purpose::Quit | Purpose::Cancel | Purpose::NewChat, _) => Command::None,
             (
                 Purpose::OpenEditor
@@ -3348,11 +3376,25 @@ impl App {
                 Command::None
             }
             Action::Migrate => {
-                self.chat_migrate_item();
+                if self.chat_connected() {
+                    self.chat_migrate_item();
+                }
                 Command::None
             }
             Action::AskChat => {
-                self.move_focus(Focus::Chat);
+                if self.chat_connected() {
+                    self.move_focus(Focus::Chat);
+                }
+                Command::None
+            }
+            Action::AskInChat { build } => {
+                if self.chat_connected() {
+                    self.chat_ask_project(*build);
+                }
+                Command::None
+            }
+            Action::CheckChat => {
+                self.open_dialog(Purpose::Connection);
                 Command::None
             }
             Action::EditFeatures => self.start_features_edit(),

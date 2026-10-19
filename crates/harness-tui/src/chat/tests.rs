@@ -941,3 +941,269 @@ fn an_exited_leaders_pipes_are_read_first() {
     );
     end(&mut c);
 }
+
+/// An executable `sh` script at `dir/name`.
+fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.join(name);
+    std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+/// The connection check before a start (docs/CHAT-PANE-DESIGN.md §1.6):
+/// no `claude` at all, and a `claude --version` that fails, are "not
+/// installed" with what was seen; one that answers lets the chat start; a
+/// problem stands until Check again, which looks for the binaries again.
+#[test]
+fn the_check_says_not_installed_with_what_it_saw() {
+    let tmp = TmpDir::new("chat-check");
+    let vars = vec![(OsString::from("PATH"), OsString::from("/usr/bin:/bin"))];
+    let missing = Chat::new(
+        Err("claude not found: install Claude Code or pass --chat-runtime".into()),
+        &vars,
+        None,
+        tmp.0.clone(),
+        Procs::default(),
+    );
+    let p = missing
+        .problem
+        .clone()
+        .expect("not installed from the start");
+    assert_eq!(p.trouble, Trouble::NotInstalled);
+    assert_eq!(p.title(), "Claude Code is not installed");
+    assert!(p.seen.contains("claude not found"), "{p:?}");
+    // A harness-mcp that is missing is not Claude Code's problem.
+    let no_mcp = Chat::new(
+        Err("harness-mcp not found: build it beside harness-tui or pass --harness-mcp".into()),
+        &vars,
+        None,
+        tmp.0.clone(),
+        Procs::default(),
+    );
+    assert!(no_mcp.problem.is_none());
+
+    let broken = script(
+        &tmp.0,
+        "broken",
+        "echo 'claude: bad CPU type' >&2; exit 126",
+    );
+    let mut c = Chat::new(
+        Ok(Binaries {
+            claude: broken,
+            mcp: PathBuf::from("/usr/bin/false"),
+        }),
+        &vars,
+        None,
+        tmp.0.clone(),
+        Procs::default(),
+    );
+    let p = c.check().expect("a failing --version");
+    assert_eq!(p.trouble, Trouble::NotInstalled);
+    assert_eq!(p.seen, "`claude --version` failed: claude: bad CPU type");
+    // It stands: the check is not run again until Check again.
+    let good = script(
+        &tmp.0,
+        "good",
+        "[ \"$1\" = --version ] && { echo '2.1.274 (Claude Code)'; exit 0; }; exit 9",
+    );
+    c.bins = Ok(Binaries {
+        claude: good.clone(),
+        mcp: PathBuf::from("/usr/bin/false"),
+    });
+    assert!(c.check().is_some());
+    assert!(c.check_again().is_none());
+    assert!(c.installed && c.problem.is_none());
+    // Check again looks for the binaries again (a claude installed since).
+    let mut c = Chat::new(
+        Err("claude not found: install Claude Code or pass --chat-runtime".into()),
+        &vars,
+        None,
+        tmp.0.clone(),
+        Procs::default(),
+    );
+    c.resolver = Some(Resolver {
+        runtime: Some(good),
+        mcp: Some(PathBuf::from("/bin/sh")),
+        exe: None,
+        path: None,
+    });
+    assert!(c.check_again().is_none(), "{:?}", c.problem);
+    assert!(c.available());
+}
+
+/// Claude Code says it is not signed in (an `authentication_failed`
+/// message, then a failed result): one "not signed in" for the app, with
+/// what it said; the transcript says it in words too.
+#[test]
+fn not_signed_in_is_caught_from_the_stream() {
+    let tmp = TmpDir::new("chat-signin");
+    let mut lines = start_lines();
+    lines.push(init_line(COCKPIT_TOOLS, "connected"));
+    lines.push(
+        serde_json::json!({"dir": "out", "msg": {"type": "assistant",
+        "error": "authentication_failed",
+        "message": {"id": "m1", "model": "<synthetic>",
+            "content": [{"type": "text", "text": "Not logged in · Please run /login"}]}}}),
+    );
+    lines.push(serde_json::json!({"dir": "out", "msg": {"type": "result",
+        "subtype": "success", "is_error": true, "queued_turn_count": 0,
+        "result": "Not logged in · Please run /login"}}));
+    let rec = synthetic(&tmp, &lines);
+    let mut c = chat(&tmp, &rec, "");
+    c.send(
+        "Which file should t-unlzg keep for choice d1, and why?",
+        None,
+        Instant::now(),
+    )
+    .unwrap();
+    let ev = pump_until(&mut c, |c, _| !c.turn);
+    let troubles: Vec<&Problem> = ev
+        .iter()
+        .filter_map(|e| match e {
+            Event::Unavailable { problem } => Some(problem),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(troubles.len(), 1, "{ev:?}");
+    assert_eq!(troubles[0].trouble, Trouble::NotSignedIn);
+    assert_eq!(troubles[0].title(), "Claude Code is not signed in");
+    assert_eq!(
+        troubles[0].seen,
+        "Claude Code said: Not logged in · Please run /login"
+    );
+    // Said once, though the message and the result both say it.
+    assert_eq!(
+        text(&mut c).matches("claude is not signed in").count(),
+        1,
+        "{}",
+        text(&mut c)
+    );
+    assert!(
+        text(&mut c).contains("claude is not signed in: run `claude` in a terminal"),
+        "{}",
+        text(&mut c)
+    );
+    assert_eq!(
+        c.last_sent.as_deref(),
+        Some("Which file should t-unlzg keep for choice d1, and why?")
+    );
+    end(&mut c);
+}
+
+/// A Claude Code that ends by itself, or whose start the cockpit refuses:
+/// "stopped", with what was seen — never for a chat the person ended.
+#[test]
+fn a_chat_that_stops_by_itself_is_a_problem_and_one_ended_is_not() {
+    let tmp = TmpDir::new("chat-stopped");
+    let rec = synthetic(&tmp, &start_lines()[..2]);
+    let mut c = chat(&tmp, &rec, "echo 'Error: something broke' >&2; exit 1");
+    c.send("hi", None, Instant::now()).unwrap();
+    let ev = pump_until(&mut c, |_, e| {
+        e.iter().any(|e| matches!(e, Event::Unavailable { .. }))
+    });
+    let p = c.problem.clone().unwrap();
+    assert_eq!(p.trouble, Trouble::Stopped);
+    assert_eq!(p.seen, "Error: something broke");
+    assert!(ev.contains(&Event::Ended { gen: 1 }));
+    // An unexpected start ends the chat the same way.
+    let tmp = TmpDir::new("chat-refused");
+    let mut lines = start_lines();
+    lines.push(init_line(&[COCKPIT_TOOLS, &["Bash"]].concat(), "connected"));
+    let rec = synthetic(&tmp, &lines);
+    let mut c = chat(&tmp, &rec, "");
+    c.send("hi", None, Instant::now()).unwrap();
+    pump_until(&mut c, |c, _| c.problem.is_some());
+    assert!(c.problem.as_ref().unwrap().seen.contains("Bash"));
+    end(&mut c);
+    // The person's own end is no problem.
+    let tmp = TmpDir::new("chat-ended");
+    let rec = synthetic(&tmp, &start_lines()[..2]);
+    let mut c = chat(&tmp, &rec, "");
+    c.send("hi", None, Instant::now()).unwrap();
+    end(&mut c);
+    assert!(c.problem.is_none());
+}
+
+/// The map's tools (docs/CHAT-PANE-DESIGN.md §3.6): the question is a read,
+/// allowed at once; the answer is allowed only under the chat's own model
+/// (it is recorded as that model's advice) — another name is denied — and
+/// its successful result tells the app to read the reply again.
+#[test]
+fn the_map_answer_is_allowed_under_the_chats_model_only() {
+    let tmp = TmpDir::new("chat-map");
+    let mut lines = start_lines();
+    lines.push(init_line(COCKPIT_TOOLS, "connected"));
+    let ask = |id: &str, tool: &str, call: &str, input: Value| {
+        serde_json::json!({"dir": "out", "msg": {"type": "control_request", "request_id": id,
+            "request": {"subtype": "can_use_tool", "tool_name": tool,
+                        "mcp_server": {"name": "harness"}, "input": input,
+                        "tool_use_id": call}}})
+    };
+    let answer = |id: &str, behavior: &str| {
+        serde_json::json!({"dir": "in", "msg": {"type": "control_response",
+            "response": {"subtype": "success", "request_id": id,
+                         "response": {"behavior": behavior}}}})
+    };
+    lines.push(ask(
+        "q1",
+        "mcp__harness__harness_map_questions",
+        "t1",
+        serde_json::json!({}),
+    ));
+    lines.push(answer("q1", "allow"));
+    lines.push(ask(
+        "q2",
+        "mcp__harness__harness_map_answer",
+        "t2",
+        serde_json::json!({"model": "claude-opus-5-5", "text": "[]"}),
+    ));
+    lines.push(answer("q2", "deny"));
+    lines.push(ask(
+        "q3",
+        "mcp__harness__harness_map_answer",
+        "t3",
+        serde_json::json!({"model": "claude-haiku-4-5-20251001", "text": "[]"}),
+    ));
+    lines.push(answer("q3", "allow"));
+    lines.push(
+        serde_json::json!({"dir": "out", "msg": {"type": "user", "message": {
+        "role": "user", "content": [{"type": "tool_result", "tool_use_id": "t3",
+        "is_error": false, "content": "{\"kind\":\"questions\"}"}]}}}),
+    );
+    lines.push(serde_json::json!({"dir": "out", "msg": {"type": "result",
+        "subtype": "success", "is_error": false, "queued_turn_count": 0}}));
+    let rec = synthetic(&tmp, &lines);
+    let mut c = chat(&tmp, &rec, "");
+    c.send("advise", None, Instant::now()).unwrap();
+    let ev = pump_until(&mut c, |c, _| !c.turn);
+    assert!(asks(&ev).is_empty(), "{ev:?}");
+    assert_eq!(
+        ev.iter().filter(|e| **e == Event::MapAnswered).count(),
+        1,
+        "{ev:?}"
+    );
+    let t = text(&mut c);
+    assert!(
+        t.contains("· read the project map's open question (page 1)"),
+        "{t}"
+    );
+    assert!(
+        t.contains(
+            "· record the chat's answer: refused — the advice is recorded under the chat's \
+             model: pass model = claude-haiku-4-5-20251001"
+        ),
+        "{t}"
+    );
+    assert!(
+        t.contains("· record the chat's answer to the project map's question — done"),
+        "{t}"
+    );
+    let sent = stdin_log(&tmp);
+    let deny = sent
+        .iter()
+        .find(|v| v["response"]["request_id"] == "q2")
+        .unwrap();
+    assert_eq!(deny["response"]["response"]["behavior"], "deny");
+    end(&mut c);
+}

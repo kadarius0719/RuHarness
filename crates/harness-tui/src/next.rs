@@ -69,8 +69,13 @@ pub fn acceptable(unit: &UnitView) -> Option<&str> {
 }
 
 impl App {
-    /// The Next step of a node (the selection, usually).
+    /// The Next step of a node (the selection, usually): never a chat item
+    /// while the chat is unavailable (docs/CHAT-PANE-DESIGN.md §1.6).
     pub fn advice(&self, sel: &Selection) -> Option<Advice> {
+        self.advice_of(sel).map(|a| self.unless_chat_down(a))
+    }
+
+    fn advice_of(&self, sel: &Selection) -> Option<Advice> {
         match sel {
             Selection::Project | Selection::Units => self.next_step(),
             Selection::Dir(_) => None,

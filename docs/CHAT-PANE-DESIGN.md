@@ -83,7 +83,9 @@ neither the model nor the model setting.
 - `<json>`: `{"mcpServers":{"harness":{"command":"<canonical harness-mcp>","args":
   ["--cockpit","--target","<canonical root>"]}}}` — harness-mcp in cockpit mode (§4.4).
   On a mapped project the cockpit adds `"--tool","<id>"` after the root: the chat's server
-  works on the same mapped tool as the cockpit (docs/PROJECT-MAP-DESIGN.md §3.7).
+  works on the same mapped tool as the cockpit (docs/PROJECT-MAP-DESIGN.md §3.7). On the Project
+  view (no tool open) it passes none, and harness-mcp serves the project itself: the map's tools
+  answer, the ledger reads refuse "no tool is open" (§3.6).
 - `--tools ""`: no built-in tool — no file, shell, web, task or skill tool. The chat reaches the
   target only through harness-mcp's reads: preflighted, bounded, fenced.
 - `--restricted --setting-sources ""`, `--strict-mcp-config`, `--permission-mode default`: no
@@ -246,6 +248,52 @@ request, withdrawal, turn start and end, runtime ended — and sends a message, 
 answer, a stop. `chat::claude` maps Claude Code's stream onto it. No trait, no flag: another
 runtime is a later decision.
 
+### 1.6 The connection check and the sign-in walk-through (2026-10-19)
+
+The person chose "Ask a model" on the Project view and got a command-line hand-off waiting for a
+file nobody writes; a chat that is not signed in only said so in its transcript, after the fact.
+So, before the chat starts (any "ask in chat" item, or the first message typed — `App::
+chat_connected`), the cockpit checks:
+
+- **Installed**: `claude` resolved as in §1.1 (a `claude not found` from the start is the
+  problem at once), then `claude --version` under the chat's environment, no stdin, killed after
+  5 s (`runtime::version`). Not run again until a problem is cleared.
+- **Signed in** cannot be known without starting it (the "signed in with …" line names what the
+  environment implies, not whether it works). So the chat starts as before and its stream is
+  watched: an `assistant` message with `error: authentication_failed`, or a failed `result` whose
+  words say "not logged in", "/login", "authentication" or "invalid api key", is **not signed in**,
+  with Claude Code's own words as what was seen (said once in the transcript).
+- **Stopped**: the process ending by itself (§1.4), or an `init` the cockpit refuses (§1.2), with
+  the last error or stderr line as what was seen. Never for a chat the person ended.
+
+Any of these sets the chat's problem and opens one dialog (`Purpose::Connection`, buttons
+`[ Cancel  Esc ] [ Check again  y ]`; not under the chat-dialog rules, since Check again runs no
+act — keys typed before it arms are still dropped), titled in plain words:
+
+```
+Claude Code is not signed in
+The chat (and every "ask in chat" item) runs Claude Code, and it says it is not signed in:
+1. Open a new Terminal window.
+2. Type claude and press Return.
+3. Follow the sign-in it shows.
+4. Come back here and choose Check again.
+What the cockpit saw: Claude Code said: Not logged in · Please run /login
+```
+
+"Claude Code is not installed" leads with "… the cockpit could not run it. Install Claude Code
+first, then:"; "Claude Code stopped" with "… stopped (what it said is below). When it is the
+sign-in:". A dialog or prompt already open is not replaced: the notice says it instead.
+
+**Check again** ends a stopped chat, resolves the binaries again (a `claude` installed since),
+re-runs `claude --version`, and — after a failed sign-in or a stop — sends the person's last
+message again in a new chat, which shows the sign-in; a check that fails reopens the dialog.
+**While the problem stands**, every chat item (Migrate — ask in chat, Ask in chat…, the Project
+view's ask-in-chat items) is greyed with "Claude Code is not signed in — choose Check the chat's
+connection to see how to fix it", the menu offers **Check the chat's connection…**, sending is
+refused with the dialog, and a Next step that would recommend a chat item says instead "<its
+reason> — the chat does that, and it is unavailable: <why>" with Check the chat's connection as
+its item (`App::unless_chat_down`; `--no-chat` keeps the old words: the person turned it off).
+
 ## 2. What the chat may do
 
 Every tool call reaches the cockpit as `can_use_tool` before it runs; the cockpit matches
@@ -253,7 +301,8 @@ Every tool call reaches the cockpit as `can_use_tool` before it runs; the cockpi
 
 | tool | answer |
 |---|---|
-| `harness_status`, `harness_unit`, `harness_request` (reads) | allowed at once |
+| `harness_status`, `harness_unit`, `harness_request`, `harness_map_questions` (reads) | allowed at once |
+| `harness_map_answer` | allowed at once when its `model` argument is the model the chat's latest `init` named, else denied ("the advice is recorded under the chat's model: pass model = <m>"); §3.6 |
 | `harness_migrate`, `harness_steer`, `harness_retry`, `harness_answer` | the cockpit's own act: §3 |
 | anything else | denied: "not available in the cockpit" |
 
@@ -443,6 +492,39 @@ chat-labelled live record it runs with the label.
 - Messages typed while a turn runs are sent at once; the runtime folds them into the turn
   (verified). If a Stop cancels one before the model read it (the `interrupt` response's
   `cancelled`), its cell says "not delivered".
+
+### 3.6 The project map's question, answered in chat (2026-10-19)
+
+Model work in the cockpit goes through the chat; the command-line hand-off (`harness project ask
+--provider external`) stays for people who use the command line. On the Project view (the chat's
+pane is there too, its harness-mcp started with no `--tool`, §1.1), the model items, under the
+model separator, are:
+
+- **Ask for advice — ask in chat** (once a map holds a held choice): types "Which file should
+  <id> keep for choice d1, and why?" (the selected program's sets: "for choices d1 and d2"),
+  else "Which file should each held choice keep, and why?";
+- **Ask for a proposal — ask in chat** (while the configuration is a guess or only proposed, or
+  nothing is held): types "Propose the build configuration for this project from its Makefiles";
+- **Ask in chat…**: focuses the chat.
+
+Exactly as **Migrate — ask in chat**: the connection check first (§1.6), never over a draft
+(greyed "the chat has a draft — send or clear it first"), the chat focused, nothing sent until
+the person presses Enter; the notice says "the question is typed into the chat — press Enter to
+send it; the chat reads the map through the harness and records its answer as advice". No act
+dialog opens: nothing runs until the chat answers, and what it records is advice.
+
+The chat answers through two harness-mcp tools (docs/MCP-DESIGN.md §R7): `harness_map_questions`
+returns what `project ask` would send a model (its system and user text, fenced, paged), and
+`harness_map_answer {model, text, batch?}` records the reply through `project ask`'s own
+validators — refused whole, with the validator's sentence, or merged into
+`migration/map/project-map.reply.json` (the proposal: `migration/map/config.proposed.toml`)
+labelled as the chat's model, provider `chat`. The cockpit lets the answer through without a
+dialog (it is advice: nothing is built, the person still picks each choice in Accept and states
+the build themselves), but only under the chat's own model name; its successful result
+(`Event::MapAnswered`) reads the reply again, so the Project view and Accept's picker show "The
+model's advice (<model>): keep d1.2, reason …" as for any reply file. The brief (§6) tells the
+chat to read the request whole, answer only through `harness_map_answer`, and then say in a line
+what it advised and that the choice is the person's.
 
 ## 4. The requester label (MCP-DESIGN §7)
 

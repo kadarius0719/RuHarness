@@ -78,6 +78,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-10-09 — **The testing guide rewritten for a non-technical reader** — one shape for every part, every step says what you should see; `devtools/guide/gates.py`.
 - 2026-10-09 — **The README and the tutorial rewritten for a non-technical reader** — which document owns what (the README's Quick start, since moved); the same words everywhere.
 - 2026-10-15 — **The documentation reshaped for a person in a hurry** — FIRST-HOUR.md, seven topic pages and a four-door README; the `harness answer` idea.
+- 2026-10-19 — **Model work in the cockpit goes through the chat, with a sign-in walk-through** — the Project view's Ask items type their question into the chat; harness-mcp's two map tools; the connection check and its dialog.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -3434,3 +3435,49 @@ pause as "failed"; a pause now says "waiting for your answer: <file>" with the w
 attention colour. Next, agreed with the person: model work in the cockpit goes through the chat on
 their Claude subscription, with a sign-in walk-through when Claude Code is not installed or not
 signed in, so the cockpit never sends a person to a file path when what they needed was a sign-in.
+
+## 2026-10-19 — Model work in the cockpit goes through the chat, with a sign-in walk-through
+
+The person chose "Ask a model" on the Project view and got the command-line hand-off: a command
+that stops and waits for an answer file nobody writes. They asked whether a model that is not
+connecting should not walk the user through signing in. Decided and built (one pass):
+
+- **Model work in the cockpit goes through the chat.** The Project view's "Ask a model for
+  advice" and "Ask for a proposal" became "Ask for advice — ask in chat" and "Ask for a proposal
+  — ask in chat" (with "Ask in chat…"), under the model separator: like "Migrate — ask in chat",
+  each types its question into the chat ("Which file should t-benchmark keep for choice d1, and
+  why?", "Propose the build configuration for this project from its Makefiles") and the person
+  sends it. No act dialog: nothing runs until the chat answers, and its answer is advice. The
+  chat now has its pane on the Project view too; its harness-mcp is started there with no tool
+  (the "project form": the map tools answer, the ledger reads refuse "no tool is open").
+  `harness project ask --provider external` stays as it was for the command line.
+- **Two harness-mcp tools** (cockpit mode; MCP-DESIGN §R7): `harness_map_questions` returns what
+  `project ask` would send (system and user text, fenced, paged; the held choices, or the build
+  files while the configuration is a guess) and `harness_map_answer {model, text, batch?}`
+  records the reply through `project ask`'s own validators and writers, under the project lock:
+  refused whole with the validator's sentence, else merged into project-map.reply.json (or the
+  proposal into config.proposed.toml) as the chat model's, provider `chat`. The cockpit lets the
+  answer through without asking (advice only; the person still picks in Accept), but only under
+  the chat's own model name, and reads the reply again when it lands. Rejected: making the answer
+  an act the person confirms (a second confirmation for advice the picker already shows as the
+  model's); writing the reply in the cockpit itself (two implementations of the validators).
+- **The connection check** (CHAT-PANE-DESIGN §1.6): before the chat starts, `claude` found and
+  `claude --version` answering; the sign-in cannot be known without starting, so the stream is
+  watched for `authentication_failed` / "Not logged in · Please run /login", and a chat that
+  stops by itself (or is refused at `init`) counts too. One dialog, "Claude Code is not
+  installed" / "Claude Code is not signed in" / "Claude Code stopped", the four steps (open a new
+  Terminal window, type claude and press Return, follow the sign-in, come back and choose Check
+  again), what was seen, `[ Cancel  Esc ] [ Check again  y ]`. Check again looks for `claude`
+  again and resends the last message in a new chat. While a problem stands, the chat's items are
+  greyed with it, "Check the chat's connection…" is offered, and the Next step never recommends a
+  chat item.
+- **Dependencies:** harness-mcp now depends on harness-llm (`projectask`) and harness-oracle (the
+  map's flag path check, the build-file rule) — workspace crates, no crates.io addition. It
+  brings ureq/rustls into harness-mcp's build tree (their code is never called from it); the
+  alternative, copying the validators, would let the chat's answers and the CLI's drift apart.
+  Revisit if harness-mcp's binary size or build time matters: feature-gate harness-llm's live
+  adapters.
+- The recorded chat fixtures' `init` lines gained the two tool names (the cockpit requires the
+  exact set once connected); the live chat tests should be run once by the person
+  (`RUHARNESS_LIVE_CHAT=1 …`, briefing §18) to confirm the real Claude Code lists them.
+

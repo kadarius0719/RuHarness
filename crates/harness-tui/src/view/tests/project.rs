@@ -311,21 +311,35 @@ fn guessed_map(root: &Path) {
     );
 }
 
+/// The chat on, its `claude` found and answering (`installed`): the chat's
+/// items can be chosen.
+pub(super) fn with_chat(app: &mut App) {
+    app.set_chat(true);
+    app.chat.bins = Ok(crate::chat::runtime::Binaries {
+        claude: "/bin/sh".into(),
+        mcp: "/bin/sh".into(),
+    });
+    app.chat.problem = None;
+    app.chat.installed = true;
+}
+
 /// While the configuration is a guess: the Next step names Write the build
-/// configuration (or Ask for a proposal); Write leads every menu, with its
-/// reason; Ask still sits under the model separator; Accept waits, greyed
-/// with why (the newcomer's ten minutes, finding 1, and the one menu rule
-/// for model items, finding 6).
+/// configuration (or Ask for a proposal — ask in chat, while the chat can
+/// be used); Write leads every menu, with its reason; the ask-in-chat items
+/// sit under the model separator; Accept waits, greyed with why (the
+/// newcomer's ten minutes, finding 1, and the one menu rule for model
+/// items, finding 6).
 #[test]
 fn a_guessed_configuration_asks_for_the_build() {
     let (_tmp, root) = project("guess");
     guessed_map(&root);
     let mut app = cockpit(&root);
     let screen = text(&render(&mut app, 220, 40));
+    // The chat is off here: its item is not named.
     assert!(
         screen.contains(
             "Next step: The configuration is a guess — press Enter and choose Write the build \
-             configuration (or Ask for a proposal), then Map the project again"
+             configuration, then Map the project again"
         ),
         "{screen}"
     );
@@ -333,6 +347,15 @@ fn a_guessed_configuration_asks_for_the_build() {
         screen.contains(
             "Configuration: a guess — no migration/map/config.toml states the build yet (the \
              map compiled with no flags of yours)"
+        ),
+        "{screen}"
+    );
+    with_chat(&mut app);
+    let screen = text(&render(&mut app, 220, 40));
+    assert!(
+        screen.contains(
+            "Next step: The configuration is a guess — press Enter and choose Write the build \
+             configuration (or Ask for a proposal — ask in chat), then Map the project again"
         ),
         "{screen}"
     );
@@ -345,7 +368,8 @@ fn a_guessed_configuration_asks_for_the_build() {
             "Accept this program".into(),
             "Accept it under a run name of your own…".into(),
             "Map the project again".into(),
-            "Ask for a proposal".into(),
+            "Ask for a proposal — ask in chat".into(),
+            "Ask in chat…".into(),
         ]
     );
     assert!(write_item(&app).starts_with("Write the build configuration (in "));
@@ -359,7 +383,7 @@ fn a_guessed_configuration_asks_for_the_build() {
         Some(crate::project::ACCEPT_NEEDS_STATED)
     );
     // The recommended item first, "· uses a model" only when it does; the
-    // separator heads the other model items.
+    // separator heads the model items.
     let screen = text(&render(&mut app, 120, 34));
     let at = |words: &str| {
         screen
@@ -376,20 +400,41 @@ fn a_guessed_configuration_asks_for_the_build() {
     let lines: Vec<&str> = screen.lines().collect();
     let ask = lines
         .iter()
-        .rposition(|l| l.contains("  Ask for a proposal"))
+        .rposition(|l| l.contains("  Ask for a proposal — ask in chat"))
         .unwrap();
     assert!(at("── Uses a model — can take minutes ──") < ask);
-    choose(&mut app, "Ask for a proposal");
-    assert!(dialog_argv(&app).ends_with(&["--build".to_string()]));
-    let Mode::Dialog(c) = &app.mode else { panic!() };
-    assert_eq!(c.title, "Ask a model for a proposal?");
+    // Chosen: the question typed into the chat, nothing run; the person
+    // reads it and sends it.
+    let cmd = choose(&mut app, "Ask for a proposal — ask in chat");
+    assert!(matches!(cmd, Command::None), "{cmd:?}");
+    assert!(matches!(app.mode, Mode::Normal), "{:?}", app.mode);
+    assert_eq!(app.focus, crate::app::Focus::Chat);
+    assert_eq!(
+        app.chat.input.text,
+        "Propose the build configuration for this project from its Makefiles"
+    );
+    assert!(!app.running);
+    // Over a draft, nothing is typed: the item is greyed.
+    app.focus = crate::app::Focus::Files;
+    app.select(Selection::Program("t-lzg".into()));
+    code(&mut app, KeyCode::Enter);
+    let ask = menu(&app)
+        .items
+        .iter()
+        .find(|i| i.label == "Ask for a proposal — ask in chat")
+        .unwrap();
+    assert_eq!(
+        ask.greyed.as_deref(),
+        Some("the chat has a draft — send or clear it first")
+    );
 }
 
-/// Ask a model with the hand-off provider stops for an answer: exit 1 and
-/// `awaiting response: <file>`. That is the harness pausing on purpose,
-/// never a failure: the status line (in the attention role, its long path
-/// shortened, its end in sight), the details and the Next step all say
-/// whose answer, where, and how to go on.
+/// A hand-off pause of `harness project ask` (the command line's, or a run
+/// the cockpit started before model work went through the chat) stops for
+/// an answer: exit 1 and `awaiting response: <file>`. That is the harness
+/// pausing on purpose, never a failure: the status line (in the attention
+/// role, its long path shortened, its end in sight), the details and the
+/// Next step all say whose answer, where, and how to go on.
 #[test]
 fn a_hand_off_pause_waits_for_the_answer_and_never_fails() {
     let (_tmp, root) = project("hand-off");
@@ -397,8 +442,7 @@ fn a_hand_off_pause_waits_for_the_answer_and_never_fails() {
     let mut app = cockpit(&root);
     app.palette = crate::theme::Palette::of(crate::theme::Theme::Dark);
     app.select(Selection::Program("t-lzg".into()));
-    code(&mut app, KeyCode::Enter);
-    choose(&mut app, "Ask for a proposal");
+    app.ask_project(crate::project::Act::Ask, "", Vec::new(), None);
     arm(&mut app);
     let Command::Spawn(p) = key(&mut app, 'y') else {
         panic!("y did not run it: {:?}", app.mode)
@@ -667,7 +711,7 @@ fn the_project_view_after_a_map_with_a_held_choice() {
             "Accept it under a run name of your own…".into(),
             write_item(&app),
             "Map the project again".into(),
-            "Ask a model for advice".into(),
+            "Ask for advice — ask in chat".into(),
         ]
     );
     assert_eq!(menu(&app).reason.as_deref(), Some("t-unlzg holds a choice"));
@@ -818,7 +862,7 @@ fn the_project_view_after_an_accept() {
             "Open tool t-lzg".to_string(),
             write_item(&app),
             "Map the project again".into(),
-            "Ask a model for advice".into()
+            "Ask for advice — ask in chat".into()
         ]
     );
     assert_eq!(

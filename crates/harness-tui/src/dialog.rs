@@ -45,6 +45,8 @@ pub enum Choice {
     Stop,
     /// End the chat's conversation and start a new one.
     NewChat,
+    /// Check the chat's connection again (`y`).
+    CheckAgain,
 }
 
 /// One button.
@@ -103,6 +105,9 @@ pub enum Kind {
     /// started (docs/FEATURES-DESIGN.md §7.2 step 5): Keep for later, Edit
     /// the new file, Discard my draft.
     FeaturesChanged,
+    /// The chat's connection walk-through (docs/CHAT-PANE-DESIGN.md §1.6):
+    /// Cancel, Check again.
+    Connection,
 }
 
 impl Kind {
@@ -148,6 +153,10 @@ impl Kind {
                 button("Keep for later", "Esc", &[], Choice::Safe),
                 button("Edit the new file", "y", &['y', 'Y'], Choice::Run),
                 button("Discard my draft", "D", &['D'], Choice::Discard),
+            ],
+            Kind::Connection => vec![
+                button("Cancel", "Esc", &[], Choice::Safe),
+                button("Check again", "y", &['y', 'Y'], Choice::CheckAgain),
             ],
         }
     }

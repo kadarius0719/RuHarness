@@ -391,12 +391,14 @@ impl App {
                 .asks
                 .end_permits(gen, "a message the cockpit did not send reached the chat"),
             ChatEvent::Ended { gen } => self.chat_gen_ended(gen, now),
+            ChatEvent::Unavailable { .. } => self.chat_trouble_seen(),
+            ChatEvent::MapAnswered => self.chat_map_answered(),
         }
     }
 
     /// A generation ended: its requests withdrawn, its permissions and
     /// hand-offs gone, its unsent outcomes shown here only (§1.2, §3.3).
-    fn chat_gen_ended(&mut self, gen: u64, now: Instant) {
+    pub(super) fn chat_gen_ended(&mut self, gen: u64, now: Instant) {
         self.asks.end_permits(gen, "the chat ended");
         self.asks.table.retain(|_, h| h.gen != gen);
         self.withdraw(|t| t.gen == gen, now);
@@ -1657,6 +1659,11 @@ impl App {
     /// Send the draft, with the context block first (and any outcome this
     /// chat was not told).
     pub(crate) fn chat_send(&mut self, now: Instant) {
+        // Before the chat starts — and while a problem stands — the
+        // connection is checked (§1.6): the draft stays.
+        if (!self.chat.alive() || self.chat.problem.is_some()) && !self.chat_connected() {
+            return;
+        }
         if let Err(why) = &self.chat.bins {
             let why = why.clone();
             self.say(why);
@@ -1741,8 +1748,14 @@ impl App {
             Selection::Feature(_) => "a feature".into(),
             Selection::Speed => "the speed of the C against the Rust".into(),
             Selection::ProjectHome => "the row back to the project view".into(),
+            // Ids only, shape-checked: the map lives in the download.
+            Selection::Program(id) | Selection::Tool(id)
+                if harness_core::config::is_tool_id(id) =>
+            {
+                format!("the program {id} on the project view (the project map)")
+            }
             Selection::MapProject | Selection::Program(_) | Selection::Tool(_) => {
-                "the project view".into()
+                "the project view (the project map)".into()
             }
             Selection::Unit(id) => unit_word(id),
             Selection::Crate(id) => format!("the crate of {}", unit_word(id)),

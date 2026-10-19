@@ -52,7 +52,114 @@ pub const COCKPIT_TOOLS: &[&str] = &[
     "mcp__harness__harness_steer",
     "mcp__harness__harness_retry",
     "mcp__harness__harness_answer",
+    "mcp__harness__harness_map_questions",
+    "mcp__harness__harness_map_answer",
 ];
+
+/// Why the chat cannot be used now (docs/CHAT-PANE-DESIGN.md §1.6): the
+/// connection dialog's case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Trouble {
+    /// `claude` is not found, or `claude --version` fails.
+    NotInstalled,
+    /// Claude Code started and said it is not signed in.
+    NotSignedIn,
+    /// Claude Code ended by itself, or the cockpit refused what it started
+    /// with.
+    Stopped,
+}
+
+/// The connection's problem and what the cockpit saw of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Problem {
+    /// Its case.
+    pub trouble: Trouble,
+    /// What was seen: the runtime's or the check's own words, one line.
+    pub seen: String,
+}
+
+impl Problem {
+    fn new(trouble: Trouble, seen: &str) -> Problem {
+        let line = harness_core::text::safe_line(seen.trim());
+        Problem {
+            trouble,
+            seen: line.chars().take(300).collect(),
+        }
+    }
+
+    /// The dialog's title, in plain words.
+    pub fn title(&self) -> &'static str {
+        match self.trouble {
+            Trouble::NotInstalled => "Claude Code is not installed",
+            Trouble::NotSignedIn => "Claude Code is not signed in",
+            Trouble::Stopped => "Claude Code stopped",
+        }
+    }
+
+    /// Why the chat's items are greyed, and the way to the walk-through.
+    pub fn reason(&self) -> String {
+        format!(
+            "{} — choose Check the chat's connection to see how to fix it",
+            self.title()
+        )
+    }
+
+    /// The dialog's body: what the chat needs, the steps, what was seen.
+    pub fn body(&self) -> Vec<String> {
+        let lead = match self.trouble {
+            Trouble::NotInstalled => {
+                "The chat (and every \"ask in chat\" item) runs Claude Code, and the cockpit \
+                 could not run it. Install Claude Code first, then:"
+            }
+            Trouble::NotSignedIn => {
+                "The chat (and every \"ask in chat\" item) runs Claude Code, and it says it is \
+                 not signed in:"
+            }
+            Trouble::Stopped => {
+                "The chat's Claude Code stopped (what it said is below). When it is the \
+                 sign-in:"
+            }
+        };
+        vec![
+            lead.to_string(),
+            "1. Open a new Terminal window.".into(),
+            "2. Type claude and press Return.".into(),
+            "3. Follow the sign-in it shows.".into(),
+            "4. Come back here and choose Check again.".into(),
+            format!("What the cockpit saw: {}", self.seen),
+        ]
+    }
+}
+
+/// How the binaries were found, to look again on Check again.
+#[derive(Debug, Clone, Default)]
+pub struct Resolver {
+    /// `--chat-runtime`.
+    pub runtime: Option<PathBuf>,
+    /// `--harness-mcp`.
+    pub mcp: Option<PathBuf>,
+    /// The cockpit's own binary.
+    pub exe: Option<PathBuf>,
+    /// `PATH`.
+    pub path: Option<OsString>,
+}
+
+impl Resolver {
+    /// The binaries, found again.
+    pub fn resolve(&self) -> Result<Binaries, String> {
+        runtime::resolve(
+            self.runtime.as_deref(),
+            self.mcp.as_deref(),
+            self.exe.as_deref(),
+            self.path.as_deref(),
+        )
+    }
+}
+
+/// `bins`' error says `claude` itself is missing (not harness-mcp).
+pub fn claude_missing(why: &str) -> bool {
+    why.starts_with("claude not found") || why.starts_with("--chat-runtime")
+}
 /// The acts the chat may ask for (short names).
 pub const ACT_TOOLS: &[&str] = &[
     "harness_migrate",
@@ -107,6 +214,15 @@ pub enum Event {
         /// The generation.
         gen: u64,
     },
+    /// Claude Code is not signed in, or stopped by itself: the connection
+    /// dialog (docs/CHAT-PANE-DESIGN.md §1.6).
+    Unavailable {
+        /// What was seen.
+        problem: Problem,
+    },
+    /// `harness_map_answer` recorded the chat's answer: the Project view
+    /// reads the map's reply again.
+    MapAnswered,
 }
 
 /// Where the chat is, for the pane's title.
@@ -210,6 +326,18 @@ pub struct Chat {
     unechoed: BTreeSet<String>,
     /// The new chat's line was said (New chat, before its first message).
     announced: bool,
+    /// Why the chat cannot be used now (the connection dialog's case).
+    pub problem: Option<Problem>,
+    /// `claude --version` answered since the last problem.
+    pub installed: bool,
+    /// How the binaries were found (Check again looks again).
+    pub resolver: Option<Resolver>,
+    /// The person's last message, sent again by Check again after a
+    /// failed sign-in.
+    pub last_sent: Option<String>,
+    /// `harness_map_answer` calls allowed, by call id: their result tells
+    /// the app to read the map's reply again.
+    map_answers: BTreeSet<String>,
 }
 
 /// The transcript's line between two chats.
@@ -275,6 +403,11 @@ impl Chat {
     ) -> Chat {
         let env = runtime::environment(vars);
         let sign_in = runtime::sign_in_words(&env);
+        // No `claude` at all: the walk-through from the start.
+        let problem = match &bins {
+            Err(why) if claude_missing(why) => Some(Problem::new(Trouble::NotInstalled, why)),
+            _ => None,
+        };
         Chat {
             bins,
             env,
@@ -322,7 +455,58 @@ impl Chat {
             marked: false,
             unechoed: BTreeSet::new(),
             announced: false,
+            problem,
+            installed: false,
+            resolver: None,
+            last_sent: None,
+            map_answers: BTreeSet::new(),
         }
+    }
+
+    /// The connection check before the chat starts (docs/CHAT-PANE-DESIGN.md
+    /// §1.6): `claude` found and `claude --version` answering. A problem
+    /// already seen stands until Check again ([`Chat::check_again`]). `None`
+    /// when the chat may start; a harness-mcp that is missing is not Claude
+    /// Code's problem — [`Chat::available`] says it.
+    pub fn check(&mut self) -> Option<Problem> {
+        if self.problem.is_some() || self.installed {
+            return self.problem.clone();
+        }
+        let claude = match &self.bins {
+            Ok(b) => b.claude.clone(),
+            Err(why) if claude_missing(why) => {
+                self.problem = Some(Problem::new(Trouble::NotInstalled, why));
+                return self.problem.clone();
+            }
+            Err(_) => return None,
+        };
+        match runtime::version(&claude, &self.env, runtime::VERSION_WAIT) {
+            Ok(_) => self.installed = true,
+            Err(seen) => self.problem = Some(Problem::new(Trouble::NotInstalled, &seen)),
+        }
+        self.problem.clone()
+    }
+
+    /// Check again: the binaries found again, the problem forgotten, the
+    /// check run anew. The sign-in shows only when Claude Code starts.
+    pub fn check_again(&mut self) -> Option<Problem> {
+        if let Some(r) = &self.resolver {
+            self.bins = r.resolve();
+        }
+        self.problem = None;
+        self.installed = false;
+        self.check()
+    }
+
+    /// Note a problem seen in the stream (the first of a generation counts):
+    /// the app's [`Event::Unavailable`].
+    fn trouble(&mut self, trouble: Trouble, seen: &str, events: &mut Vec<Event>) {
+        if self.problem.is_some() {
+            return;
+        }
+        let p = Problem::new(trouble, seen);
+        self.problem = Some(p.clone());
+        events.push(Event::Unavailable { problem: p });
     }
 
     /// The chat can be used (its binaries were found).
@@ -464,6 +648,7 @@ impl Chat {
         }
         self.sent.insert(uuid.clone());
         self.unechoed.insert(uuid.clone());
+        self.last_sent = Some(text.to_string());
         self.transcript.you(&uuid, text);
         self.transcript.follow();
         if !self.turn {
@@ -617,7 +802,7 @@ impl Chat {
             });
             self.say(
                 Tone::Warn,
-                match why {
+                match &why {
                     Some(line) => format!("the chat ended: {line}"),
                     None => "the chat ended".to_string(),
                 },
@@ -626,6 +811,14 @@ impl Chat {
                 events.push(e);
             }
             self.ended_by_itself = true;
+            // Ended by itself: the walk-through, with what was seen (a
+            // sign-in failure said before it stands).
+            self.trouble(
+                Trouble::Stopped,
+                why.as_deref()
+                    .unwrap_or("Claude Code ended without saying why"),
+                &mut events,
+            );
             return events;
         }
         // The watchdogs.
@@ -659,12 +852,13 @@ impl Chat {
     /// End the chat for a reason found in its stream (a failed `init`
     /// check): said, and the process ended quickly.
     fn fail(&mut self, why: String, now: Instant, events: &mut Vec<Event>) {
-        self.say(Tone::Bad, why);
+        self.say(Tone::Bad, why.clone());
         if let Some(e) = self.end(now, Duration::ZERO, Duration::from_millis(300)) {
             events.push(e);
         }
         // The title says "ended", not "not started" (fix check N8).
         self.ended_by_itself = true;
+        self.trouble(Trouble::Stopped, &why, events);
     }
 
     fn check_init(
@@ -776,10 +970,13 @@ impl Chat {
                 error,
             } => {
                 let synthetic = model.as_deref() == Some("<synthetic>");
+                // The runtime's own words, for a sign-in failure's "seen".
+                let mut said: Option<String> = None;
                 for b in blocks {
                     match b {
                         Block::Text(text) if synthetic => {
                             self.say(Tone::Cockpit, format!("Claude Code says: {text}"));
+                            said.get_or_insert(text);
                         }
                         Block::Text(text) => {
                             self.unseen = true;
@@ -799,6 +996,13 @@ impl Chat {
                 if let Some(e) = error {
                     let words = error_words(&e, self.model_flag.as_deref());
                     self.say(Tone::Bad, words);
+                    if e == "authentication_failed" {
+                        let seen = match &said {
+                            Some(text) => format!("Claude Code said: {text}"),
+                            None => format!("Claude Code said {e}"),
+                        };
+                        self.trouble(Trouble::NotSignedIn, &seen, events);
+                    }
                 }
             }
             In::ToolResults(results) => {
@@ -806,6 +1010,9 @@ impl Chat {
                     let Some(call) = self.reads.remove(&r.tool_use_id) else {
                         continue;
                     };
+                    if self.map_answers.remove(&r.tool_use_id) && !r.is_error {
+                        events.push(Event::MapAnswered);
+                    }
                     let (tone, word) = if r.is_error {
                         (Tone::Bad, "failed")
                     } else {
@@ -977,8 +1184,24 @@ impl Chat {
                         .or(r.result.clone())
                         .unwrap_or_else(|| r.subtype.clone());
                     let words = result_words(&why, self.model_flag.as_deref());
+                    // Said once: the turn's own sign-in failure was said
+                    // with its message.
+                    let said = signed_out(&why)
+                        && self
+                            .problem
+                            .as_ref()
+                            .is_some_and(|p| p.trouble == Trouble::NotSignedIn);
+                    if signed_out(&why) {
+                        self.trouble(
+                            Trouble::NotSignedIn,
+                            &format!("Claude Code said: {why}"),
+                            events,
+                        );
+                    }
                     self.last_error = Some(words.clone());
-                    self.say(Tone::Bad, words);
+                    if !said {
+                        self.say(Tone::Bad, words);
+                    }
                 }
                 self.say(Tone::Dim, format!("— {}", words.join(" · ")));
             }
@@ -1058,6 +1281,38 @@ impl Chat {
                 short_attempt(&arg(&input, "attempt")),
                 input.get("page").and_then(Value::as_u64).unwrap_or(1)
             )),
+            "harness_map_questions" => Some(format!(
+                "· read the project map's open question (page {})",
+                input.get("page").and_then(Value::as_u64).unwrap_or(1)
+            )),
+            // The chat's answer to the map's question: advice, checked by
+            // `project ask`'s own validators in harness-mcp and labelled as
+            // the chat's model — allowed only under that model's name
+            // (docs/CHAT-PANE-DESIGN.md §3.6). Nothing is built; the
+            // person's Accept still picks.
+            "harness_map_answer" => {
+                let named = input.get("model").and_then(Value::as_str);
+                match (&self.model, named) {
+                    (Some(m), Some(n)) if m == n => {
+                        if let Some(call) = &tool_use_id {
+                            self.map_answers.insert(call.clone());
+                        }
+                        Some("· record the chat's answer to the project map's question".to_string())
+                    }
+                    _ => {
+                        let why = format!(
+                            "the advice is recorded under the chat's model: pass model = {}",
+                            self.model.as_deref().unwrap_or("the model the chat runs")
+                        );
+                        deny_now(self, &why);
+                        self.say(
+                            Tone::Dim,
+                            format!("· record the chat's answer: refused — {why}"),
+                        );
+                        return;
+                    }
+                }
+            }
             _ => None,
         };
         if let Some(words) = words {
@@ -1166,13 +1421,20 @@ fn error_words(error: &str, model_flag: Option<&str>) -> String {
     }
 }
 
+/// A failed turn's error says Claude Code is not signed in ("Not logged in
+/// · Please run /login", "Invalid API key", an authentication error).
+fn signed_out(why: &str) -> bool {
+    let lower = why.to_lowercase();
+    lower.contains("not logged in")
+        || lower.contains("/login")
+        || lower.contains("authentication")
+        || lower.contains("invalid api key")
+}
+
 /// A failed turn's error in words: the known ones translated.
 fn result_words(why: &str, model_flag: Option<&str>) -> String {
     let lower = why.to_lowercase();
-    if lower.contains("not logged in")
-        || lower.contains("/login")
-        || lower.contains("authentication")
-    {
+    if signed_out(why) {
         return error_words("authentication_failed", model_flag);
     }
     if lower.contains("model") && (lower.contains("not found") || lower.contains("invalid")) {

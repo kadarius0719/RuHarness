@@ -360,9 +360,11 @@ pub fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect, column: bool, str
             // asks; the harness runs; the person confirms every act. The
             // claude binary's path is not shown: noise to a newcomer.
             Ok(_) => format!(
-                "Ask for model work here — for example \"migrate this\". The chat only reads \
-                 the project and asks; the harness runs what you confirm, and you confirm \
-                 every act. It will use {}.",
+                "Ask for model work here — for example \"migrate this\", or on the project \
+                 view \"which file should t-x keep?\". The chat only reads the project and \
+                 asks; the harness runs what you confirm, and you confirm every act (its \
+                 answers to the project map are kept as advice). It will use {}; if Claude \
+                 Code is not installed or not signed in, the cockpit shows how to fix it.",
                 app.chat.sign_in
             ),
             Err(why) => format!("The chat is unavailable: {why}"),
@@ -788,15 +790,22 @@ mod tests {
         });
         a.chat.sign_in = "your Claude subscription".into();
         a.focus = crate::app::Focus::Chat;
-        let screen = text(&render(&mut a, 200, 30));
+        // Wide enough for the paragraph on one line.
+        let screen = text(&render(&mut a, 700, 30));
+        let flat = screen.clone();
+        for words in [
+            "Ask for model work here — for example \"migrate this\", or on the project view \
+             \"which file should t-x keep?\".",
+            "The chat only reads the project and asks; the harness runs what you confirm, and \
+             you confirm every act (its answers to the project map are kept as advice).",
+        ] {
+            assert!(flat.contains(words), "{words}\n{screen}");
+        }
+        assert!(screen.contains("use your Claude subscription;"), "{screen}");
         assert!(
-            screen.contains(
-                "Ask for model work here — for example \"migrate this\". The chat only reads the \
-                 project and asks; the harness runs what you confirm, and you confirm every act."
-            ),
+            screen.contains("not signed in, the cockpit shows how to fix it."),
             "{screen}"
         );
-        assert!(screen.contains("use your Claude subscription."), "{screen}");
         assert!(!screen.contains("/somewhere/bin"), "{screen}");
         assert!(!screen.contains("claude at"), "{screen}");
     }
