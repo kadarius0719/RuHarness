@@ -127,14 +127,31 @@ commands, the project's Next preferring a tool with work waiting, plainer words,
    the README's "move your own C program" door alone, past one unit, ideally to several promoted
    units, with every stumble written down. Step (g) of the map (record the first accepted tool's
    features before its first unit moves) happens inside it. Fix what the run shows first.
-2. **`harness answer` and a live provider on the command line.** `harness answer <unit> <file>`
+2. **Past the leaf cap: pieces that call other pieces.** Today only a piece that calls nothing
+   else in the program moves (the judge tests each piece alone), so on liblzg two of four pieces
+   "stay C" and a large program would stop at its leaves. The design is the one
+   docs/PROJECT-MAP-DESIGN.md §8 "The fuller C–Rust boundary" names (written 2026-10-01, not
+   designed yet): migrate in dependency order, and let a piece's test program and its Rust link
+   the Rust of the pieces already moved (one combined Rust library per program at scale; Rust
+   calling C that has not moved yet; shared code in several programs moved once and checked in
+   every program that uses it). Design first, as the cockpit passes were; the person's words
+   (2026-10-20): the roadmap is moving a large application with several libraries, as many
+   files as possible.
+3. **The last stage: "the program works".** Build each program with its Rust in place, run its
+   own test suite and the person's features on that build, and say so on the journey line ("the
+   program works with 2 of 4 pieces in Rust"). The whole-program check, the features and the
+   speed workloads exist; what is missing is this stage as a step of the journey, in the cockpit
+   and on the command line, and the mixed build as a thing the person can run (success criterion
+   1 of the brief). Design with item 2; build after it.
+4. **`harness answer` and a live provider on the command line.** `harness answer <unit> <file>`
    wraps a plain file into the hand-off's envelope (the idea in DECISIONS 2026-10-15; decide its
    shape with the person first). A live provider: the `anthropic` and OpenAI-compatible adapters
    exist, but no cloud endpoint has been used (DECISIONS 2026-09-19) and there are no keys here;
    the person decides whether and how.
-3. **The scale run on lz4**: many units of one lz4 program moved, promoted and kept green, to see
-   what breaks at size (time, disk, the small open items below that are about speed).
-4. **Then the briefing's next milestone (M5, the extension proof)**, or what the scale run shows,
+5. **The scale run on lz4**: many units of one lz4 program moved, promoted and kept green, to see
+   what breaks at size (time, disk, the small open items below that are about speed) — after
+   item 2, or it stops at the leaves.
+6. **Then the briefing's next milestone (M5, the extension proof)**, or what the scale run shows,
    as the person decides.
 
 ## Small open items (rechecked against the code on 2026-10-18)
