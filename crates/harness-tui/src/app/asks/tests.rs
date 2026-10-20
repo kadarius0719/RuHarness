@@ -18,10 +18,46 @@ fn chat_app(rel: Option<&str>, tag: &str, tmp: &TmpDir) -> (App, PathBuf) {
         Some(rel) => app_of(rel, tag),
         None => app(tag),
     };
+    // zopfli's u-cache gets a test program written by hand, so Migrate is
+    // offered on it (a unit without one is asked for its test program
+    // first, §9.4).
+    if rel == Some("targets/zopfli") {
+        give_test_program(&mut a, "u-cache");
+    }
     a.chat_on = true;
     a.focus = Focus::Chat;
     let log = a.chat.test_live(&tmp.0, MODEL);
     (a, log)
+}
+
+/// Give `unit` a hand-written test program: its `[unit.oracle]` and a
+/// `driver.c` (no validation record: one written by hand, which `migrate`
+/// takes as it is).
+pub(crate) fn give_test_program(a: &mut App, unit: &str) {
+    let ledger = Ledger::new(&a.config.target);
+    let plan_path = ledger.plan_path();
+    let plan = std::fs::read_to_string(&plan_path).unwrap();
+    let at = plan.find(&format!("id = \"{unit}\"")).expect("the unit");
+    let end = plan[at..].find("[[unit]]").map_or(plan.len(), |e| at + e);
+    let rel = a.snapshot.ledger_rel();
+    let table = format!(
+        "[unit.oracle]\nkind = \"c-abi-differential\"\ndriver = \"{rel}/units/{unit}/driver.c\"\n\
+         rust_crate = \"{}_rs\"\n\n",
+        unit.replace('-', "_")
+    );
+    std::fs::write(
+        &plan_path,
+        format!("{}{table}{}", &plan[..end], &plan[end..]),
+    )
+    .unwrap();
+    let dir = ledger.unit_dir(unit);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("driver.c"), "int main(void) { return 0; }\n").unwrap();
+    assert!(a.reload(true));
+    assert_eq!(
+        a.snapshot.unit(unit).unwrap().driver,
+        crate::model::DriverState::Validated
+    );
 }
 
 /// The lines the cockpit wrote to the runtime so far (waits briefly for the
@@ -1268,6 +1304,7 @@ fn a_waiting_continue_is_never_dropped_or_run_unseen() {
             .as_deref()
             .unwrap()
             .clone(),
+        unit: None,
         label: "x".into(),
         collect: Collected::default(),
         exit: Some(0),
@@ -1841,5 +1878,182 @@ fn an_outcome_line_counts_a_check_that_did_not_run_apart() {
         checks_count_words(&c),
         ", 1 of 3 checks passed, 1 not run (whole-program: not configured for this target \
          (add [oracle.whole_program] args = [...] to harness.toml))"
+    );
+}
+
+/// Make the test program (docs/COCKPIT-WRAPPER-DESIGN.md §9.4): the chat's
+/// `harness_gen_driver` maps onto `gen-driver <unit> --requester=chat` with
+/// the chat's model; its dialog says what the chat writes and what the
+/// judge does; a unit with a test program is refused it, and Migrate is
+/// refused on one without; its outcome line says the test program is ready,
+/// or what failed.
+#[test]
+fn make_the_test_program_maps_onto_gen_driver() {
+    let tmp = TmpDir::new("asks-gen-driver");
+    let (mut a, log) = chat_app(Some("targets/zopfli"), "asks-gen-driver", &tmp);
+    let root = a.config.target.display().to_string();
+    ask(
+        &mut a,
+        "g1",
+        "harness_gen_driver",
+        json!({"unit": "u-hash"}),
+    );
+    let r = a.asks.shown().expect("a request line").clone();
+    assert_eq!(r.pending.act, Act::GenDriver);
+    assert_eq!(
+        r.words,
+        "Make u-hash's test program — a model call, answered here in chat"
+    );
+    assert_eq!(
+        strs(&r.pending.argv),
+        [
+            HARNESS,
+            "--json",
+            "gen-driver",
+            "u-hash",
+            &format!("--target={root}"),
+            "--provider=external",
+            &format!("--model={MODEL}"),
+            "--requester=chat"
+        ]
+    );
+    let (title, body) = a.dialog_words(&r.pending);
+    assert_eq!(title, "The chat asks: Make u-hash's test program?");
+    let body = body.join("\n");
+    assert!(
+        body.contains("The chat writes a small C program that calls ")
+            && body.contains(
+                " with chosen inputs and prints what comes back. The judge runs it against the \
+                 C to check it works, then keeps it as the unit's test program."
+            ),
+        "{body}"
+    );
+    assert!(
+        body.contains(
+            "It writes: the driver under migration/units/u-hash/ and the plan's entry for it."
+        ),
+        "{body}"
+    );
+    assert!(no_denial(&log, "g1"), "held");
+    // u-cache has its test program: refused it; u-hash has none: Migrate
+    // refused, saying so.
+    ask(
+        &mut a,
+        "g2",
+        "harness_gen_driver",
+        json!({"unit": "u-cache"}),
+    );
+    assert!(wait_denial(&log, "g2").contains("has its test program already"));
+    ask(&mut a, "g3", "harness_migrate", json!({"unit": "u-hash"}));
+    assert!(wait_denial(&log, "g3").contains(&format!("u-hash {NO_TEST_PROGRAM}")));
+
+    // The outcome, in words.
+    let tag = r.pending.chat.as_deref().unwrap().clone();
+    let owed = |exit: i32, outcome: &str, messages: Vec<String>| Owed {
+        tag: tag.clone(),
+        unit: Some("u-hash".into()),
+        label: r.pending.label.clone(),
+        collect: Collected {
+            outcome: Some(outcome.into()),
+            messages,
+            ..Collected::default()
+        },
+        exit: Some(exit),
+        signal: None,
+        response: None,
+    };
+    let (text, line, _) = outcome_message(&owed(0, "green", vec![]), None);
+    assert_eq!(line, "✓ u-hash's test program is ready — next, its Rust");
+    assert!(text.contains("gen-driver"), "{text}");
+    let (_, line, _) = outcome_message(
+        &owed(
+            2,
+            "red",
+            vec!["gen-driver: the test program did not pass: determinism".into()],
+        ),
+        None,
+    );
+    assert_eq!(
+        line,
+        "✗ u-hash's test program did not pass the judge's checks — it did not pass: \
+         determinism — ask the chat to make it again"
+    );
+}
+
+/// The chat's answer to a driver attempt's hand-off (`d-…`) resumes it in
+/// its own run shape: `gen-driver <unit> … --requester=chat --answer=-`,
+/// its response looked for under `driver-traces/chat/`.
+#[test]
+fn a_driver_attempts_hand_off_is_answered_with_gen_driver() {
+    let tmp = TmpDir::new("asks-gen-driver-continue");
+    let (mut a, log) = chat_app(None, "asks-gen-driver-continue", &tmp);
+    let root = a.config.target.display().to_string();
+    let ledger = Ledger::new(&a.config.target);
+    let mut rec = AttemptRecord::load(&attempts::attempt_dir(&ledger, "u-lib", RED)).unwrap();
+    let id = "d-00000000abcd";
+    rec.id = id.into();
+    rec.stage = Some(attempts::DRIVER_STAGE.into());
+    rec.requester = Some("chat".into());
+    rec.provider = "external".into();
+    rec.provider_kind = "external".into();
+    rec.model = MODEL.into();
+    rec.outcome = "in-progress".into();
+    rec.schema_version = 2;
+    rec.seeded_from = None;
+    rec.steer_note = None;
+    rec.seed_verdict = None;
+    let dir = attempts::driver_attempt_dir(&ledger, "u-lib", id);
+    std::fs::create_dir_all(&dir).unwrap();
+    rec.store(&dir).unwrap();
+    assert!(a.reload(true));
+    assert!(a
+        .snapshot
+        .unit("u-lib")
+        .unwrap()
+        .driver_attempt(id)
+        .is_some());
+    let key = "0123abcd";
+    let gen = a.chat.gen;
+    a.asks.table.insert(
+        id.into(),
+        HandOff {
+            key: key.into(),
+            gen,
+            act: "Make u-lib's test program".into(),
+            turn: Some(1),
+            unit: "u-lib".into(),
+        },
+    );
+    a.chat.keys_read.insert((gen, id.into(), key.into()));
+    ask(
+        &mut a,
+        "c1",
+        "harness_answer",
+        json!({"unit": "u-lib", "attempt": id, "request_key": key, "text": "int main(void){}"}),
+    );
+    assert!(no_denial(&log, "c1"), "{:?}", denial(&log, "c1"));
+    let r = a.asks.shown().expect("a Continue request").clone();
+    assert_eq!(r.pending.act, Act::Continue);
+    let argv = strs(&r.pending.argv);
+    assert_eq!(
+        &argv[..5],
+        [
+            HARNESS,
+            "--json",
+            "gen-driver",
+            "u-lib",
+            &format!("--target={root}")
+        ],
+        "{argv:?}"
+    );
+    for want in ["--requester=chat", "--answer=-", "--answer-key=0123abcd"] {
+        assert!(argv.iter().any(|x| x == want), "{want}: {argv:?}");
+    }
+    assert!(!argv.iter().any(|x| x == "--no-promote"), "{argv:?}");
+    let (_, body) = a.dialog_words(&r.pending);
+    assert!(
+        body.join("\n")
+            .contains("resumes the making of u-lib's test program"),
+        "{body:?}"
     );
 }

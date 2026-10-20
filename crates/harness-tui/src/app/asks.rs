@@ -31,6 +31,9 @@ pub const CONTINUE_QUIET: Duration = Duration::from_secs(1);
 pub const MAX_ANSWER_BYTES: usize = 512 * 1024;
 /// Largest outcome message sent back to the chat.
 pub const MAX_OUTCOME_BYTES: usize = 8 * 1024;
+/// Migrate's refusal on a unit with no test program, after its name (§9.4).
+pub const NO_TEST_PROGRAM: &str = "has no test program yet — Make the test program first";
+
 /// "Declined": the model reads it as the call's result.
 pub const DECLINED: &str = "declined by the person";
 
@@ -190,6 +193,8 @@ pub struct Permit {
 pub struct Owed {
     /// Its tag.
     pub tag: ChatTag,
+    /// Its unit.
+    pub unit: Option<String>,
     /// The act in words.
     pub label: String,
     /// What the run reported.
@@ -567,6 +572,23 @@ impl App {
                     continue_asks: false,
                 })
             }
+            "harness_gen_driver" => {
+                let mut p = self.chat_gen_driver_argv(&unit, &model)?;
+                p.chat = Some(Box::new(tag(grant)));
+                Ok(Request {
+                    words: format!(
+                        "Make {unit}'s test program — a model call{}",
+                        if external {
+                            ", answered here in chat"
+                        } else {
+                            ""
+                        }
+                    ),
+                    pending: p,
+                    shown_at: None,
+                    continue_asks: false,
+                })
+            }
             "harness_steer" => {
                 let from = need("from")?;
                 let note = need("steer")?;
@@ -680,6 +702,9 @@ impl App {
                 state.word()
             ));
         }
+        if u.driver != crate::model::DriverState::Validated {
+            return Err(format!("{unit} {}", NO_TEST_PROGRAM));
+        }
         let provider = self
             .config
             .providers
@@ -704,6 +729,75 @@ impl App {
             act: Act::Migrate,
             argv: self.with_sandbox_flag(self.harness_argv(&rest)?),
             label: format!("Migrate {unit} (asked in chat)"),
+            unit: Some(unit.to_string()),
+            attempt: None,
+            cleanup: None,
+            expect_attempt: None,
+            note: None,
+            shown_digest: None,
+            chat: None,
+        })
+    }
+
+    /// The chat's Make the test program (§9.4): `gen-driver <unit>
+    /// --provider=<p> --model=<m> --requester=chat` (`--promote` when the
+    /// unit's generated driver is out of date) — `<p>` and `<m>` as for
+    /// Migrate. Only a unit before its Rust whose test program is missing or
+    /// out of date.
+    fn chat_gen_driver_argv(&self, unit: &str, model: &str) -> Result<Pending, String> {
+        if !harness_core::plan::is_clean_segment(unit) {
+            return Err(format!("{unit:?} is not a plain unit id"));
+        }
+        let (i, u) = self
+            .snapshot
+            .units
+            .iter()
+            .enumerate()
+            .find(|(_, u)| u.unit.id == unit)
+            .ok_or_else(|| format!("unit {unit} is not in the plan"))?;
+        let state = self
+            .files
+            .units
+            .get(i)
+            .map(|x| x.state.clone())
+            .unwrap_or_else(|| crate::files::unit_state(u));
+        if u.driver == crate::model::DriverState::Validated {
+            return Err(format!(
+                "{unit} has its test program already — ask for Migrate {unit}"
+            ));
+        }
+        if !(state.before_rust() || state == UnitState::Failing) {
+            return Err(format!(
+                "unit {unit} is {} — a test program is made for a unit with no Rust accepted yet",
+                state.word()
+            ));
+        }
+        let provider = self
+            .config
+            .providers
+            .first()
+            .ok_or(crate::model::NO_PROVIDER)?;
+        let m = if provider == EXTERNAL_PROVIDER {
+            model.to_string()
+        } else {
+            self.migrate_model.clone()
+        };
+        let mut rest = vec![
+            os("gen-driver"),
+            os(unit),
+            self.target_arg(),
+            os(format!("--provider={provider}")),
+            os(format!("--model={m}")),
+            os("--requester=chat"),
+        ];
+        if u.driver == crate::model::DriverState::Stale {
+            rest.insert(3, os("--promote"));
+        }
+        Ok(Pending {
+            stdin: None,
+            act: Act::GenDriver,
+            argv: self.with_sandbox_flag(self.harness_argv(&rest)?),
+            label: format!("Make {unit}'s test program (asked in chat)"),
             unit: Some(unit.to_string()),
             attempt: None,
             cleanup: None,
@@ -784,12 +878,18 @@ impl App {
         })
     }
 
-    /// The response file of `key` in `unit`'s chat traces.
-    fn chat_response(&self, unit: &str, key: &str) -> PathBuf {
+    /// The response file of `key` in `unit`'s chat traces — a driver
+    /// attempt's (`d-…`) under `driver-traces/`.
+    fn chat_response(&self, unit: &str, attempt: &str, key: &str) -> PathBuf {
+        let traces = if harness_core::attempts::is_driver_attempt(attempt) {
+            "driver-traces"
+        } else {
+            "traces"
+        };
         self.config
             .ledger()
             .unit_dir(unit)
-            .join("traces")
+            .join(traces)
             .join(harness_core::attempts::CHAT_TRACES)
             .join(format!("{key}.response.json"))
     }
@@ -824,10 +924,13 @@ impl App {
             .snapshot
             .unit(unit)
             .ok_or_else(|| format!("unit {unit} is gone"))?;
-        let a = u
-            .attempt(attempt)
-            .ok_or_else(|| format!("attempt {attempt} is not in unit {unit}"))?;
-        let r = &a.record;
+        let driver = harness_core::attempts::is_driver_attempt(attempt);
+        let r = if driver {
+            u.driver_attempt(attempt)
+        } else {
+            u.attempt(attempt).map(|a| &a.record)
+        }
+        .ok_or_else(|| format!("attempt {attempt} is not in unit {unit}"))?;
         let held = self
             .asks
             .table
@@ -875,7 +978,7 @@ impl App {
                 text.len()
             ));
         }
-        if response_present(&self.chat_response(unit, key)) {
+        if response_present(&self.chat_response(unit, attempt, key)) {
             return Err(format!(
                 "request {key} already has a response — the harness files it on the next resume"
             ));
@@ -886,14 +989,26 @@ impl App {
                 r.provider, r.provider
             ));
         }
-        let mut rest = vec![
-            os("migrate"),
-            os(unit),
-            self.target_arg(),
-            os("--no-promote"),
+        let mut rest = if driver {
+            // The driver attempt's own run shape: replacing an out-of-date
+            // generated driver needs `--promote`, as when it was asked.
+            let mut rest = vec![os("gen-driver"), os(unit), self.target_arg()];
+            if u.driver == crate::model::DriverState::Stale {
+                rest.push(os("--promote"));
+            }
+            rest
+        } else {
+            vec![
+                os("migrate"),
+                os(unit),
+                self.target_arg(),
+                os("--no-promote"),
+            ]
+        };
+        rest.extend([
             os(format!("--provider={}", r.provider)),
             os(format!("--model={}", r.model)),
-        ];
+        ]);
         if let (Some(seed), Some(note)) = (&r.seeded_from, &r.steer_note) {
             rest.push(os(format!("--from={seed}")));
             rest.push(os(format!("--steer={note}")));
@@ -954,10 +1069,30 @@ impl App {
                     None => Ok(()),
                 }
             }
+            Act::GenDriver => {
+                let plan = harness_core::plan::Plan::load(&ledger.plan_path())
+                    .map_err(|e| format!("the plan could not be read: {e}"))?;
+                let u = plan
+                    .units
+                    .iter()
+                    .find(|u| u.id == unit)
+                    .ok_or_else(|| format!("unit {unit} is no longer in the plan"))?;
+                if matches!(u.status.as_str(), "verified" | "merged" | "blocked") {
+                    return Err(format!("unit {unit} is {} now", u.status.as_str()));
+                }
+                Ok(())
+            }
             Act::Continue => {
                 let a = p.attempt.as_deref().ok_or("no attempt")?;
                 let key = tag.key.as_deref().ok_or("no request key")?;
-                let r = load(a)?;
+                let r = if harness_core::attempts::is_driver_attempt(a) {
+                    AttemptRecord::load(&harness_core::attempts::driver_attempt_dir(
+                        &ledger, unit, a,
+                    ))
+                    .map_err(|e| format!("attempt {a} could not be read: {e}"))?
+                } else {
+                    load(a)?
+                };
                 if r.outcome != "in-progress" {
                     return Err(format!("attempt {a} is no longer in progress"));
                 }
@@ -970,7 +1105,7 @@ impl App {
                 if self.asks.table.get(a).map(|h| h.key.as_str()) != Some(key) {
                     return Err(format!("attempt {a} no longer waits on request {key}"));
                 }
-                if response_present(&self.chat_response(unit, key)) {
+                if response_present(&self.chat_response(unit, a, key)) {
                     return Err(format!("request {key} already has a response"));
                 }
                 Ok(())
@@ -1242,13 +1377,15 @@ impl App {
             }
         }
         if let Some(tag) = run.pending.chat.as_deref().cloned() {
+            let attempt = tag.attempt.clone().unwrap_or_default();
             let response = tag
                 .key
                 .as_ref()
                 .zip(run.pending.unit.as_ref())
-                .map(|(k, u)| self.chat_response(u, k));
+                .map(|(k, u)| self.chat_response(u, &attempt, k));
             self.asks.outcome.push(Owed {
                 tag,
+                unit: run.pending.unit.clone(),
                 label: run.narrator.label.clone(),
                 collect: run.collect.clone(),
                 exit: status.code(),
@@ -1792,6 +1929,22 @@ impl App {
         self.move_focus(Focus::Chat);
     }
 
+    /// The menu's "Make the test program — ask in chat": the request typed
+    /// into the input, as Migrate's (§9.4).
+    pub(super) fn chat_gen_driver_item(&mut self) {
+        if !self.chat.input.is_empty() {
+            self.say("the chat has a draft — send or clear it first");
+            self.move_focus(Focus::Chat);
+            return;
+        }
+        let text = match &self.selection {
+            Selection::Unit(id) => format!("Make the test program for {id}"),
+            _ => "Make the test program for the next unit".to_string(),
+        };
+        self.chat.input.insert(&text);
+        self.move_focus(Focus::Chat);
+    }
+
     /// A click on one of the chat's keys (§5.5).
     pub(super) fn press_chat(&mut self, k: &str, now: Instant) -> Command {
         match k {
@@ -1930,6 +2083,9 @@ fn no_key_held(r: &AttemptRecord) -> String {
             "ask for Modify from {seed} with its recorded note {}",
             json!(fence::untrusted("note", note, fence::STEER_NOTE_CAP))
         ),
+        _ if harness_core::attempts::is_driver_attempt(&r.id) => {
+            format!("ask for Make the test program of {} again", r.unit)
+        }
         _ => format!("ask for Migrate of {} again", r.unit),
     };
     format!(
@@ -1995,6 +2151,7 @@ fn outcome_message(o: &Owed, failed_read: Option<&str>) -> (String, String, T) {
     let c = &o.collect;
     let act = match o.tag.tool.as_str() {
         "harness_migrate" => "migrate",
+        "harness_gen_driver" => "gen-driver",
         "harness_steer" => "steer",
         "harness_retry" => "retry",
         _ => "continue",
@@ -2066,7 +2223,35 @@ fn outcome_message(o: &Owed, failed_read: Option<&str>) -> (String, String, T) {
     }
     let text = format!("{who}: {}", fence::ordered_text(&body));
     let checks = checks_count_words(c);
+    // Make the test program says what it made, or what failed, in words
+    // (§9.4) — a resumed driver attempt too.
+    let driver = o.tag.tool == "harness_gen_driver"
+        || o.tag
+            .attempt
+            .as_deref()
+            .is_some_and(harness_core::attempts::is_driver_attempt);
+    let unit = o.unit.as_deref().unwrap_or("the unit");
+    let failed_words = || {
+        c.messages
+            .iter()
+            .rev()
+            .find_map(|m| m.strip_prefix("gen-driver: the test program did not pass: "))
+            .map(|f| format!(" — it did not pass: {f}"))
+            .unwrap_or_default()
+    };
     let (line, tone) = match word {
+        "green" | "done" if driver => (
+            format!("✓ {unit}'s test program is ready — next, its Rust"),
+            T::Good,
+        ),
+        "red" if driver => (
+            format!(
+                "✗ {unit}'s test program did not pass the judge's checks{} — ask the chat to \
+                 make it again",
+                failed_words()
+            ),
+            T::Bad,
+        ),
         "green" => (format!("✓ {} — GREEN{checks}", o.label), T::Good),
         "red" => (format!("✗ {} — RED{checks}", o.label), T::Bad),
         "awaiting" => (
@@ -2099,4 +2284,4 @@ fn outcome_message(o: &Owed, failed_read: Option<&str>) -> (String, String, T) {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

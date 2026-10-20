@@ -525,6 +525,114 @@ fn gen_driver_names_the_envelope_and_says_while_it_checks() {
     );
 }
 
+/// `gen-driver --requester=chat` (the cockpit's Make the test program,
+/// docs/COCKPIT-WRAPPER-DESIGN.md §9.4): its hand-off is posed under
+/// `driver-traces/chat/`, the `awaiting` event names its key and keeps the
+/// label; `--answer FILE --answer-key KEY` files the answer and resumes the
+/// attempt, which is labelled `chat`; an answer to a key it does not wait
+/// on is refused, and one without `--requester` is refused by clap.
+#[test]
+fn gen_driver_asked_in_chat_is_answered_through_the_cli() {
+    let root = project("gen-driver-chat");
+    let target = root.to_str().unwrap();
+    for cmd in ["scan", "plan"] {
+        let r = harness(&[cmd, "--target", target, "--tool", "t-a"]);
+        assert_eq!(r.code, 0, "{cmd}: {}\n{}", r.stdout, r.stderr);
+    }
+    let plan = std::fs::read_to_string(root.join("migration/tools/t-a/plan.toml")).unwrap();
+    let unit = plan
+        .lines()
+        .find_map(|l| l.strip_prefix("id = \""))
+        .and_then(|l| l.strip_suffix('"'))
+        .unwrap_or_else(|| panic!("no unit: {plan}"))
+        .to_string();
+    let run = |extra: &[&str]| {
+        let mut args = vec![
+            "--json",
+            "gen-driver",
+            unit.as_str(),
+            "--target",
+            target,
+            "--tool",
+            "t-a",
+            "--allow-unsandboxed",
+            "--provider=external",
+            "--model=claude-chat-test",
+            "--requester=chat",
+        ];
+        args.extend_from_slice(extra);
+        harness(&args)
+    };
+    let events = |r: &Run| -> Vec<serde_json::Value> {
+        r.stdout
+            .lines()
+            .chain(r.stderr.lines())
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect()
+    };
+    let awaiting = |r: &Run| {
+        events(r)
+            .into_iter()
+            .find(|e| e["k"] == "awaiting")
+            .unwrap_or_else(|| panic!("no awaiting: {}\n{}", r.stdout, r.stderr))
+    };
+    let r = run(&[]);
+    assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
+    let aw = awaiting(&r);
+    let chat = root.join(format!(
+        "migration/tools/t-a/units/{unit}/driver-traces/chat"
+    ));
+    assert!(std::path::Path::new(aw["path"].as_str().unwrap()).starts_with(&chat));
+    assert!(aw["resume"].as_str().unwrap().contains("--requester=chat"));
+    let attempt = aw["attempt"].as_str().unwrap().to_string();
+    let key = aw["request_key"].as_str().unwrap().to_string();
+    assert!(attempt.starts_with("d-"), "{attempt}");
+    let record = root.join(format!(
+        "migration/tools/t-a/units/{unit}/driver-attempts/{attempt}/attempt.json"
+    ));
+    let rec: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&record).unwrap()).unwrap();
+    assert_eq!(rec["requester"], "chat");
+    // An answer needs the requester (clap), and the key it waits on.
+    let answer = root.join("answer.txt");
+    std::fs::write(
+        &answer,
+        "driver.c\n```c\nint main(void) { return 0; }\n```\nRUHARNESS_END_OF_OUTPUT\n",
+    )
+    .unwrap();
+    let file = answer.to_str().unwrap();
+    let r = harness(&[
+        "gen-driver",
+        unit.as_str(),
+        "--target",
+        target,
+        "--tool",
+        "t-a",
+        "--answer",
+        file,
+        "--answer-key",
+        &key,
+    ]);
+    assert_eq!(r.code, 2, "clap refuses it: {}", r.stderr);
+    let r = run(&["--answer", file, "--answer-key", "0123abcd"]);
+    assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
+    assert!(r.stderr.contains("0123abcd"), "{}", r.stderr);
+    // The right key: filed, and the same attempt resumed to its check (this
+    // tool's harness.toml allows no compiler, so the check stops there).
+    let r = run(&["--answer", file, "--answer-key", &key]);
+    assert!(
+        r.stdout
+            .contains("gen-driver: checking the driver against the original C"),
+        "{}\n{}",
+        r.stdout,
+        r.stderr
+    );
+    assert!(chat.join(format!("{key}.response.json")).is_file());
+    assert!(events(&r)
+        .iter()
+        .any(|e| e["k"] == "turn-start" && e["attempt"] == attempt.as_str()));
+}
+
 /// No target here, and `--tool` on a project without tools: one sentence
 /// each, exit 1.
 #[test]

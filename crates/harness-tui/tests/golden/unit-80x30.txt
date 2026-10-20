@@ -1,20 +1,20 @@
 ┌ Files ───────────────┐┌ u-cache · no test program ───────────────────────────┐
 │▾ harness-tui-unitsum…││Step 6 of 8: Test program                             │
 │  ▾ Units (11)        ││◇ u-cache no test program                             │
-│    ▸ ✓? u001-katajai…││Next: No Rust yet — ask the chat to migrate it (a     │
-│    ▸ ◇ u-c… no test …││model writes the Rust, the judge checks it, you accept│
-│    ▸ ◇ u-hash        ││it)                                                   │
-│    ▸ ◇ u-lz77        ││                                                      │
-│    ▸ ◇ u-tree        ││5 exported functions: ZopfliCacheToSublen (22 lines), │
-│    ▸ ◇ u-blocksplitt…││ZopfliCleanCache (5 lines), ZopfliInitCache (19       │
-│    ▸ ◇ u-gzip_contai…││lines), ZopfliMaxCachedSublen (11 lines),             │
-│    ▸ ◇ u-util        ││ZopfliSublenToCache (32 lines)                        │
-│    ▸ ◇ u-zlib_contai…││Its C: 1 file — src/zopfli/cache.c                    │
-│    ▸ ◇ u-zopfli_lib  ││No Rust yet                                           │
-│    ▸ ◇ u-zopfli_bin  ││5 of your features run it · still C — see Features    │
-│  ▾ Features (7)      ││Attempts: none yet                                    │
+│    ▸ ✓? u001-katajai…││Next: Make the test program — Enter, then ask in chat │
+│    ▸ ◇ u-c… no test …││                                                      │
+│    ▸ ◇ u-hash        ││5 exported functions: ZopfliCacheToSublen (22 lines), │
+│    ▸ ◇ u-lz77        ││ZopfliCleanCache (5 lines), ZopfliInitCache (19       │
+│    ▸ ◇ u-tree        ││lines), ZopfliMaxCachedSublen (11 lines),             │
+│    ▸ ◇ u-blocksplitt…││ZopfliSublenToCache (32 lines)                        │
+│    ▸ ◇ u-gzip_contai…││Its C: 1 file — src/zopfli/cache.c                    │
+│    ▸ ◇ u-util        ││No Rust yet                                           │
+│    ▸ ◇ u-zlib_contai…││5 of your features run it · still C — see Features    │
+│    ▸ ◇ u-zopfli_lib  ││Attempts: none yet                                    │
+│    ▸ ◇ u-zopfli_bin  ││                                                      │
+│  ▾ Features (7)      ││▸ C source (Tab to the View, then Enter)              │
 │      ◉ Compress to g…││                                                      │
-│      ◉ Compress to z…││▸ C source (Tab to the View, then Enter)              │
+│      ◉ Compress to z…││                                                      │
 │      ◉ Compress to r…││                                                      │
 │      ◉ Say what it d…││                                                      │
 │      ◉ Compress quic…││                                                      │

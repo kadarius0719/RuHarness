@@ -28,6 +28,15 @@ pub struct GenDriverArgs {
     pub allow_unsandboxed: bool,
     pub retry: bool,
     pub attempt: Option<String>,
+    /// Who asked, when not the pipeline: `chat` (the cockpit's chat,
+    /// docs/COCKPIT-WRAPPER-DESIGN.md §9.4).
+    pub requester: Option<String>,
+    /// The answer to the pending hand-off `answer_key` (`-`: stdin).
+    pub answer: Option<std::path::PathBuf>,
+    /// The trace key `answer` answers.
+    pub answer_key: Option<String>,
+    /// The answer's length (required with `--answer=-`).
+    pub answer_bytes: Option<u64>,
 }
 
 impl GenDriverArgs {
@@ -56,6 +65,9 @@ impl GenDriverArgs {
         }
         if let Some(a) = &self.attempt {
             cmd.push_str(&format!(" --attempt={}", q(a)));
+        }
+        if let Some(requester) = &self.requester {
+            cmd.push_str(&format!(" --requester={}", q(requester)));
         }
         cmd
     }
@@ -98,8 +110,18 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<u8> {
         allow_unsandboxed,
         retry,
         attempt,
+        requester,
+        answer,
+        answer_key,
+        answer_bytes,
     } = args;
     require_sandbox(allow_unsandboxed, "harness gen-driver")?;
+    // `--answer`'s own checks, before the lock and anything written — as
+    // migrate's (docs/CHAT-PANE-DESIGN.md §4.3).
+    let answer = match (&answer, &answer_key) {
+        (Some(file), Some(key)) => Some(crate::read_answer(file, key, answer_bytes)?),
+        _ => None,
+    };
     let ctx = target.load()?;
     let ledger = Ledger::of(&ctx);
     let _lock = lock_ledger(&ledger, &format!("gen-driver {unit_id}"))?;
@@ -153,12 +175,54 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<u8> {
     let max_tokens = stage.and_then(|m| m.max_tokens).unwrap_or(llm.max_tokens);
     let max_repairs = stage.and_then(|m| m.max_repairs).unwrap_or(3);
 
-    // Driver-stage hand-offs/traces never mix with the migrate stage's.
-    let traces = safe_ledger_dir(&ctx, &["units", &unit_id, "driver-traces"])?;
-    let resolved = harness_llm::providers::resolve(&provider_name, &traces)?;
+    // Driver-stage hand-offs/traces never mix with the migrate stage's; a
+    // chat-requested attempt's live in `driver-traces/chat/` (as migrate's
+    // in `traces/chat/`). An answer or a replay creates no directory.
+    let mut components = vec!["units", unit_id.as_str(), "driver-traces"];
+    if requester.is_some() {
+        components.push(harness_core::attempts::CHAT_TRACES);
+    }
+    let traces = if answer.is_some() || provider_name == "replay" {
+        crate::existing_ledger_dir(&ctx, &components).map_err(|e| {
+            if answer.is_some() {
+                anyhow::Error::new(harness_core::Error::AnswerRefused {
+                    why: format!("no hand-off was posed there: {e}"),
+                })
+            } else {
+                e.context(format!(
+                    "unit `{unit_id}` has no recorded driver attempt to replay: replay verifies \
+                     RECORDED attempts from their traces; it never starts a new attempt"
+                ))
+            }
+        })?
+    } else {
+        safe_ledger_dir(&ctx, &components)?
+    };
+    let mut resolved = harness_llm::providers::resolve(&provider_name, &traces)?;
+    let slot = match answer {
+        Some((key, text)) => {
+            if resolved.kind != harness_core::attempts::EXTERNAL_KIND {
+                return Err(harness_core::Error::AnswerRefused {
+                    why: format!(
+                        "provider `{provider_name}` is of kind `{}`; only an `external` run \
+                         files an answer",
+                        resolved.kind
+                    ),
+                }
+                .into());
+            }
+            let slot = std::sync::Arc::new(harness_llm::adapters::AnswerSlot::new(key, text));
+            resolved.adapter = Box::new(harness_llm::adapters::TraceAdapter::with_answer(
+                &traces,
+                slot.clone(),
+            ));
+            Some(slot)
+        }
+        None => None,
+    };
     let params = harness_llm::migrate::MigrateParams {
-        requester: None,
-        answer_key: None,
+        requester: requester.as_deref(),
+        answer_key: slot.as_ref().map(|s| s.key.as_str()),
         provider: &resolved,
         model: &model,
         max_tokens,
@@ -174,29 +238,61 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<u8> {
         out(checking_line().to_string());
         harness_oracle::validate_driver(&ctx, unit, candidate)
     };
-    let outcome =
-        match harness_llm::run_driver_generation(&params, &judge, &ctx, &facts, &plan_doc, unit) {
-            Ok(o) => o,
-            Err(e @ harness_core::Error::Awaiting { .. }) => {
-                eprintln!("{e:#}");
-                eprintln!(
-                    "{}",
-                    crate::handoff_line("gen-driver", &traces, &resume, Some(&model))
-                );
-                if let harness_core::Error::Awaiting { path, attempt } = &e {
-                    report::event(&report::Awaiting {
-                        k: "awaiting",
-                        attempt: attempt.as_deref(),
-                        path: path.display().to_string(),
-                        resume: resume.clone(),
-                        args: report::args_without_answer(),
-                        request_key: report::request_key_of(path),
-                    });
-                }
-                return Err(e.into());
-            }
-            Err(e) => return Err(e.into()),
+    let run = harness_llm::run_driver_generation(&params, &judge, &ctx, &facts, &plan_doc, unit);
+    // An answer the run never asked for is refused after the fact, as
+    // migrate's (§R4 CE-1): the request it waits on now reported first.
+    let unused = slot.as_ref().filter(|s| !s.used()).and_then(|slot| {
+        let why = match &run {
+            Ok(o) => format!(
+                "the attempt finished ({}) without asking for it",
+                o.record.outcome
+            ),
+            Err(harness_core::Error::Awaiting { path, .. }) => format!(
+                "the attempt asked for another request first ({})",
+                report::request_key_of(path).unwrap_or_else(|| path.display().to_string())
+            ),
+            Err(_) => return None,
         };
+        Some(harness_core::Error::AnswerUnused {
+            key: slot.key.clone(),
+            why,
+        })
+    });
+    if let Some(unused) = unused {
+        if let Err(harness_core::Error::Awaiting { path, attempt }) = &run {
+            report::event(&report::Awaiting {
+                k: "awaiting",
+                attempt: attempt.as_deref(),
+                path: path.display().to_string(),
+                resume: resume.clone(),
+                args: report::args_without_answer(),
+                request_key: report::request_key_of(path),
+            });
+        }
+        return Err(unused.into());
+    }
+    let outcome = match run {
+        Ok(o) => o,
+        Err(e @ harness_core::Error::Awaiting { .. }) => {
+            eprintln!("{e:#}");
+            eprintln!(
+                "{}",
+                crate::handoff_line("gen-driver", &traces, &resume, Some(&model))
+            );
+            if let harness_core::Error::Awaiting { path, attempt } = &e {
+                report::event(&report::Awaiting {
+                    k: "awaiting",
+                    attempt: attempt.as_deref(),
+                    path: path.display().to_string(),
+                    resume: resume.clone(),
+                    args: report::args_without_answer(),
+                    request_key: report::request_key_of(path),
+                });
+            }
+            return Err(e.into());
+        }
+        Err(e) => return Err(e.into()),
+    };
     let record = &outcome.record;
     for (i, t) in record.turns.iter().enumerate() {
         out(format!(
@@ -221,7 +317,35 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<u8> {
             harness_llm::conformance(drifted)
         ));
     }
+    let attempt_event = |promoted: bool, promotion: &str| {
+        report::event(&report::AttemptEvent {
+            k: "attempt",
+            unit: &unit_id,
+            id: &record.id,
+            outcome: &record.outcome,
+            provider: &record.provider,
+            model: &record.model,
+            promoted,
+            promotion,
+        });
+    };
     if record.outcome != "green" {
+        // What failed, in the checks' own names: the cockpit says it.
+        if let Ok(v) = DriverValidation::load(&outcome.attempt_dir.join("validation.json")) {
+            let failed: Vec<&str> = v
+                .checks
+                .iter()
+                .filter(|c| !c.passed)
+                .map(|c| c.name.as_str())
+                .collect();
+            if !failed.is_empty() {
+                out(format!(
+                    "gen-driver: the test program did not pass: {}",
+                    failed.join(", ")
+                ));
+            }
+        }
+        attempt_event(false, "not promoted: not green");
         return Ok(EXIT_ORACLE_RED);
     }
     let Some(candidate) = outcome.candidate_driver.as_ref() else {
@@ -264,6 +388,7 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<u8> {
         dest_rel,
         validation_path.display()
     ));
+    attempt_event(true, "promoted: the unit's test program");
     Ok(0)
 }
 

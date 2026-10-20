@@ -22,16 +22,16 @@
   @25-26 fg 240 NONE "◇"
   @27-34 fg - BOLD "u-cache"
   @79-79 fg 244 NONE "│"
-│    ▸ ✓? u001-katajai…││Next: No Rust yet — ask the chat to migrate it (a     │
+│    ▸ ✓? u001-katajai…││Next: Make the test program — Enter, then ask in chat │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 242 NONE "▸"
   @7-9 fg 28 NONE "✓?"
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
   @25-29 fg 23 BOLD "Next:"
-  @30-73 fg - BOLD "No Rust yet — ask the chat to migrate it (a"
+  @30-77 fg - BOLD "Make the test program — Enter, then ask in chat"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-c… no test …││model writes the Rust, the judge checks it, you accept│
+│    ▸ ◇ u-c… no test …││                                                      │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 242 BOLD | REVERSED "▸"
   @7-8 fg 240 BOLD | REVERSED "◇"
@@ -39,59 +39,43 @@
   @14-22 fg 240 BOLD | REVERSED "no test …"
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
-  @25-78 fg - BOLD "model writes the Rust, the judge checks it, you accept"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-hash        ││it)                                                   │
-  @0-0 fg 25 BOLD "│"
-  @1-6 fg 242 NONE "▸"
-  @7-8 fg 240 NONE "◇"
-  @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
-  @25-27 fg - BOLD "it)"
-  @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-lz77        ││                                                      │
+│    ▸ ◇ u-hash        ││5 exported functions: ZopfliCacheToSublen (22 lines), │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 242 NONE "▸"
   @7-8 fg 240 NONE "◇"
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-tree        ││5 exported functions: ZopfliCacheToSublen (22 lines), │
+│    ▸ ◇ u-lz77        ││ZopfliCleanCache (5 lines), ZopfliInitCache (19       │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 242 NONE "▸"
   @7-8 fg 240 NONE "◇"
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-blocksplitt…││ZopfliCleanCache (5 lines), ZopfliInitCache (19       │
+│    ▸ ◇ u-tree        ││lines), ZopfliMaxCachedSublen (11 lines),             │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 242 NONE "▸"
   @7-8 fg 240 NONE "◇"
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-gzip_contai…││lines), ZopfliMaxCachedSublen (11 lines),             │
+│    ▸ ◇ u-blocksplitt…││ZopfliSublenToCache (32 lines)                        │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 242 NONE "▸"
   @7-8 fg 240 NONE "◇"
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-util        ││ZopfliSublenToCache (32 lines)                        │
+│    ▸ ◇ u-gzip_contai…││Its C: 1 file — src/zopfli/cache.c                    │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 242 NONE "▸"
   @7-8 fg 240 NONE "◇"
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-zlib_contai…││Its C: 1 file — src/zopfli/cache.c                    │
-  @0-0 fg 25 BOLD "│"
-  @1-6 fg 242 NONE "▸"
-  @7-8 fg 240 NONE "◇"
-  @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
-  @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-zopfli_lib  ││No Rust yet                                           │
+│    ▸ ◇ u-util        ││No Rust yet                                           │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 242 NONE "▸"
   @7-8 fg 240 NONE "◇"
@@ -99,20 +83,35 @@
   @24-24 fg 244 NONE "│"
   @25-35 fg 242 NONE "No Rust yet"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-zopfli_bin  ││5 of your features run it · still C — see Features    │
+│    ▸ ◇ u-zlib_contai…││5 of your features run it · still C — see Features    │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 242 NONE "▸"
   @7-8 fg 240 NONE "◇"
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│  ▾ Features (7)      ││Attempts: none yet                                    │
+│    ▸ ◇ u-zopfli_lib  ││Attempts: none yet                                    │
+  @0-0 fg 25 BOLD "│"
+  @1-6 fg 242 NONE "▸"
+  @7-8 fg 240 NONE "◇"
+  @23-23 fg 25 BOLD "│"
+  @24-24 fg 244 NONE "│"
+  @25-33 fg 25 BOLD "Attempts:"
+  @79-79 fg 244 NONE "│"
+│    ▸ ◇ u-zopfli_bin  ││                                                      │
+  @0-0 fg 25 BOLD "│"
+  @1-6 fg 242 NONE "▸"
+  @7-8 fg 240 NONE "◇"
+  @23-23 fg 25 BOLD "│"
+  @24-24 fg 244 NONE "│"
+  @79-79 fg 244 NONE "│"
+│  ▾ Features (7)      ││▸ C source (Tab to the View, then Enter)              │
   @0-0 fg 25 BOLD "│"
   @1-4 fg 242 NONE "▾"
   @5-16 fg 25 BOLD "Features (7)"
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
-  @25-33 fg 25 BOLD "Attempts:"
+  @25-64 fg 25 BOLD "▸ C source (Tab to the View, then Enter)"
   @79-79 fg 244 NONE "│"
 │      ◉ Compress to g…││                                                      │
   @0-0 fg 25 BOLD "│"
@@ -120,12 +119,11 @@
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      ◉ Compress to z…││▸ C source (Tab to the View, then Enter)              │
+│      ◉ Compress to z…││                                                      │
   @0-0 fg 25 BOLD "│"
   @7-8 fg 28 NONE "◉"
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
-  @25-64 fg 25 BOLD "▸ C source (Tab to the View, then Enter)"
   @79-79 fg 244 NONE "│"
 │      ◉ Compress to r…││                                                      │
   @0-0 fg 25 BOLD "│"

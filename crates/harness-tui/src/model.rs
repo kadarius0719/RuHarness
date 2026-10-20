@@ -155,6 +155,9 @@ pub struct UnitView {
     pub crate_digest: Option<String>,
     /// Its test program (docs/COCKPIT-WRAPPER-DESIGN.md §9.4).
     pub driver: DriverState,
+    /// Its driver-generation attempts (`d-…`), by id: the chat's Continue
+    /// of one reads its record here.
+    pub driver_attempts: Vec<AttemptRecord>,
 }
 
 /// A unit's test program (its differential driver), as `harness gen-driver`
@@ -210,6 +213,11 @@ impl UnitView {
     /// The attempt with `id`.
     pub fn attempt(&self, id: &str) -> Option<&AttemptView> {
         self.attempts.iter().find(|a| a.record.id == id)
+    }
+
+    /// The driver-generation attempt with `id`.
+    pub fn driver_attempt(&self, id: &str) -> Option<&AttemptRecord> {
+        self.driver_attempts.iter().find(|r| r.id == id)
     }
 }
 
@@ -504,6 +512,9 @@ fn unit_view(
         verdict: Verdict::load(&ledger.verdict_latest_path(&unit.id)).ok(),
         crate_digest,
         driver: driver_state(ledger, unit, &unit_source, &driver),
+        // A driver attempt that cannot be read is not shown, as a malformed
+        // superseded.jsonl is not: `bench check` reports it.
+        driver_attempts: attempts::load_unit_driver_attempts(ledger, &unit.id).unwrap_or_default(),
     })
 }
 

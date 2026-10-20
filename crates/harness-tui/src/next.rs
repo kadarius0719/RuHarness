@@ -9,7 +9,6 @@ use crate::app::{Act, App};
 use crate::featmap;
 use crate::files::{Cause, FileState, UnitState};
 use crate::menu::Action;
-use crate::model::UnitView;
 use crate::tree::Selection;
 
 /// What to do now, in words, and the menu item that does it.
@@ -59,18 +58,7 @@ pub fn cause_action(cause: &Cause) -> Option<Action> {
     }
 }
 
-/// A GREEN attempt of the unit that can be accepted (the menu's rule).
-pub fn acceptable(unit: &UnitView) -> Option<&str> {
-    unit.attempts
-        .iter()
-        .find(|a| {
-            a.record.outcome == "green"
-                && a.last_result() == "green"
-                && a.bound
-                && !a.record.promoted
-        })
-        .map(|a| a.record.id.as_str())
-}
+pub use crate::files::acceptable;
 
 impl App {
     /// The Next step of a node (the selection, usually): never a chat item
@@ -171,6 +159,17 @@ impl App {
                             unit.unit.depends_on.join(", ")
                         ),
                         None,
+                    )
+                } else if state.needs_test_program() {
+                    // The stage before its Rust (§9.4): never Migrate, which
+                    // the CLI would refuse.
+                    advice(
+                        if *state == UnitState::TestProgramStale {
+                            "Make the test program again — Enter, then ask in chat"
+                        } else {
+                            "Make the test program — Enter, then ask in chat"
+                        },
+                        Some(Action::GenDriver),
                     )
                 } else if matches!(state, UnitState::RustTried) {
                     advice(

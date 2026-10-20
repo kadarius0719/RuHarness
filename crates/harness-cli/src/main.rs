@@ -401,6 +401,24 @@ enum Cmd {
         /// Pin the recorded attempt a `--provider replay` run verifies
         #[arg(long)]
         attempt: Option<String>,
+        /// Who asked for the attempt, when not the pipeline: `chat` (the
+        /// cockpit's chat). Recorded, mixed into the attempt id; its
+        /// hand-offs live in the unit's `driver-traces/chat/`
+        #[arg(long, value_parser = ["chat"])]
+        requester: Option<String>,
+        /// A file (or `-`: stdin) holding the answer to the pending hand-off
+        /// named by --answer-key (`external`, --requester=chat only): filed
+        /// as its response when the resumed attempt asks for exactly that
+        /// request
+        #[arg(long, requires_all = ["answer_key", "requester"])]
+        answer: Option<PathBuf>,
+        /// The trace key (8 hex) of the hand-off --answer answers
+        #[arg(long, requires = "answer")]
+        answer_key: Option<String>,
+        /// The answer's length in bytes (required with --answer=-): a read
+        /// cut short — its writer gone midway — is refused, never filed
+        #[arg(long, requires = "answer")]
+        answer_bytes: Option<u64>,
     },
     /// Refresh the generated runtime view (AGENTS.md managed block)
     SyncRuntime {
@@ -889,6 +907,10 @@ fn run(cmd: Cmd) -> Result<u8> {
             allow_unsandboxed,
             retry,
             attempt,
+            requester,
+            answer,
+            answer_key,
+            answer_bytes,
         } => gen_driver::cmd_gen_driver(gen_driver::GenDriverArgs {
             unit,
             target,
@@ -898,6 +920,10 @@ fn run(cmd: Cmd) -> Result<u8> {
             allow_unsandboxed,
             retry,
             attempt,
+            requester,
+            answer,
+            answer_key,
+            answer_bytes,
         }),
     }
 }
@@ -2348,6 +2374,10 @@ mod tests {
             allow_unsandboxed: true,
             retry: true,
             attempt: Some("d-0123456789ab".into()),
+            requester: Some("chat".into()),
+            answer: Some(PathBuf::from("-")),
+            answer_key: Some("0123abcd".into()),
+            answer_bytes: Some(3),
         };
         let hint = args.resume_command();
         let cli = Cli::try_parse_from(sh_words(&hint)).unwrap_or_else(|e| panic!("{hint}\n{e}"));
@@ -2360,10 +2390,17 @@ mod tests {
             allow_unsandboxed,
             retry,
             attempt,
+            requester,
+            answer,
+            answer_key,
+            answer_bytes,
         } = cli.cmd
         else {
             panic!("{hint}: not gen-driver");
         };
+        // The requester is kept; an answer is filed once, never resumed.
+        assert_eq!(requester.as_deref(), Some("chat"), "{hint}");
+        assert_eq!((answer, answer_key, answer_bytes), (None, None, None));
         assert_eq!(
             (
                 unit.as_str(),

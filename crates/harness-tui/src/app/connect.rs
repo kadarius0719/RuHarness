@@ -196,7 +196,12 @@ impl App {
         let chat_item = self.chat_on
             && matches!(
                 a.action,
-                Some(Action::Migrate | Action::AskChat | Action::AskInChat { .. })
+                Some(
+                    Action::Migrate
+                        | Action::GenDriver
+                        | Action::AskChat
+                        | Action::AskInChat { .. }
+                )
             );
         match self.chat_unavailable() {
             Some(why) if chat_item => Advice {

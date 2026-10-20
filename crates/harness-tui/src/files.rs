@@ -554,6 +554,19 @@ pub fn known_code(unit: &UnitView) -> bool {
     recorded || judged
 }
 
+/// A GREEN attempt of the unit that can be accepted (the menu's rule).
+pub fn acceptable(unit: &UnitView) -> Option<&str> {
+    unit.attempts
+        .iter()
+        .find(|a| {
+            a.record.outcome == "green"
+                && a.last_result() == "green"
+                && a.bound
+                && !a.record.promoted
+        })
+        .map(|a| a.record.id.as_str())
+}
+
 /// A unit's state (§2.3, first match wins).
 pub fn unit_state(unit: &UnitView) -> UnitState {
     let r = &unit.report;
@@ -609,7 +622,7 @@ pub fn unit_state(unit: &UnitView) -> UnitState {
         };
     }
     if status == "pending" {
-        return if crate::next::acceptable(unit).is_some() {
+        return if acceptable(unit).is_some() {
             UnitState::RustGreen
         } else if !unit.attempts.is_empty() {
             UnitState::RustTried

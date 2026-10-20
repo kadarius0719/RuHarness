@@ -208,6 +208,10 @@ pub enum Act {
     /// The chat's Migrate: a fresh attempt labelled `requester: chat`
     /// (docs/CHAT-PANE-DESIGN.md §3.1).
     Migrate,
+    /// The chat's Make the test program: `gen-driver <unit>
+    /// --requester=chat`, a driver attempt labelled `chat`
+    /// (docs/COCKPIT-WRAPPER-DESIGN.md §9.4).
+    GenDriver,
     /// The chat's answer to a hand-off: the attempt resumed with it on the
     /// command's stdin (§3.4).
     Continue,
@@ -250,6 +254,7 @@ impl Act {
             Act::Retry => "Retry",
             Act::Resume => "Resume",
             Act::Migrate => "Migrate",
+            Act::GenDriver => "Make the test program",
             Act::Continue => "Continue",
             Act::MapFeatures => "Map the features",
             Act::SaveFeatures => "Save the features file",
@@ -276,6 +281,7 @@ impl Act {
             | Act::Detect
             | Act::Verify
             | Act::Migrate
+            | Act::GenDriver
             | Act::Continue
             | Act::MapFeatures
             | Act::SaveFeatures
@@ -293,7 +299,13 @@ impl Act {
     pub fn model(self) -> bool {
         matches!(
             self,
-            Act::Modify | Act::Retry | Act::Resume | Act::Migrate | Act::Continue | Act::ProjectAsk
+            Act::Modify
+                | Act::Retry
+                | Act::Resume
+                | Act::Migrate
+                | Act::GenDriver
+                | Act::Continue
+                | Act::ProjectAsk
         )
     }
 
@@ -2406,7 +2418,9 @@ impl App {
                 Ok(p)
             }
             Act::HandEdit => Err("the hand edit is prepared by the editor flow".into()),
-            Act::Migrate | Act::Continue => Err("only the chat asks for this act".into()),
+            Act::Migrate | Act::GenDriver | Act::Continue => {
+                Err("only the chat asks for this act".into())
+            }
         }
     }
 
@@ -2565,6 +2579,59 @@ impl App {
 
     // ----- dialogs ---------------------------------------------------------
 
+    /// Make the test program's dialog (§9.4): what the chat writes, what the
+    /// judge does with it, what is written.
+    fn gen_driver_words(&self, p: &Pending, unit: &str) -> (String, Vec<String>) {
+        let model = p
+            .argv
+            .iter()
+            .find_map(|a| {
+                a.to_string_lossy()
+                    .strip_prefix("--model=")
+                    .map(str::to_string)
+            })
+            .unwrap_or_default();
+        let symbols: Vec<String> = self
+            .snapshot
+            .unit(unit)
+            .map(|u| u.unit.symbols.clone())
+            .unwrap_or_default();
+        let calls = match symbols.len() {
+            0 => "the unit's functions".to_string(),
+            1..=4 => {
+                let (last, rest) = symbols.split_last().expect("not empty");
+                if rest.is_empty() {
+                    last.clone()
+                } else {
+                    format!("{} and {last}", rest.join(", "))
+                }
+            }
+            n => format!("its {n} functions ({}, …)", symbols[..3].join(", ")),
+        };
+        let mut body = vec![
+            format!(
+                "The chat writes a small C program that calls {calls} with chosen inputs and \
+                 prints what comes back. The judge runs it against the C to check it works, then \
+                 keeps it as the unit's test program."
+            ),
+            format!(
+                "It writes: the driver under {}/units/{unit}/ and the plan's entry for it.",
+                self.snapshot.ledger_rel()
+            ),
+            format!("A model call: model {model} (the chat's — it answers the hand-offs). Can take minutes."),
+        ];
+        if p.argv.iter().any(|a| a == "--promote") {
+            body.insert(
+                2,
+                "Its test program is out of date: the new one replaces it once it passes.".into(),
+            );
+        }
+        if let Some(tag) = &p.chat {
+            asks::chat_words(tag, &mut body, self.migrate_turns);
+        }
+        (format!("Make {unit}'s test program?"), body)
+    }
+
     /// The words of an act's dialog: a question naming the object, and every
     /// file it writes and what changes (§5.1).
     pub fn dialog_words(&self, p: &Pending) -> (String, Vec<String>) {
@@ -2700,6 +2767,7 @@ impl App {
                     .collect(),
                 )
             }
+            Act::GenDriver => self.gen_driver_words(p, unit),
             Act::Modify | Act::Retry | Act::Resume | Act::Migrate | Act::Continue => {
                 let provider = p.argv.iter().find_map(|a| {
                     a.to_string_lossy()
@@ -2752,10 +2820,22 @@ impl App {
                     ),
                 ];
                 if p.act == Act::Continue {
-                    body[1] = format!(
-                        "Files the chat's answer to the request it read and resumes the attempt of \
-                         {unit}; never promotes it. Can take minutes."
-                    );
+                    body[1] = if p
+                        .attempt
+                        .as_deref()
+                        .is_some_and(harness_core::attempts::is_driver_attempt)
+                    {
+                        format!(
+                            "Files the chat's answer to the request it read and resumes the making \
+                             of {unit}'s test program; the judge checks it against the C before \
+                             it is kept. Can take minutes."
+                        )
+                    } else {
+                        format!(
+                            "Files the chat's answer to the request it read and resumes the \
+                             attempt of {unit}; never promotes it. Can take minutes."
+                        )
+                    };
                 }
                 // The person's own Modify on the hand-off provider is
                 // answered by hand, as ever (§3.4).
@@ -3425,6 +3505,12 @@ impl App {
                 }
                 Command::None
             }
+            Action::GenDriver => {
+                if self.chat_connected() {
+                    self.chat_gen_driver_item();
+                }
+                Command::None
+            }
             Action::AskChat => {
                 if self.chat_connected() {
                     self.move_focus(Focus::Chat);
@@ -3652,7 +3738,13 @@ impl App {
         };
         let movable = |(id, s): &&(&str, &UnitState)| no_rust(s) && leaf(id);
         let waiting = states.iter().filter(movable).count();
-        if let Some((id, _)) = states.iter().find(movable) {
+        // A unit with its test program moves first; with none ready, the
+        // first unit is opened for its test program (§9.4).
+        if let Some((id, _)) = states
+            .iter()
+            .filter(movable)
+            .find(|(_, s)| !s.needs_test_program())
+        {
             return say(
                 format!(
                     "{waiting} unit{} no Rust yet — migrate the first, {id}: press Enter and \
@@ -3660,6 +3752,16 @@ impl App {
                     if waiting == 1 { " has" } else { "s have" }
                 ),
                 Some(Action::Migrate),
+            );
+        }
+        if let Some((id, _)) = states.iter().find(movable) {
+            return say(
+                format!(
+                    "{waiting} unit{} no Rust yet — {id} needs its test program first: open it, \
+                     then Make the test program",
+                    if waiting == 1 { " has" } else { "s have" }
+                ),
+                Some(Action::OpenUnit(id.to_string())),
             );
         }
         // Everything that can move is in Rust and green: what a person

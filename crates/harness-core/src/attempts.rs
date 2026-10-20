@@ -300,13 +300,47 @@ pub fn driver_attempt_id(
     model: &str,
     generate_request_key: &str,
 ) -> String {
+    driver_attempt_id_with(
+        unit,
+        unit_source,
+        provider_kind,
+        model,
+        generate_request_key,
+        None,
+    )
+}
+
+/// [`driver_attempt_id`] of a driver attempt with `requester` (the
+/// cockpit's chat, docs/COCKPIT-WRAPPER-DESIGN.md §9.4): unchanged without
+/// one; with one, `‖ NUL ‖ "requester:" requester` is mixed in, as
+/// [`attempt_id_with`] does, so a chat-requested driver attempt never
+/// shares a directory with a blind one of the same inputs.
+pub fn driver_attempt_id_with(
+    unit: &str,
+    unit_source: &str,
+    provider_kind: &str,
+    model: &str,
+    generate_request_key: &str,
+    requester: Option<&str>,
+) -> String {
     let mut hasher = blake3::Hasher::new();
     for part in [DRIVER_STAGE, unit, unit_source, provider_kind, model] {
         hasher.update(part.as_bytes());
         hasher.update(b"\0");
     }
     hasher.update(generate_request_key.as_bytes());
+    if let Some(requester) = requester {
+        hasher.update(b"\0requester:");
+        hasher.update(requester.as_bytes());
+    }
     format!("d-{}", &hasher.finalize().to_hex().to_string()[..12])
+}
+
+/// Whether `id` names a driver-generation attempt (`d-…`), whose record
+/// lives under `driver-attempts/` and whose hand-offs under
+/// `driver-traces/`.
+pub fn is_driver_attempt(id: &str) -> bool {
+    id.starts_with("d-")
 }
 
 /// `migration/units/<unit>/driver-attempts/<attempt-id>/`.
@@ -402,13 +436,25 @@ pub fn load_unit_driver_attempts(ledger: &Ledger, unit: &str) -> Result<Vec<Atte
 /// posing under another directory's name is refused, not trusted) and
 /// belong to `unit`. `None` when there is no such attempt.
 pub fn load_pinned(ledger: &Ledger, unit: &str, id: &str) -> Result<Option<AttemptRecord>, Error> {
+    load_pinned_in(attempt_dir(ledger, unit, id), unit, id)
+}
+
+/// [`load_pinned`] for a driver-generation attempt (`driver-attempts/`).
+pub fn load_pinned_driver(
+    ledger: &Ledger,
+    unit: &str,
+    id: &str,
+) -> Result<Option<AttemptRecord>, Error> {
+    load_pinned_in(driver_attempt_dir(ledger, unit, id), unit, id)
+}
+
+fn load_pinned_in(dir: PathBuf, unit: &str, id: &str) -> Result<Option<AttemptRecord>, Error> {
     if !crate::plan::is_clean_segment(id) {
         return Err(Error::Invariant(format!(
             "{:?} is not an attempt id",
             printable(id, 64)
         )));
     }
-    let dir = attempt_dir(ledger, unit, id);
     let record = match AttemptRecord::load(&dir) {
         Ok(record) => record,
         Err(e) if e.is_not_found() => return Ok(None),
@@ -830,6 +876,11 @@ mod tests {
         let d = driver_attempt_id("u1", "blake3:s", "anthropic", "m", "abcd1234");
         assert!(d.starts_with("d-") && d.len() == 14, "{d}");
         assert_ne!(&d[2..], &a[2..]);
+        // A chat-requested driver attempt: its own id; none: unchanged.
+        let chat = |r| driver_attempt_id_with("u1", "blake3:s", "anthropic", "m", "abcd1234", r);
+        assert_eq!(chat(None), d);
+        assert_ne!(chat(Some(REQUESTER_CHAT)), d);
+        assert!(is_driver_attempt(&d) && !is_driver_attempt(&a));
     }
 
     const GOLDEN_M3_ID: &str = "a-7189df7f664d";

@@ -49,6 +49,7 @@ pub const COCKPIT_TOOLS: &[&str] = &[
     "mcp__harness__harness_unit",
     "mcp__harness__harness_request",
     "mcp__harness__harness_migrate",
+    "mcp__harness__harness_gen_driver",
     "mcp__harness__harness_steer",
     "mcp__harness__harness_retry",
     "mcp__harness__harness_answer",
@@ -232,6 +233,7 @@ pub fn claude_missing(why: &str) -> bool {
 /// The acts the chat may ask for (short names).
 pub const ACT_TOOLS: &[&str] = &[
     "harness_migrate",
+    "harness_gen_driver",
     "harness_steer",
     "harness_retry",
     "harness_answer",

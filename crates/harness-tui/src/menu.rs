@@ -42,6 +42,9 @@ pub enum Action {
     Cancel,
     /// Migrate — ask in chat: the request typed into the chat's input.
     Migrate,
+    /// Make the test program — ask in chat: the request typed into the
+    /// chat's input (docs/COCKPIT-WRAPPER-DESIGN.md §9.4).
+    GenDriver,
     /// Ask in chat…: the chat focused.
     AskChat,
     /// The Project view's model work, asked in chat: the question typed
@@ -651,15 +654,38 @@ impl App {
             Selection::Unit(_) => owner.is_some_and(|u| migratable(&self.snapshot.units[u])),
             _ => false,
         };
+        // A unit whose test program is missing or out of date: Make the test
+        // program first, and Migrate greyed saying so (§9.4).
+        let needs_driver = match sel {
+            Selection::Unit(_) => owner
+                .and_then(|u| self.files.units.get(u))
+                .is_some_and(|i| i.state.needs_test_program()),
+            _ => false,
+        };
         let chat_off = self.chat_unavailable();
+        let draft = || {
+            (!self.chat.input.is_empty())
+                .then(|| "the chat has a draft — send or clear it first".to_string())
+        };
         self.check_chat_item(&mut items);
+        if needs_driver {
+            let mut it = item(
+                "Make the test program — ask in chat",
+                Action::GenDriver,
+                None,
+            );
+            it.model = true;
+            it.greyed = chat_off.clone().or_else(draft);
+            items.push(it);
+        }
         if offer_migrate {
             let mut it = item("Migrate — ask in chat", Action::Migrate, None);
             it.model = true;
-            it.greyed = chat_off.clone().or_else(|| {
-                (!self.chat.input.is_empty())
-                    .then(|| "the chat has a draft — send or clear it first".to_string())
-            });
+            it.greyed = if needs_driver {
+                Some("it has no test program yet — Make the test program first".to_string())
+            } else {
+                chat_off.clone().or_else(draft)
+            };
             items.push(it);
         }
         if self.chat_on {

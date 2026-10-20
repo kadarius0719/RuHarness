@@ -325,11 +325,19 @@ impl Stage for DriverStage<'_> {
         provider_kind: &str,
         model: &str,
         first_key: &str,
-        _requester: Option<&str>,
+        requester: Option<&str>,
     ) -> String {
-        // Driver attempts are never chat-requested: `Job::run` refuses a
-        // requester for this stage before any id is derived.
-        attempts::driver_attempt_id(unit, unit_source, provider_kind, model, first_key)
+        // A driver attempt the cockpit's chat asked for has its own id
+        // (docs/COCKPIT-WRAPPER-DESIGN.md §9.4); without one, the frozen
+        // derivation.
+        attempts::driver_attempt_id_with(
+            unit,
+            unit_source,
+            provider_kind,
+            model,
+            first_key,
+            requester,
+        )
     }
 
     fn judge(

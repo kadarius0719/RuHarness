@@ -286,8 +286,9 @@ impl<W: Write> Server<W> {
                     format!(
                         "The RuHarness migration ledger of a C→Rust migration, served to the \
                          chat inside the cockpit. harness_status, harness_unit and \
-                         harness_request read; harness_migrate, harness_steer, harness_retry \
-                         and harness_answer ASK the person, and the cockpit runs what they \
+                         harness_request read; harness_migrate, harness_gen_driver, \
+                         harness_steer, harness_retry and harness_answer ASK the person, and \
+                         the cockpit runs what they \
                          confirm; harness_map_questions reads the project map's open question \
                          and harness_map_answer records your answer to it as advice. {} {} {} \
                          {UNTRUSTED_RULE}",
@@ -1065,6 +1066,7 @@ mod tests {
                 "harness_unit",
                 "harness_request",
                 "harness_migrate",
+                "harness_gen_driver",
                 "harness_steer",
                 "harness_retry",
                 "harness_answer",
@@ -1085,6 +1087,7 @@ mod tests {
             v
         };
         assert_eq!(params("harness_migrate"), ["unit"]);
+        assert_eq!(params("harness_gen_driver"), ["unit"]);
         assert_eq!(params("harness_steer"), ["from", "steer", "unit"]);
         assert_eq!(params("harness_retry"), ["attempt", "unit"]);
         assert_eq!(
@@ -1116,6 +1119,7 @@ mod tests {
         // Every act is refused, whatever its arguments; nothing spawns.
         for (i, (tool, args)) in [
             ("harness_migrate", json!({"unit": "u001-katajainen"})),
+            ("harness_gen_driver", json!({"unit": "u001-katajainen"})),
             (
                 "harness_steer",
                 json!({"unit": "u001-katajainen", "from": "a-000000000000", "steer": "x"}),

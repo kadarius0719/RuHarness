@@ -485,12 +485,29 @@ pub fn cockpit_tools() -> Vec<Tool> {
             "Ask to migrate a unit",
             "migrate a unit: a model call recorded as asked in chat (`harness migrate <unit> \
              --no-promote --requester=chat`), which never promotes; with the hand-off provider \
-             its model turns are answered by you, here",
+             its model turns are answered by you, here. A unit whose `driver` is none or stale \
+             has no test program yet: ask for harness_gen_driver first",
             vec![p(
                 "unit",
                 Kind::Str,
                 true,
                 "The unit id (harness_status lists them): one with no Rust accepted yet, or failing.",
+            )],
+        ),
+        act(
+            "harness_gen_driver",
+            "Ask to make a unit's test program",
+            "make a unit's test program — its differential driver, a small C program that \
+             calls the unit's functions and prints what comes back — through a model call \
+             recorded as asked in chat (`harness gen-driver <unit> --requester=chat`); the \
+             judge checks it against the C before it is kept; with the hand-off provider its \
+             model turns are answered by you, here. A unit whose `driver` is `none` or `stale` \
+             needs one before it can be migrated",
+            vec![p(
+                "unit",
+                Kind::Str,
+                true,
+                "The unit id (harness_status lists them): one whose `driver` is none or stale.",
             )],
         ),
         act(

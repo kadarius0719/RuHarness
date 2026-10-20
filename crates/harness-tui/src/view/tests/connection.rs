@@ -260,8 +260,10 @@ fn while_the_chat_is_unavailable_its_items_are_greyed_and_never_recommended() {
     choose(&mut app, "Check the chat's connection…");
     assert_eq!(dialog(&app).0, "Claude Code is not signed in");
 
-    // A tool's screen: the planned unit's Next step says why, and leads to
-    // the walk-through; Migrate is greyed and not recommended.
+    // A tool's screen: the Next step of a unit with no test program says
+    // why, and leads to the walk-through; Make the test program is greyed
+    // with it and not recommended, Migrate greyed for want of a test
+    // program.
     let mut tool = crate::app::tests::app_of("targets/zopfli", "conn-tool");
     tool.chat_on = true;
     tool.chat.bins = Ok(crate::chat::runtime::Binaries {
@@ -273,7 +275,7 @@ fn while_the_chat_is_unavailable_its_items_are_greyed_and_never_recommended() {
     let next = tool.advice(&tool.selection.clone()).unwrap();
     assert_eq!(
         next.text,
-        format!("no Rust yet — the chat does that, and it is unavailable: {reason}")
+        format!("Make the test program — the chat does that, and it is unavailable: {reason}")
     );
     assert_eq!(next.action, Some(Action::CheckChat));
     let project = tool.next_step().map(|a| tool.unless_chat_down(a)).unwrap();
@@ -288,7 +290,16 @@ fn while_the_chat_is_unavailable_its_items_are_greyed_and_never_recommended() {
         .iter()
         .find(|i| i.label == "Migrate — ask in chat")
         .unwrap();
-    assert_eq!(migrate.greyed.as_deref(), Some(reason));
+    assert_eq!(
+        migrate.greyed.as_deref(),
+        Some("it has no test program yet — Make the test program first")
+    );
+    let make = m
+        .items
+        .iter()
+        .find(|i| i.label == "Make the test program — ask in chat")
+        .unwrap();
+    assert_eq!(make.greyed.as_deref(), Some(reason));
 }
 
 /// Check again: `claude` found and answering — the problem goes; after a

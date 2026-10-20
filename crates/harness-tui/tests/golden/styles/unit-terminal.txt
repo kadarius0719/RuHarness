@@ -12,59 +12,57 @@
   @5-14 fg Blue BOLD "Units (11)"
   @23-23 fg Blue BOLD "│"
   @27-34 fg - BOLD "u-cache"
-│    ▸ ✓? u001-katajai…││Next: No Rust yet — ask the chat to migrate it (a     │
+│    ▸ ✓? u001-katajai…││Next: Make the test program — Enter, then ask in chat │
   @0-0 fg Blue BOLD "│"
   @7-9 fg Green NONE "✓?"
   @23-23 fg Blue BOLD "│"
   @25-29 fg Cyan BOLD "Next:"
-  @30-73 fg - BOLD "No Rust yet — ask the chat to migrate it (a"
-│    ▸ ◇ u-c… no test …││model writes the Rust, the judge checks it, you accept│
+  @30-77 fg - BOLD "Make the test program — Enter, then ask in chat"
+│    ▸ ◇ u-c… no test …││                                                      │
   @0-0 fg Blue BOLD "│"
   @1-22 fg - BOLD | REVERSED "▸ ◇ u-c… no test …"
   @23-23 fg Blue BOLD "│"
-  @25-78 fg - BOLD "model writes the Rust, the judge checks it, you accept"
-│    ▸ ◇ u-hash        ││it)                                                   │
+│    ▸ ◇ u-hash        ││5 exported functions: ZopfliCacheToSublen (22 lines), │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
-  @25-27 fg - BOLD "it)"
-│    ▸ ◇ u-lz77        ││                                                      │
+│    ▸ ◇ u-lz77        ││ZopfliCleanCache (5 lines), ZopfliInitCache (19       │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
-│    ▸ ◇ u-tree        ││5 exported functions: ZopfliCacheToSublen (22 lines), │
+│    ▸ ◇ u-tree        ││lines), ZopfliMaxCachedSublen (11 lines),             │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
-│    ▸ ◇ u-blocksplitt…││ZopfliCleanCache (5 lines), ZopfliInitCache (19       │
+│    ▸ ◇ u-blocksplitt…││ZopfliSublenToCache (32 lines)                        │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
-│    ▸ ◇ u-gzip_contai…││lines), ZopfliMaxCachedSublen (11 lines),             │
+│    ▸ ◇ u-gzip_contai…││Its C: 1 file — src/zopfli/cache.c                    │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
-│    ▸ ◇ u-util        ││ZopfliSublenToCache (32 lines)                        │
+│    ▸ ◇ u-util        ││No Rust yet                                           │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
-│    ▸ ◇ u-zlib_contai…││Its C: 1 file — src/zopfli/cache.c                    │
+│    ▸ ◇ u-zlib_contai…││5 of your features run it · still C — see Features    │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
-│    ▸ ◇ u-zopfli_lib  ││No Rust yet                                           │
+│    ▸ ◇ u-zopfli_lib  ││Attempts: none yet                                    │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
-│    ▸ ◇ u-zopfli_bin  ││5 of your features run it · still C — see Features    │
+  @25-33 fg Blue BOLD "Attempts:"
+│    ▸ ◇ u-zopfli_bin  ││                                                      │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
-│  ▾ Features (7)      ││Attempts: none yet                                    │
+│  ▾ Features (7)      ││▸ C source (Tab to the View, then Enter)              │
   @0-0 fg Blue BOLD "│"
   @5-16 fg Blue BOLD "Features (7)"
   @23-23 fg Blue BOLD "│"
-  @25-33 fg Blue BOLD "Attempts:"
+  @25-64 fg Blue BOLD "▸ C source (Tab to the View, then Enter)"
 │      ◉ Compress to g…││                                                      │
   @0-0 fg Blue BOLD "│"
   @7-8 fg Green NONE "◉"
   @23-23 fg Blue BOLD "│"
-│      ◉ Compress to z…││▸ C source (Tab to the View, then Enter)              │
+│      ◉ Compress to z…││                                                      │
   @0-0 fg Blue BOLD "│"
   @7-8 fg Green NONE "◉"
   @23-23 fg Blue BOLD "│"
-  @25-64 fg Blue BOLD "▸ C source (Tab to the View, then Enter)"
 │      ◉ Compress to r…││                                                      │
   @0-0 fg Blue BOLD "│"
   @7-8 fg Green NONE "◉"

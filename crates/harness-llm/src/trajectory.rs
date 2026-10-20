@@ -371,11 +371,6 @@ impl<'a> Job<'a> {
         let provider = params.provider;
         let texts = self.stage.texts();
         match params.requester {
-            Some(_) if texts.stage.is_some() => {
-                return Err(Error::Invariant(
-                    "a driver attempt is never chat-requested".into(),
-                ))
-            }
             Some(r) if r != harness_core::attempts::REQUESTER_CHAT => {
                 return Err(Error::Invariant(format!(
                     "an unknown requester {:?}",

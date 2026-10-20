@@ -10,40 +10,41 @@
   @11-22 fg - BOLD | REVERSED "✓0/13 (+1 …"
   @23-23 fg Blue BOLD "│"
   @38-54 fg Cyan BOLD "Test program 1/11"
-│  ▾ Units (11)        ││Next: 3 units have no Rust yet — migrate the first,   │
+│  ▾ Units (11)        ││Next: 3 units have no Rust yet — u-cache needs its    │
   @0-0 fg Blue BOLD "│"
   @5-14 fg Blue BOLD "Units (11)"
   @23-23 fg Blue BOLD "│"
   @25-29 fg Cyan BOLD "Next:"
-  @30-75 fg - BOLD "3 units have no Rust yet — migrate the first,"
-│    ▸ ✓? u001-katajai…││u-cache: press Enter and choose Migrate — ask in chat │
+  @30-74 fg - BOLD "3 units have no Rust yet — u-cache needs its"
+│    ▸ ✓? u001-katajai…││test program first: open it, then Make the test       │
   @0-0 fg Blue BOLD "│"
   @7-9 fg Green NONE "✓?"
   @23-23 fg Blue BOLD "│"
-  @25-77 fg - BOLD "u-cache: press Enter and choose Migrate — ask in chat"
-│    ▸ ◇ u-cache       ││                                                      │
+  @25-71 fg - BOLD "test program first: open it, then Make the test"
+│    ▸ ◇ u-cache       ││program                                               │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
-│    ▸ ◇ u-hash        ││26 files scanned                                      │
+  @25-31 fg - BOLD "program"
+│    ▸ ◇ u-hash        ││                                                      │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
-│    ▸ ◇ u-lz77        ││Units (11): 1 ✓? verified, origin not recorded · 10 ◇ │
+│    ▸ ◇ u-lz77        ││26 files scanned                                      │
+  @0-0 fg Blue BOLD "│"
+  @23-23 fg Blue BOLD "│"
+│    ▸ ◇ u-tree        ││Units (11): 1 ✓? verified, origin not recorded · 10 ◇ │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
   @25-35 fg Blue BOLD "Units (11):"
-│    ▸ ◇ u-tree        ││no test program                                       │
+│    ▸ ◇ u-blocksplitt…││no test program                                       │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
-│    ▸ ◇ u-blocksplitt…││                                                      │
+│    ▸ ◇ u-gzip_contai…││                                                      │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
-│    ▸ ◇ u-gzip_contai…││Features: 7 — 5 hold so far, 2 still all C            │
+│    ▸ ◇ u-util        ││Features: 7 — 5 hold so far, 2 still all C            │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
   @25-33 fg Blue BOLD "Features:"
-│    ▸ ◇ u-util        ││                                                      │
-  @0-0 fg Blue BOLD "│"
-  @23-23 fg Blue BOLD "│"
 │    ▸ ◇ u-zlib_contai…││                                                      │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"

@@ -364,6 +364,9 @@ fn unit_head(snapshot: &Snapshot, u: &UnitView) -> Value {
     v["id"] = short("unit id", &u.unit.id);
     v["provenance"] = provenance(&u.provenance);
     v["has_crate"] = Value::Bool(u.crate_dir.is_some());
+    // Its test program (docs/COCKPIT-WRAPPER-DESIGN.md §9.4): none,
+    // validated or stale — the chat asks for one before a migrate.
+    v["driver"] = json!(u.driver.word());
     v["blind_hand_off_pending"] = Value::Bool(blind_pending(snapshot, u) > 0);
     v
 }
@@ -812,9 +815,16 @@ pub fn request(
     if !harness_core::plan::is_clean_segment(unit) {
         return Err("`unit` must be a clean id".into());
     }
-    let record = attempts::load_pinned(ledger, unit, attempt)
-        .map_err(|e| e.to_string())?
-        .ok_or("no such attempt of this unit")?;
+    // A driver-generation attempt (`d-…`, the cockpit's Make the test
+    // program) keeps its records and hand-offs apart from migrate's.
+    let driver = attempts::is_driver_attempt(attempt);
+    let record = if driver {
+        attempts::load_pinned_driver(ledger, unit, attempt)
+    } else {
+        attempts::load_pinned(ledger, unit, attempt)
+    }
+    .map_err(|e| e.to_string())?
+    .ok_or("no such attempt of this unit")?;
     if record.requester.as_deref() != Some(attempts::REQUESTER_CHAT) {
         return Err(
             "this attempt was not asked for by a chat: its hand-offs are not read here (a \
@@ -830,7 +840,7 @@ pub fn request(
     }
     let dir = ledger
         .unit_dir(unit)
-        .join("traces")
+        .join(if driver { "driver-traces" } else { "traces" })
         .join(attempts::CHAT_TRACES);
     let request =
         harness_core::traces::load_pending(&dir, key).map_err(|e| format!("request {key}: {e}"))?;
@@ -2126,6 +2136,9 @@ mod tests {
 
         let v = unit(&snap, "u-lib", None, None).unwrap();
         assert_eq!(v["shown"]["kind"], "unit-crate");
+        // Its test program, for the chat (cockpit design §9.4).
+        assert_eq!(v["unit"]["driver"], "validated");
+        assert_eq!(u["driver"], "validated");
         assert!(is_untrusted(&v["shown"]["crate_path"]));
         assert_eq!(v["verdict"]["green"], true);
         for c in v["verdict"]["checks"].as_array().unwrap() {

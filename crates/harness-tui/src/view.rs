@@ -7183,15 +7183,58 @@ mod tests {
         assert!(!screen.contains(CODE_FOLDED), "{screen}");
     }
 
-    /// A planned unit's View says "No Rust yet" and its Next step; the
-    /// project's says how many units have no Rust and which is first.
+    /// A unit with no test program says "No Rust yet" and leads to its test
+    /// program (§9.4): its Next step, its menu's first item, Migrate greyed
+    /// saying why; the project's Next step opens it. Once it has one, the
+    /// Next step is its Rust.
     #[test]
-    fn a_planned_unit_says_no_rust_yet() {
+    fn a_unit_with_no_test_program_leads_to_it() {
         let mut app = app_of("targets/zopfli", "planned-next");
+        app.chat_on = true;
+        app.chat.bins = Ok(crate::chat::runtime::Binaries {
+            claude: "/bin/sh".into(),
+            mcp: "/bin/sh".into(),
+        });
         app.select(Selection::Unit("u-cache".into()));
         let screen = text(&render(&mut app, 160, 40));
         assert!(screen.contains("◇ u-cache no test program "), "{screen}");
         assert!(screen.contains("No Rust yet"), "{screen}");
+        assert!(
+            screen.contains("Next: Make the test program — Enter, then ask in chat"),
+            "{screen}"
+        );
+        app.open_menu();
+        let Mode::Menu(m) = &app.mode else {
+            panic!("a menu")
+        };
+        assert_eq!(m.items[0].label, "Make the test program — ask in chat");
+        assert_eq!(m.items[0].greyed, None);
+        let migrate = m
+            .items
+            .iter()
+            .find(|i| i.label == "Migrate — ask in chat")
+            .expect("Migrate listed");
+        assert_eq!(
+            migrate.greyed.as_deref(),
+            Some("it has no test program yet — Make the test program first")
+        );
+        app.mode = Mode::Normal;
+        let next = app.next_step().expect("a Next step");
+        assert!(
+            next.text.ends_with(
+                "u-cache needs its test program first: open it, then Make the test program"
+            ),
+            "{}",
+            next.text
+        );
+        assert_eq!(
+            next.action,
+            Some(crate::menu::Action::OpenUnit("u-cache".into()))
+        );
+        crate::app::asks::tests::give_test_program(&mut app, "u-cache");
+        app.select(Selection::Unit("u-cache".into()));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(screen.contains("◇ u-cache test program ready "), "{screen}");
         assert!(
             screen.contains("Next: No Rust yet — ask the chat to migrate it"),
             "{screen}"

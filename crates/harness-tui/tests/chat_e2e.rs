@@ -146,6 +146,7 @@ fn idle_recording(path: &Path) {
         "mcp__harness__harness_unit",
         "mcp__harness__harness_request",
         "mcp__harness__harness_migrate",
+        "mcp__harness__harness_gen_driver",
         "mcp__harness__harness_steer",
         "mcp__harness__harness_retry",
         "mcp__harness__harness_answer",
