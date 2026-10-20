@@ -941,6 +941,113 @@ Three screens (the first screen, a unit's View, the Project view) are kept per t
 styles in `tests/golden/styles/`, so a change of colour is a reviewed diff; the text goldens hold
 the words, and are unchanged by the palette.
 
+### 9.4 The guided path: the journey on every screen, the test program in the cockpit, dialogs that stand out, panes that fit (2026-10-20)
+
+The person's principle, after their first unit (2026-10-20): the cockpit drives a person through
+the workflow; leaving them to find the steps makes newer users lost; design for that first, and
+keep the depth for those who want it. What their run showed: a planned unit's Next step said
+"ask the chat to migrate it", the migrate was refused because the unit had no test program, the
+refusal spoke of `[unit.oracle] kind` and `c-abi-differential`, and the only way to the missing
+step was the command line. Also seen: a dialog in the same green on the same black as the page
+behind it, and a Files pane of 30 columns on a 281-column terminal with the names cut.
+
+**The journey.** The stages a program goes through, in the cockpit's words, are fixed:
+
+| | stage | done when | where |
+|---|---|---|---|
+| 1 | Map | the project is mapped | Project view |
+| 2 | Configure | the build configuration is stated (not a guess) | Project view |
+| 3 | Accept | the program is a tool | Project view |
+| 4 | Scan | the tool's facts are fresh | tool's screen |
+| 5 | Plan | the plan is current | tool's screen |
+| 6 | Test program | the unit has a validated driver | unit |
+| 7 | Rust | the unit has a green attempt | unit |
+| 8 | Accept | the attempt is promoted and verified | unit |
+
+Stages 1–3 are the project's, 4–5 the tool's, 6–8 each unit's. `done` means the whole tool is
+verified.
+
+- **The journey line.** Under the View's title, on every screen, one line says where the person
+  is: `Map ✓ · Configure ✓ · Accept ✓ · Scan ✓ · Plan ✓ · Test program ○ · Rust · Accept` — a
+  done stage with `✓` in the good colour, the current stage with `○` in the accent (the only
+  accent on the line), later stages plain in the label colour. On a unit's screen the last three
+  are that unit's; on the tool's screen with no unit selected they are the tool's as a whole
+  (`Test program 2/4 · Rust 1/4 · Accept 1/4`, counts of units past each stage); on the Project
+  view only the first three show, then `then: scan, plan, and each piece`. The Next step below it
+  always names the current stage's action. At under 100 columns the line folds to the current
+  stage alone: `Step 6 of 8: Test program`.
+- **A unit's state word says the stage**, not the mechanism: `◇ no test program`, `◇ test program
+  ready`, `◐ Rust tried`, `✓? Rust green — accept it`, `✓ done`, besides `✗ failing`, `⚠ needs
+  attention`, `⊘ blocked` as today. (`planned` and `tried` go: they said nothing about what to do.)
+  The Files pane's unit rows, the unit's card and the tool's summary use these words.
+
+**The test program in the cockpit.** The missing stage:
+
+- **The driver state is read**: from the plan's `[unit.oracle]` (kind, driver, rust_crate) and
+  the driver's validation record, as `harness gen-driver` leaves them; `UnitView` carries
+  `driver: None | Validated | Stale`.
+- **The act.** `Act::GenDriver`, "Make the test program — ask in chat", on a unit without one,
+  through the chat exactly as **Migrate — ask in chat**: harness-mcp gains `harness_gen_driver`
+  (the shape of `harness_migrate`: one `unit`), which asks the cockpit; the cockpit's dialog —
+  "Make u-checksum's test program?": "The chat writes a small C program that calls
+  `_LZG_CalcChecksum` with chosen inputs and prints what comes back. The judge runs it against
+  the C to check it works, then keeps it as the unit's test program. It writes: the driver under
+  migration/tools/t-lzg/units/u-checksum/ and the plan's entry for it." then the argv — arms and
+  runs `harness --json gen-driver <unit> --tool <id> --requester chat` as migrate does, and the
+  chat answers the hand-off through `harness_request` / `harness_answer`; `gen-driver` gains the
+  same `--requester` / `--answer` / `--answer-key` flags as `migrate` (its parameters already
+  hold them). The outcome line: "u-checksum's test program is ready — next, its Rust" or the
+  validation's failure in words.
+- **Migrate is greyed** on a unit with no test program: "it has no test program yet — Make the
+  test program first". The Next step there is `Next: Make the test program — Enter, then ask in
+  chat`. The chat's `harness_unit` reports `driver` (none / validated / stale), and the brief's
+  "Migrate this" checks it first: no driver → say so, ask for the test program through
+  `harness_gen_driver` (after saying so), then the migrate; never the command line for a step the
+  cockpit has.
+- **The refusal in words.** `migrate`'s refusal for a unit with no `[unit.oracle]` reads
+  "u-checksum has no test program yet: make one first (`harness gen-driver u-checksum`, or Make
+  the test program in the cockpit)"; the other shapes (a kind that is not differential, no
+  driver, no crate name) say what is missing in the same words. The status line and the chat's
+  outcome line show that sentence.
+
+**Dialogs that stand out.** A terminal has no opacity; it has colours per cell:
+
+- **The backdrop.** While a dialog, a menu or the help is open, every pane behind it is drawn in
+  one new role, `backdrop`: the label grey (248 / 242 in the designed themes; `bright black` in
+  the terminal theme, `dim` in mono), no bold, no state colours, no reverse — the page keeps its
+  shape, the dialog holds every bright thing.
+- **The panel.** The dialog's cells get a background in a second new role, `panel`: one shade off
+  the page in the designed themes (235 on dark, 254 on light), none in terminal and mono (the
+  backdrop alone does it there). Its border and title in the section role, bold; its body in the
+  text role; the question (the title repeated when it does not fit) bold; the `Command:` line in
+  the label role, not bold; the armed button in the accent role reversed, the safe button plain
+  reversed. The same for menus (border, title, the recommended item in the accent).
+- Both roles are overridable in `cockpit.toml` like every other, and the contrast test covers
+  them (backdrop text against the page, text against the panel).
+
+**Panes that fit.** Widths follow the content, within limits:
+
+- **The Files / Project pane** is as wide as its longest row needs — the fold mark, the name, two
+  spaces, the state word or the count — measured over the rows it holds now, clamped between
+  30 and a third of the screen. The pane's title shortens the path before the tool's name, never
+  the name (`…/lzg-map · tool t-benchmark`). A name that still does not fit is cut in the middle
+  (`u-check…sum`), never the state word. The counts column (`✓0/4`, `+4`) moves into the state
+  column's place only on group rows, where there is no state word.
+- **The chat column**, with the focus, takes half of what the Files pane leaves (today's rule);
+  without it, the larger of 64 and a third of the leftover.
+- **The View** keeps at least 80.
+- `files_width = N` in `cockpit.toml` fixes the Files pane's width (within 24 and half the
+  screen); absent, the content rule.
+- Goldens at 100, 120, 200 and 280 columns.
+
+**Tests.** The journey line on each screen and its fold; the unit state words; the driver state
+read from a plan with and without one; `Act::GenDriver`'s dialog, argv and outcome (synthetic
+harness, as migrate's tests); `harness_gen_driver` in harness-mcp (listed, shaped, refused when
+busy, like `harness_migrate`); Migrate greyed with its reason and the Next step on a driverless
+unit; the refusal's words; the backdrop and panel styles per theme and the contrast test; the
+pane widths at the four sizes and with `files_width`. The chat's brief changes, so the live chat
+tests are the person's to run once.
+
 ## 10. The chat pane
 
 Built 2026-09-28 in its own design: docs/CHAT-PANE-DESIGN.md, which governs the chat's place on
