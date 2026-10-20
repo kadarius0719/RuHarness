@@ -495,25 +495,7 @@ mod tests {
     /// `view::tests::golden`).
     fn golden(name: &str, app: &App, buffer: &Buffer) {
         let got = text(buffer).replace(&app.config.target.display().to_string(), "<target>");
-        let got: String = {
-            let mut out = String::new();
-            let mut rest = got.as_str();
-            while let Some(i) = rest.find("harness-tui-") {
-                out.push_str(&rest[..i + "harness-tui-".len()]);
-                rest = &rest[i + "harness-tui-".len()..];
-                let end = rest
-                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
-                    .unwrap_or(rest.len());
-                out.extend(
-                    rest[..end]
-                        .chars()
-                        .map(|c| if c.is_ascii_digit() { '0' } else { c }),
-                );
-                rest = &rest[end..];
-            }
-            out.push_str(rest);
-            out
-        };
+        let got = crate::view::tests::mask_scratch(&got);
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/golden")
             .join(name);
@@ -679,8 +661,18 @@ mod tests {
             );
             a.focus = crate::app::Focus::Files;
             render(&mut a, w, 24);
-            let chat = pane(&a, crate::app::Focus::Chat);
-            assert!(chat.width <= CHAT_COLUMN_MAX, "{w}: {chat:?}");
+            let (files, chat) = (
+                pane(&a, crate::app::Focus::Files),
+                pane(&a, crate::app::Focus::Chat),
+            );
+            // Without the focus: the larger of 64 and a third of what the
+            // left pane leaves (§9.4).
+            let left = w - files.width;
+            assert_eq!(
+                chat.width,
+                (left / 3).max(CHAT_COLUMN_MAX).min(left - VIEW_KEEPS),
+                "{w}: {chat:?}"
+            );
             assert!(pane(&a, crate::app::Focus::View).width >= VIEW_KEEPS);
         }
         // On the person's 200 columns: the chat with the focus is wider

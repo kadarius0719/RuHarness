@@ -1,25 +1,25 @@
 ┌ Files ───────────────┐┌ harness-tui-heads00-0000000000 · 0 of 13 C files in R┐
-│▾ harness… ✓0/13 (+1 …││Step 6 of 8: Test program 1/11                        │
+│▾ harn…000 ✓0/13 (+1 …││Step 6 of 8: Test program 1/11                        │
 │  ▾ Units (11)        ││Next: 3 units have no Rust yet — u-cache needs its    │
-│    ▸ ✓? u001-katajai…││test program first: open it, then Make the test       │
+│    ▸ ✓? u001-k…jainen││test program first: open it, then Make the test       │
 │    ▸ ◇ u-cache       ││program                                               │
 │    ▸ ◇ u-hash        ││                                                      │
 │    ▸ ◇ u-lz77        ││26 files scanned                                      │
 │    ▸ ◇ u-tree        ││Units (11): 1 ✓? verified, origin not recorded · 10 ◇ │
-│    ▸ ◇ u-blocksplitt…││no test program                                       │
-│    ▸ ◇ u-gzip_contai…││                                                      │
+│    ▸ ◇ u-block…queeze││no test program                                       │
+│    ▸ ◇ u-gzip_…tainer││                                                      │
 │    ▸ ◇ u-util        ││Features: 7 — 5 hold so far, 2 still all C            │
-│    ▸ ◇ u-zlib_contai…││                                                      │
+│    ▸ ◇ u-zlib_…tainer││                                                      │
 │    ▸ ◇ u-zopfli_lib  ││                                                      │
 │    ▸ ◇ u-zopfli_bin  ││                                                      │
 │  ▾ Features (7)      ││                                                      │
-│      ◉ Compress to g…││                                                      │
-│      ◉ Compress to z…││                                                      │
-│      ◉ Compress to r…││                                                      │
-│      ◉ Say what it d…││                                                      │
-│      ◉ Compress quic…││                                                      │
+│      ◉ Compres…o gzip││                                                      │
+│      ◉ Compres…o zlib││                                                      │
+│      ◉ Compres…eflate││                                                      │
+│      ◉ Say wha…t does││                                                      │
+│      ◉ Compres…uickly││                                                      │
 │      ◌ Show the help ││                                                      │
-│      ◌ Report a miss…││                                                      │
+│      ◌ Report …g file││                                                      │
 │    Speed — not set up││                                                      │
 │  ▸ src/ ✓0/13 (+1 ✓?)││                                                      │
 │                      ││                                                      │

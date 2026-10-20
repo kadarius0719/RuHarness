@@ -1162,6 +1162,7 @@ fn main() -> ExitCode {
     }
     app.mouse = args.mouse;
     app.palette = palette;
+    app.files_width = settings.files_width;
     for why in &settings.refused {
         app.say(why);
     }

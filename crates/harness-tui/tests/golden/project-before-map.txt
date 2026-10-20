@@ -1,30 +1,30 @@
-┌ Project ─────────────────────────┐┌ liblzg · not mapped yet ─────────────────────────────────────────────────────────┐
-│Map the project                   ││Map ○ · Configure · Accept · then: scan, plan, and each piece                     │
-│                                  ││Next: Map the project — Enter                                                     │
-│                                  ││                                                                                  │
-│                                  ││Nothing is mapped yet.                                                            │
-│                                  ││Mapping finds its programs and libraries, the files each one needs, what they     │
-│                                  ││share, and whether each program links. It compiles in the sandbox, runs nothing,  │
-│                                  ││and writes only under migration/.                                                 │
-│                                  ││                                                                                  │
-│                                  ││                                                                                  │
-│                                  ││                                                                                  │
-│                                  ││                                                                                  │
-│                                  ││                                                                                  │
-│                                  ││                                                                                  │
-│                                  ││                                                                                  │
-│                                  ││                                                                                  │
-│                                  ││                                                                                  │
-│                                  ││                                                                                  │
-│                                  ││                                                                                  │
-│                                  ││                                                                                  │
-│                                  ││                                                                                  │
-│                                  ││                                                                                  │
-│                                  ││                                                                                  │
-│                                  ││                                                                                  │
-│                                  ││                                                                                  │
-│                                  ││                                                                                  │
-└──────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────┘
+┌ Project ───────────────────┐┌ liblzg · not mapped yet ───────────────────────────────────────────────────────────────┐
+│Map the project             ││Map ○ · Configure · Accept · then: scan, plan, and each piece                           │
+│                            ││Next: Map the project — Enter                                                           │
+│                            ││                                                                                        │
+│                            ││Nothing is mapped yet.                                                                  │
+│                            ││Mapping finds its programs and libraries, the files each one needs, what they share, and│
+│                            ││whether each program links. It compiles in the sandbox, runs nothing, and writes only   │
+│                            ││under migration/.                                                                       │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+└────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────┘
  Ready — ↑↓ to choose a row, Enter for what you can do
 
  ↑↓ move   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit

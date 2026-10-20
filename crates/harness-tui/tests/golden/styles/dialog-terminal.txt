@@ -1,34 +1,34 @@
-┌ Files ───────────────┐┌ u-lib · done ────────────────────────────────────────────────────────────┐
-  @0-99 fg DarkGray NONE "┌ Files ───────────────┐┌ u-lib · done ────────────────────────────────────────────────────────────┐"
-│▾ harness-tui-th… ✓1/1││All 8 steps done ✓                                                        │
-  @0-99 fg DarkGray NONE "│▾ harness-tui-th… ✓1/1││All 8 steps done ✓                                                        │"
-│  ▾ Units (1)         ││✓ u-lib done                                                              │
-  @0-99 fg DarkGray NONE "│  ▾ Units (1)         ││✓ u-lib done                                                              │"
-│    ▸ ✓ u-lib     done││Next: In Rust and checked — nothing to do                                 │
-  @0-99 fg DarkGray NONE "│    ▸ ✓ u-lib     done││Next: In Rust and checked — nothing to do                                 │"
-│    Features (none ye…││                                                                          │
-  @0-99 fg DarkGray NONE "│    Features (none ye…││                                                                          │"
-│    Speed — not set up││1 exported function: read_scalefactors (44 lines)                         │
-  @0-99 fg DarkGray NONE "│    Speed — not set up││1 exported function: read_scalefactors (44 lines)                         │"
+┌ Files ─────────────────────┐┌ u-lib · done ──────────────────────────────────────────────────────┐
+  @0-99 fg DarkGray NONE "┌ Files ─────────────────────┐┌ u-lib · done ──────────────────────────────────────────────────────┐"
+│▾ harness-tu…0000000000 ✓1/1││All 8 steps done ✓                                                  │
+  @0-99 fg DarkGray NONE "│▾ harness-tu…0000000000 ✓1/1││All 8 steps done ✓                                                  │"
+│  ▾ Units (1)               ││✓ u-lib done                                                        │
+  @0-99 fg DarkGray NONE "│  ▾ Units (1)               ││✓ u-lib done                                                        │"
+│    ▸ ✓ u-lib           done││Next: In Rust and checked — nothing to do                           │
+  @0-99 fg DarkGray NONE "│    ▸ ✓ u-lib           done││Next: In Rust and checked — nothing to do                           │"
+│    Features (none yet)     ││                                                                    │
+  @0-99 fg DarkGray NONE "│    Features (none yet)     ││                                                                    │"
+│    Speed — not set up      ││1 exported function: read_scalefactors (44 lines)                   │
+  @0-99 fg DarkGray NONE "│    Speed — not set up      ││1 exported function: read_scalefactors (44 lines)                   │"
 │  ▸ test_ca┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐           │
   @0-11 fg DarkGray NONE "│  ▸ test_ca"
   @12-87 fg Blue BOLD "┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐"
   @88-99 fg DarkGray NONE "│"
-│           │Builds u-lib's Rust and runs it against the C in the sandbox.             │           │
+│           │Builds u-lib's Rust and runs it against the C in the sandbox.             │sh         │
+  @0-11 fg DarkGray NONE "│"
+  @12-12 fg Blue BOLD "│"
+  @87-87 fg Blue BOLD "│"
+  @88-99 fg DarkGray NONE "sh         │"
+│           │Writes units/u-lib/oracle-latest.json and .md (and oracle-last-green.json │ tree)     │
+  @0-11 fg DarkGray NONE "│"
+  @12-12 fg Blue BOLD "│"
+  @87-87 fg Blue BOLD "│"
+  @88-99 fg DarkGray NONE "tree)     │"
+│           │when green) and u-lib's status in plan.toml: green → verified; red → a    │           │
   @0-11 fg DarkGray NONE "│"
   @12-12 fg Blue BOLD "│"
   @87-87 fg Blue BOLD "│"
   @88-99 fg DarkGray NONE "│"
-│           │Writes units/u-lib/oracle-latest.json and .md (and oracle-last-green.json │           │
-  @0-11 fg DarkGray NONE "│"
-  @12-12 fg Blue BOLD "│"
-  @87-87 fg Blue BOLD "│"
-  @88-99 fg DarkGray NONE "│"
-│           │when green) and u-lib's status in plan.toml: green → verified; red → a    │s only     │
-  @0-11 fg DarkGray NONE "│"
-  @12-12 fg Blue BOLD "│"
-  @87-87 fg Blue BOLD "│"
-  @88-99 fg DarkGray NONE "s only     │"
 │           │verified unit becomes "in progress" (a merged one keeps its status).      │           │
   @0-11 fg DarkGray NONE "│"
   @12-12 fg Blue BOLD "│"
@@ -71,12 +71,12 @@
   @0-11 fg DarkGray NONE "│"
   @12-87 fg Blue BOLD "└──────────────────────────────────────────────────────────────────────────┘"
   @88-99 fg DarkGray NONE "│"
-│                      ││                                                                          │
-  @0-99 fg DarkGray NONE "│                      ││                                                                          │"
-│                      ││                                                                          │
-  @0-99 fg DarkGray NONE "│                      ││                                                                          │"
-└──────────────────────┘└──────────────────────────────────────────────────────────────────────────┘
-  @0-99 fg DarkGray NONE "└──────────────────────┘└──────────────────────────────────────────────────────────────────────────┘"
+│                            ││                                                                    │
+  @0-99 fg DarkGray NONE "│                            ││                                                                    │"
+│                            ││                                                                    │
+  @0-99 fg DarkGray NONE "│                            ││                                                                    │"
+└────────────────────────────┘└────────────────────────────────────────────────────────────────────┘
+  @0-99 fg DarkGray NONE "└────────────────────────────┘└────────────────────────────────────────────────────────────────────┘"
  Ready.
   @0-99 fg DarkGray NONE "Ready."
 

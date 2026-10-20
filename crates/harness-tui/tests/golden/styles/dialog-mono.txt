@@ -1,34 +1,34 @@
-┌ Files ───────────────┐┌ u-lib · done ────────────────────────────────────────────────────────────┐
-  @0-99 fg - DIM "┌ Files ───────────────┐┌ u-lib · done ────────────────────────────────────────────────────────────┐"
-│▾ harness-tui-th… ✓1/1││All 8 steps done ✓                                                        │
-  @0-99 fg - DIM "│▾ harness-tui-th… ✓1/1││All 8 steps done ✓                                                        │"
-│  ▾ Units (1)         ││✓ u-lib done                                                              │
-  @0-99 fg - DIM "│  ▾ Units (1)         ││✓ u-lib done                                                              │"
-│    ▸ ✓ u-lib     done││Next: In Rust and checked — nothing to do                                 │
-  @0-99 fg - DIM "│    ▸ ✓ u-lib     done││Next: In Rust and checked — nothing to do                                 │"
-│    Features (none ye…││                                                                          │
-  @0-99 fg - DIM "│    Features (none ye…││                                                                          │"
-│    Speed — not set up││1 exported function: read_scalefactors (44 lines)                         │
-  @0-99 fg - DIM "│    Speed — not set up││1 exported function: read_scalefactors (44 lines)                         │"
+┌ Files ─────────────────────┐┌ u-lib · done ──────────────────────────────────────────────────────┐
+  @0-99 fg - DIM "┌ Files ─────────────────────┐┌ u-lib · done ──────────────────────────────────────────────────────┐"
+│▾ harness-tu…0000000000 ✓1/1││All 8 steps done ✓                                                  │
+  @0-99 fg - DIM "│▾ harness-tu…0000000000 ✓1/1││All 8 steps done ✓                                                  │"
+│  ▾ Units (1)               ││✓ u-lib done                                                        │
+  @0-99 fg - DIM "│  ▾ Units (1)               ││✓ u-lib done                                                        │"
+│    ▸ ✓ u-lib           done││Next: In Rust and checked — nothing to do                           │
+  @0-99 fg - DIM "│    ▸ ✓ u-lib           done││Next: In Rust and checked — nothing to do                           │"
+│    Features (none yet)     ││                                                                    │
+  @0-99 fg - DIM "│    Features (none yet)     ││                                                                    │"
+│    Speed — not set up      ││1 exported function: read_scalefactors (44 lines)                   │
+  @0-99 fg - DIM "│    Speed — not set up      ││1 exported function: read_scalefactors (44 lines)                   │"
 │  ▸ test_ca┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐           │
   @0-11 fg - DIM "│  ▸ test_ca"
   @12-87 fg - BOLD "┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐"
   @88-99 fg - DIM "│"
-│           │Builds u-lib's Rust and runs it against the C in the sandbox.             │           │
+│           │Builds u-lib's Rust and runs it against the C in the sandbox.             │sh         │
+  @0-11 fg - DIM "│"
+  @12-12 fg - BOLD "│"
+  @87-87 fg - BOLD "│"
+  @88-99 fg - DIM "sh         │"
+│           │Writes units/u-lib/oracle-latest.json and .md (and oracle-last-green.json │ tree)     │
+  @0-11 fg - DIM "│"
+  @12-12 fg - BOLD "│"
+  @87-87 fg - BOLD "│"
+  @88-99 fg - DIM "tree)     │"
+│           │when green) and u-lib's status in plan.toml: green → verified; red → a    │           │
   @0-11 fg - DIM "│"
   @12-12 fg - BOLD "│"
   @87-87 fg - BOLD "│"
   @88-99 fg - DIM "│"
-│           │Writes units/u-lib/oracle-latest.json and .md (and oracle-last-green.json │           │
-  @0-11 fg - DIM "│"
-  @12-12 fg - BOLD "│"
-  @87-87 fg - BOLD "│"
-  @88-99 fg - DIM "│"
-│           │when green) and u-lib's status in plan.toml: green → verified; red → a    │s only     │
-  @0-11 fg - DIM "│"
-  @12-12 fg - BOLD "│"
-  @87-87 fg - BOLD "│"
-  @88-99 fg - DIM "s only     │"
 │           │verified unit becomes "in progress" (a merged one keeps its status).      │           │
   @0-11 fg - DIM "│"
   @12-12 fg - BOLD "│"
@@ -70,12 +70,12 @@
   @0-11 fg - DIM "│"
   @12-87 fg - BOLD "└──────────────────────────────────────────────────────────────────────────┘"
   @88-99 fg - DIM "│"
-│                      ││                                                                          │
-  @0-99 fg - DIM "│                      ││                                                                          │"
-│                      ││                                                                          │
-  @0-99 fg - DIM "│                      ││                                                                          │"
-└──────────────────────┘└──────────────────────────────────────────────────────────────────────────┘
-  @0-99 fg - DIM "└──────────────────────┘└──────────────────────────────────────────────────────────────────────────┘"
+│                            ││                                                                    │
+  @0-99 fg - DIM "│                            ││                                                                    │"
+│                            ││                                                                    │
+  @0-99 fg - DIM "│                            ││                                                                    │"
+└────────────────────────────┘└────────────────────────────────────────────────────────────────────┘
+  @0-99 fg - DIM "└────────────────────────────┘└────────────────────────────────────────────────────────────────────┘"
  Ready.
   @0-99 fg - DIM "Ready."
 

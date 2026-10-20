@@ -1,20 +1,20 @@
-┌ Files ───────────────────────┐┌ harness-tui-grun-0000000000 · 1 of 1 C file in Rust ─────────────────────────────────┐
-│▾ harness-tui-grun-00000… ✓1/1││All 8 steps done ✓                                                                    │
-│  ▾ Units (1)                 ││Next: Every unit is in Rust and checked — measure its speed: choose Speed, under      │
-│    ▸ ✓ u-lib             done││Features in the tree                                                                  │
-│    Features (none yet)       ││                                                                                      │
-│    Speed — not set up        ││2 files scanned                                                                       │
-│  ▸ test_case/            ✓1/1││Units (1): 1 ✓ done                                                                   │
-│                              ││                                                                                      │
-│                              ││                                                                                      │
-│                              ││                                                                                      │
-│                              ││                                                                                      │
-│                              ││                                                                                      │
-│                              ││                                                                                      │
-│                              ││                                                                                      │
-│                              ││                                                                                      │
-│                              ││                                                                                      │
-└──────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────┘
+┌ Files ────────────────────────────┐┌ harness-tui-grun-0000000000 · 1 of 1 C file in Rust ────────────────────────────┐
+│▾ harness-tui-grun-0000000000  ✓1/1││All 8 steps done ✓                                                               │
+│  ▾ Units (1)                      ││Next: Every unit is in Rust and checked — measure its speed: choose Speed, under │
+│    ▸ ✓ u-lib                  done││Features in the tree                                                             │
+│    Features (none yet)            ││                                                                                 │
+│    Speed — not set up             ││2 files scanned                                                                  │
+│  ▸ test_case/                 ✓1/1││Units (1): 1 ✓ done                                                              │
+│                                   ││                                                                                 │
+│                                   ││                                                                                 │
+│                                   ││                                                                                 │
+│                                   ││                                                                                 │
+│                                   ││                                                                                 │
+│                                   ││                                                                                 │
+│                                   ││                                                                                 │
+│                                   ││                                                                                 │
+│                                   ││                                                                                 │
+└───────────────────────────────────┘└─────────────────────────────────────────────────────────────────────────────────┘
  * Re-check u-lib: Checked: same outputs as C — passed · 41 s                                     [Cancel x] [Details c]
 
  x cancel   ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit

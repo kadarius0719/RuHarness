@@ -1,40 +1,40 @@
-┌ Files ───────────────────────┐┌ test_case/src/lib.c · done (u-lib) ──────────────────────────────────────────────────┐
-│▾ harness-tui-g000-00000… ✓1/1││Map ✓ · Configure ✓ · Accept ✓ · Scan ✓ · Plan ✓ · Test program ✓ · Rust ✓ · Accept ✓ │
-│  ▾ Units (1)                 ││✓ u-lib done                                                                          │
-│    ▸ ✓ u-lib             done││Next: In Rust and checked — nothing to do                                             │
-│    Features (none yet)       ││Crate from attempt a-13c9 (pipeline) · verdict green, fresh                           │
-│    Speed — not set up        ││Internal: get_bits() (compared through the unit's exported functions)                 │
-│  ▾ test_case/            ✓1/1││C  read_scalefactors (lib.c:17)           ⇄ Rust  read_scalefactors (src/ffi.rs:11)   │
-│    ▾ include/                ││17 void read_scalefactors(bs_t *bs, uint› │  11 pub unsafe extern "C" fn read_scalefa›│
-│        · lib.h         header││18                                   int› │  12     bs: *mut BsT,                     │
-│    ▾ src/                ✓1/1││19     static const float g_deq_L12[18 *› │  13     pba: *mut u8,                     │
-│      ▸ ✓ lib.c           done││20         9.53674316e-07f / 3,     7.56› │  14     scfcod: *mut u8,                  │
-│                              ││21         6.00777173e-07f / 3,     9.53› │  15     bands: i32,                       │
-│                              ││22         7.56931807e-07f / 7,     6.00› │  16     scf: *mut f32,                    │
-│                              ││23         9.53674316e-07f / 15,    7.56› │  17 ) {                                   │
-│                              ││24         6.00777173e-07f / 15,    9.53› │  18     let bands_n: usize = if bands > 0›│
-│                              ││25         7.56931807e-07f / 31,    6.00› │  19                                       │
-│                              ││26         9.53674316e-07f / 63,    7.56› │  20     let pba_slice: &[u8] = if pba.is_›│
-│                              ││27         6.00777173e-07f / 63,    9.53› │  21         &[]                           │
-│                              ││28         7.56931807e-07f / 127,   6.00› │  22     } else {                          │
-│                              ││29         9.53674316e-07f / 255,   7.56› │  23         core::slice::from_raw_parts(p›│
-│                              ││30         6.00777173e-07f / 255,   9.53› │  24     };                                │
-│                              ││31         7.56931807e-07f / 511,   6.00› │  25                                       │
-│                              ││32         9.53674316e-07f / 1023,  7.56› │  26     let scfcod_slice: &[u8] = if scfc›│
-│                              ││33         6.00777173e-07f / 1023,  9.53› │  27         &[]                           │
-│                              ││34         7.56931807e-07f / 2047,  6.00› │  28     } else {                          │
-│                              ││35         9.53674316e-07f / 4095,  7.56› │  29         core::slice::from_raw_parts(s›│
-│                              ││36         6.00777173e-07f / 4095,  9.53› │  30     };                                │
-│                              ││37         7.56931807e-07f / 8191,  6.00› │  31                                       │
-│                              ││38         9.53674316e-07f / 16383, 7.56› │  32     let scf_len: usize = bands_n.chec›│
-│                              ││39         6.00777173e-07f / 16383, 9.53› │  33     let scf_slice: &mut [f32] = if sc›│
-│                              ││40         7.56931807e-07f / 32767, 6.00› │  34         &mut []                       │
-│                              ││41         9.53674316e-07f / 65535, 7.56› │  35     } else {                          │
-│                              ││42         6.00777173e-07f / 65535, 9.53› │  36         core::slice::from_raw_parts_m›│
-│                              ││43         7.56931807e-07f / 3,     6.00› │  37     };                                │
-│                              ││Checks  – whole program not run  ✓ same exports  ✓ allowed calls only  ✓ driver shape │
-│                              ││        ✓ same outputs as C  ✓ sanitizers  ✓ boundary calls                           │
-└──────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────┘
+┌ Files ────────────────────────────┐┌ test_case/src/lib.c · done (u-lib) ─────────────────────────────────────────────┐
+│▾ harness-tui-g000-0000000000  ✓1/1││All 8 steps done ✓                                                               │
+│  ▾ Units (1)                      ││✓ u-lib done                                                                     │
+│    ▸ ✓ u-lib                  done││Next: In Rust and checked — nothing to do                                        │
+│    Features (none yet)            ││Crate from attempt a-13c9 (pipeline) · verdict green, fresh                      │
+│    Speed — not set up             ││Internal: get_bits() (compared through the unit's exported functions)            │
+│  ▾ test_case/                 ✓1/1││C  read_scalefactors (lib.c:17)         ⇄ Rust  read_scalefactors (src/ffi.rs:11)│
+│    ▾ include/                     ││17 void read_scalefactors(bs_t *bs, ui› │  11 pub unsafe extern "C" fn read_scal›│
+│        · lib.h              header││18                                   i› │  12     bs: *mut BsT,                  │
+│    ▾ src/                     ✓1/1││19     static const float g_deq_L12[18› │  13     pba: *mut u8,                  │
+│      ▸ ✓ lib.c                done││20         9.53674316e-07f / 3,     7.› │  14     scfcod: *mut u8,               │
+│                                   ││21         6.00777173e-07f / 3,     9.› │  15     bands: i32,                    │
+│                                   ││22         7.56931807e-07f / 7,     6.› │  16     scf: *mut f32,                 │
+│                                   ││23         9.53674316e-07f / 15,    7.› │  17 ) {                                │
+│                                   ││24         6.00777173e-07f / 15,    9.› │  18     let bands_n: usize = if bands ›│
+│                                   ││25         7.56931807e-07f / 31,    6.› │  19                                    │
+│                                   ││26         9.53674316e-07f / 63,    7.› │  20     let pba_slice: &[u8] = if pba.›│
+│                                   ││27         6.00777173e-07f / 63,    9.› │  21         &[]                        │
+│                                   ││28         7.56931807e-07f / 127,   6.› │  22     } else {                       │
+│                                   ││29         9.53674316e-07f / 255,   7.› │  23         core::slice::from_raw_part›│
+│                                   ││30         6.00777173e-07f / 255,   9.› │  24     };                             │
+│                                   ││31         7.56931807e-07f / 511,   6.› │  25                                    │
+│                                   ││32         9.53674316e-07f / 1023,  7.› │  26     let scfcod_slice: &[u8] = if s›│
+│                                   ││33         6.00777173e-07f / 1023,  9.› │  27         &[]                        │
+│                                   ││34         7.56931807e-07f / 2047,  6.› │  28     } else {                       │
+│                                   ││35         9.53674316e-07f / 4095,  7.› │  29         core::slice::from_raw_part›│
+│                                   ││36         6.00777173e-07f / 4095,  9.› │  30     };                             │
+│                                   ││37         7.56931807e-07f / 8191,  6.› │  31                                    │
+│                                   ││38         9.53674316e-07f / 16383, 7.› │  32     let scf_len: usize = bands_n.c›│
+│                                   ││39         6.00777173e-07f / 16383, 9.› │  33     let scf_slice: &mut [f32] = if›│
+│                                   ││40         7.56931807e-07f / 32767, 6.› │  34         &mut []                    │
+│                                   ││41         9.53674316e-07f / 65535, 7.› │  35     } else {                       │
+│                                   ││42         6.00777173e-07f / 65535, 9.› │  36         core::slice::from_raw_part›│
+│                                   ││43         7.56931807e-07f / 3,     6.› │  37     };                             │
+│                                   ││Checks  – whole program not run  ✓ same exports  ✓ allowed calls only            │
+│                                   ││        ✓ driver shape  ✓ same outputs as C  ✓ sanitizers  ✓ boundary calls      │
+└───────────────────────────────────┘└─────────────────────────────────────────────────────────────────────────────────┘
  Ready — ↑↓ to choose a row, Enter for what you can do
 
  ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit

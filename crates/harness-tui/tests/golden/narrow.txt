@@ -1,8 +1,8 @@
 ┌ Files ───────────────┐┌ u-lib · done ────────────────────────────────────────┐
-│▾ harness-tui-g0… ✓1/1││All 8 steps done ✓                                    │
+│▾ harness…0000000 ✓1/1││All 8 steps done ✓                                    │
 │  ▾ Units (1)         ││✓ u-lib done                                          │
 │    ▸ ✓ u-lib     done││Next: In Rust and checked — nothing to do             │
-│    Features (none ye…││                                                      │
+│    Features …one yet)││                                                      │
 │    Speed — not set up││1 exported function: read_scalefactors (44 lines)     │
 │  ▸ test_case/    ✓1/1││Its C: 1 file — test_case/src/lib.c                   │
 │                      ││Crate from attempt a-13c9 (pipeline) · verdict green, │

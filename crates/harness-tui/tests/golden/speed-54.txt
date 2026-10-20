@@ -1,25 +1,25 @@
 ┌ Files ───────────────┐┌ Speed (1 of 1) ──────────────────────────────────────┐
-│▾ harness-tui-speed-v…││Step 6 of 8: Test program 1/11                        │
+│▾ harness-tu…000000000││Step 6 of 8: Test program 1/11                        │
 │  ▾ Units (11)        ││Next: u001-katajainen's Rust is slower than the C —   │
-│    ▸ ✓? u001-katajai…││open it under Units to see how to change it, if speed │
+│    ▸ ✓? u001-k…jainen││open it under Units to see how to change it, if speed │
 │    ▸ ◇ u-cache       ││matters there                                         │
 │    ▸ ◇ u-hash        ││                                                      │
 │    ▸ ◇ u-lz77        ││Speed — your workloads, the C against the Rust in use │
 │    ▸ ◇ u-tree        ││measured on Apple M3 with 2 compilers — see each row ·│
-│    ▸ ◇ u-blocksplitt…││as verify builds them · 15 runs each · compares what  │
-│    ▸ ◇ u-gzip_contai…││the program prints and how it ends                    │
+│    ▸ ◇ u-block…queeze││as verify builds them · 15 runs each · compares what  │
+│    ▸ ◇ u-gzip_…tainer││the program prints and how it ends                    │
 │    ▸ ◇ u-util        ││                                                      │
-│    ▸ ◇ u-zlib_contai…││The original C                                        │
+│    ▸ ◇ u-zlib_…tainer││The original C                                        │
 │    ▸ ◇ u-zopfli_lib  ││  big-text                  CPU 1.22 s · 12.4 MB      │
 │    ▸ ◇ u-zopfli_bin  ││  many-small                too short to time         │
 │  ▾ Features (7)      ││  compress-a-big-text-file  CPU 12.4 s · 124 MB       │
-│      ◉ Compress to g…││    last try: the C ends or prints differently from   │
-│      ◉ Compress to z…││    one run to the next                               │
-│      ◉ Compress to r…││As it stands (1 of 2 units — 1 left out)              │
-│      ◉ Say what it d…││  big-text                  slower 6.2 % (5.6–6.8 %)  │
-│      ◉ Compress quic…││  many-small                too short to time         │
+│      ◉ Compres…o gzip││    last try: the C ends or prints differently from   │
+│      ◉ Compres…o zlib││    one run to the next                               │
+│      ◉ Compres…eflate││As it stands (1 of 2 units — 1 left out)              │
+│      ◉ Say wha…t does││  big-text                  slower 6.2 % (5.6–6.8 %)  │
+│      ◉ Compres…uickly││  many-small                too short to time         │
 │      ◌ Show the help ││u001-katajainen                                       │
-│      ◌ Report a miss…││  big-text                  slower 6.2 % (5.6–6.8 %)  │
+│      ◌ Report …g file││  big-text                  slower 6.2 % (5.6–6.8 %)  │
 │    Speed (1 of 1)    ││  compress-a-big-text-file  slower 6.2 % · parallel   │
 │  ▸ src/ ✓0/13 (+1 ✓?)││  many-small                too short to time         │
 │                      ││                                                      │

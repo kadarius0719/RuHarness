@@ -876,7 +876,8 @@ fn the_focused_pane_has_the_section_coloured_frame() {
         app.palette = crate::theme::Palette::of(theme);
         let palette = app.palette;
         let buffer = render(&mut app, 120, 30);
-        let (left, right) = (&buffer[(0, 1)], &buffer[(36, 1)]);
+        let x = crate::view::files_width(&app, 120);
+        let (left, right) = (&buffer[(0, 1)], &buffer[(x, 1)]);
         assert_eq!(left.symbol(), "│");
         assert_eq!(right.symbol(), "│");
         let section = palette.style(crate::theme::Role::Section);
@@ -898,7 +899,8 @@ fn the_focused_pane_has_the_section_coloured_frame() {
     }
     code(&mut app, KeyCode::Tab);
     let buffer = render(&mut app, 120, 30);
-    assert!(buffer[(36, 1)].modifier.contains(Modifier::BOLD));
+    let x = crate::view::files_width(&app, 120);
+    assert!(buffer[(x, 1)].modifier.contains(Modifier::BOLD));
     assert!(!buffer[(0, 1)].modifier.contains(Modifier::BOLD));
 }
 
@@ -1099,7 +1101,8 @@ fn narrow_rows_keep_the_state_and_the_selection_shows() {
     let buffer = render(&mut app, 100, 30);
     let screen = text(&buffer);
     let row = row_with(&screen, "needs a decision");
-    assert!(row.starts_with("│⚠ t-unlzg-… needs a decision│"), "{row}");
+    // The id cut in the middle, the state whole (§9.4).
+    assert!(row.starts_with("│⚠ t-un…oder needs a decision│"), "{row}");
     assert!(
         row_with(&screen, "t-fuzz").contains("fuzzer, not a tool│"),
         "{screen}"

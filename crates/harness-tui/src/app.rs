@@ -886,6 +886,9 @@ pub struct App {
     pub mouse: bool,
     /// The colours the screen is drawn in (`--theme`, cockpit.toml; docs/COCKPIT-WRAPPER-DESIGN.md §9.2).
     pub palette: crate::theme::Palette,
+    /// `files_width` in cockpit.toml: the Files / Project pane's width, fixed
+    /// (docs/COCKPIT-WRAPPER-DESIGN.md §9.4); none: it follows its rows.
+    pub files_width: Option<u16>,
     /// The `harness` every act runs is the cockpit's own build (the one
     /// next to its binary): only then does a Measure dialog say for certain
     /// whether perf's launcher cache is current (docs/PERF-DESIGN.md §3.11).
@@ -1121,6 +1124,7 @@ impl App {
             hits: Vec::new(),
             mouse: true,
             palette: crate::theme::Palette::default(),
+            files_width: None,
             last_waiting: false,
             project_waiting: None,
             harness_own_build,

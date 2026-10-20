@@ -3,23 +3,23 @@
   @1-7 fg - BOLD | REVERSED "Files"
   @8-23 fg - BOLD "───────────────┐"
   @25-51 fg - BOLD "u-cache · no test program"
-│▾ harness-tui-theme-u…││Step 6 of 8: Test program                             │
+│▾ harness-tu…000000000││Step 6 of 8: Test program                             │
   @0-0 fg - BOLD "│"
-  @3-23 fg - BOLD "harness-tui-theme-u…│"
+  @3-23 fg - BOLD "harness-tu…000000000│"
   @38-49 fg - BOLD | UNDERLINED "Test program"
 │  ▾ Units (11)        ││◇ u-cache no test program                             │
   @0-0 fg - BOLD "│"
   @5-14 fg - BOLD "Units (11)"
   @23-23 fg - BOLD "│"
   @27-34 fg - BOLD "u-cache"
-│    ▸ ✓? u001-katajai…││Next: Make the test program — Enter, then ask in chat │
+│    ▸ ✓? u001-k…jainen││Next: Make the test program — Enter, then ask in chat │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
   @25-29 fg - BOLD | UNDERLINED "Next:"
   @30-77 fg - BOLD "Make the test program — Enter, then ask in chat"
-│    ▸ ◇ u-c… no test …││                                                      │
+│    ▸ ◇ u-…e no test …││                                                      │
   @0-0 fg - BOLD "│"
-  @1-22 fg - BOLD | REVERSED "▸ ◇ u-c… no test …"
+  @1-22 fg - BOLD | REVERSED "▸ ◇ u-…e no test …"
   @23-23 fg - BOLD "│"
 │    ▸ ◇ u-hash        ││5 exported functions: ZopfliCacheToSublen (22 lines), │
   @0-0 fg - BOLD "│"
@@ -30,16 +30,16 @@
 │    ▸ ◇ u-tree        ││lines), ZopfliMaxCachedSublen (11 lines),             │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│    ▸ ◇ u-blocksplitt…││ZopfliSublenToCache (32 lines)                        │
+│    ▸ ◇ u-block…queeze││ZopfliSublenToCache (32 lines)                        │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│    ▸ ◇ u-gzip_contai…││Its C: 1 file — src/zopfli/cache.c                    │
+│    ▸ ◇ u-gzip_…tainer││Its C: 1 file — src/zopfli/cache.c                    │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
 │    ▸ ◇ u-util        ││No Rust yet                                           │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│    ▸ ◇ u-zlib_contai…││5 of your features run it · still C — see Features    │
+│    ▸ ◇ u-zlib_…tainer││5 of your features run it · still C — see Features    │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
 │    ▸ ◇ u-zopfli_lib  ││Attempts: none yet                                    │
@@ -54,25 +54,25 @@
   @5-16 fg - BOLD "Features (7)"
   @23-23 fg - BOLD "│"
   @25-64 fg - BOLD "▸ C source (Tab to the View, then Enter)"
-│      ◉ Compress to g…││                                                      │
+│      ◉ Compres…o gzip││                                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│      ◉ Compress to z…││                                                      │
+│      ◉ Compres…o zlib││                                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│      ◉ Compress to r…││                                                      │
+│      ◉ Compres…eflate││                                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│      ◉ Say what it d…││                                                      │
+│      ◉ Say wha…t does││                                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│      ◉ Compress quic…││                                                      │
+│      ◉ Compres…uickly││                                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
 │      ◌ Show the help ││                                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│      ◌ Report a miss…││                                                      │
+│      ◌ Report …g file││                                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
 │    Speed — not set up││                                                      │

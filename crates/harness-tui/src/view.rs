@@ -30,16 +30,12 @@ use ratatui::Frame;
 
 /// Below this many columns one pane shows at a time (Files or View).
 pub const SINGLE_PANE_BELOW: u16 = 80;
-/// From this many columns the Files pane is [`FILES_WIDE`] wide.
-pub const WIDE_FROM: u16 = 120;
-/// The Files pane at [`WIDE_FROM`] columns or more.
-pub const FILES_WIDE: u16 = 32;
-/// The Files pane at 80–119 columns.
-pub const FILES_NARROW: u16 = 24;
-/// The Project view's left pane at [`WIDE_FROM`] columns or more.
-pub const PROJECT_WIDE: u16 = 36;
-/// The Project view's left pane below [`WIDE_FROM`] columns.
-pub const PROJECT_NARROW: u16 = 30;
+/// The Files / Project pane is as wide as its longest row needs, at least
+/// this, at most a third of the screen (docs/COCKPIT-WRAPPER-DESIGN.md §9.4).
+pub const FILES_MIN: u16 = 30;
+/// Its least width where the screen leaves the View no more, and the least
+/// a `files_width` in cockpit.toml may set.
+pub const FILES_FLOOR: u16 = 24;
 /// The C and the Rust sit side by side when the View is at least this wide.
 pub const SPLIT_VIEW_MIN: u16 = 78;
 /// The dialog's width (narrower terminals get what they have).
@@ -788,6 +784,12 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
     };
     let name = node_name(app, sel);
     let head = width_of(&lead) + width_of(&glyph_text);
+    // A name that does not fit is cut in the middle (`u-check…sum`); the
+    // project row keeps its tool's name whole (§9.4).
+    let cut = |room: usize| match sel {
+        Selection::Project => project_name_fit(app, room),
+        _ => middle(&name, room),
+    };
     let room = width.saturating_sub(head);
     let word_w = width_of(&display::line(&word));
     let name_w = width_of(&display::line(&name));
@@ -823,7 +825,7 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
     let (name_text, pad, word_text) = if project_row {
         let word_text = ellipsis(&word, room.saturating_sub(2));
         let name_room = room.saturating_sub(width_of(&word_text) + 1).max(1);
-        let name_text = ellipsis(&name, name_room);
+        let name_text = cut(name_room);
         let pad = room.saturating_sub(width_of(&name_text) + width_of(&word_text));
         (name_text, pad, word_text)
     } else if show_word {
@@ -848,11 +850,11 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
         let word_room = room.saturating_sub(name_keep + 1).max(1);
         let word_text = ellipsis(&word, word_room.min(word_w));
         let name_room = room.saturating_sub(width_of(&word_text) + 1);
-        let name_text = ellipsis(&name, name_room);
+        let name_text = cut(name_room);
         let pad = room.saturating_sub(width_of(&name_text) + width_of(&word_text));
         (name_text, pad, word_text)
     } else {
-        (ellipsis(&name, room), 0, String::new())
+        (cut(room), 0, String::new())
     };
     // A file-list target's tree greys the project's other files, and a
     // folder holding only those.
@@ -903,6 +905,123 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
         spans.push(Span::styled(word_text, muted()));
     }
     Line::from(spans)
+}
+
+/// The columns a tree row needs to show whole: its indent and fold mark,
+/// its mark, its name, two spaces and its state word or counts (a note
+/// wraps, and is not counted).
+fn row_need(app: &App, row: &Row) -> usize {
+    let indent = 2 * row.depth;
+    match &row.kind {
+        RowKind::Note(_) => 0,
+        RowKind::Heading(text) => indent + width_of(&display::line(text)),
+        RowKind::Failed(path) => indent + 2 + width_of(&display::line(path)) + 2 + 15,
+        RowKind::Node(sel) => {
+            let marker = if app.in_project_view() { 0 } else { 2 };
+            let (glyph, word) = row_label(app, sel);
+            let glyph_w = if glyph.is_empty() {
+                0
+            } else {
+                width_of(glyph) + 1
+            };
+            let word_w = if word.is_empty() {
+                0
+            } else {
+                2 + width_of(&display::line(&word))
+            };
+            indent + marker + glyph_w + width_of(&display::line(&node_name(app, sel))) + word_w
+        }
+    }
+}
+
+/// The Files / Project pane's width on a screen `screen` columns wide
+/// (§9.4): `files_width` from cockpit.toml when set (within
+/// [`FILES_FLOOR`] and half the screen); else as wide as its longest row
+/// needs, within [`FILES_MIN`] and a third of the screen, growing only while
+/// the View keeps its 80 columns ([`FILES_FLOOR`] under 100 columns).
+pub fn files_width(app: &App, screen: u16) -> u16 {
+    if let Some(n) = app.files_width {
+        return n.clamp(FILES_FLOOR, (screen / 2).max(FILES_FLOOR));
+    }
+    let need = app.rows.iter().map(|r| row_need(app, r)).max().unwrap_or(0);
+    let need = u16::try_from(need).unwrap_or(u16::MAX).saturating_add(2);
+    // It grows to a third of the screen while the View keeps its 80; it
+    // never shrinks under 30 from 100 columns (24 under them).
+    let lower = if screen >= 100 {
+        FILES_MIN
+    } else {
+        FILES_FLOOR
+    };
+    let upper = (screen / 3)
+        .min(screen.saturating_sub(VIEW_KEEPS))
+        .max(lower);
+    need.clamp(lower, upper)
+}
+
+/// `text` cut in the middle to `width` columns (`u-check…sum`): a name's
+/// two ends tell it apart (§9.4).
+fn middle(raw: &str, width: usize) -> String {
+    let text = display::line(raw);
+    if width_of(&text) <= width {
+        return text;
+    }
+    if width < 3 {
+        return ellipsis(&text, width);
+    }
+    let keep = width - 1;
+    let tail_w = keep / 2;
+    let head_w = keep - tail_w;
+    let chars: Vec<char> = text.chars().collect();
+    let mut head = String::new();
+    for c in &chars {
+        if width_of(&format!("{head}{c}")) > head_w {
+            break;
+        }
+        head.push(*c);
+    }
+    let mut tail: Vec<char> = Vec::new();
+    for c in chars.iter().rev() {
+        let t: String = std::iter::once(*c)
+            .chain(tail.iter().rev().copied())
+            .collect();
+        if width_of(&t) > tail_w {
+            break;
+        }
+        tail.insert(0, *c);
+    }
+    let tail: String = tail.into_iter().collect();
+    format!("{head}…{tail}")
+}
+
+/// The project row's name cut to `width`: the folder gives way from its
+/// front, never the tool's name (`…zg-map · tool t-benchmark`, §9.4).
+fn project_name_fit(app: &App, width: usize) -> String {
+    let name = display::line(&node_name(app, &Selection::Project));
+    if width_of(&name) <= width {
+        return name;
+    }
+    match name.split_once(" · tool ") {
+        Some((folder, tool)) => {
+            let tail = format!(" · tool {tool}");
+            let room = width.saturating_sub(width_of(&tail));
+            if room < 2 {
+                return middle(&name, width);
+            }
+            let chars: Vec<char> = folder.chars().collect();
+            let mut kept: Vec<char> = Vec::new();
+            for c in chars.iter().rev() {
+                let t: String = std::iter::once(*c)
+                    .chain(kept.iter().rev().copied())
+                    .collect();
+                if width_of(&t) + 1 > room {
+                    break;
+                }
+                kept.insert(0, *c);
+            }
+            format!("…{}{tail}", kept.into_iter().collect::<String>())
+        }
+        None => middle(&name, width),
+    }
 }
 
 /// A pane's frame: the focused pane's in the section colour, bold, in every
@@ -4754,24 +4873,19 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             Focus::Chat => chat_pane::draw_chat(frame, app, main, false, true),
         }
     } else {
-        // The Project view's rows name a program and its state in words:
-        // its left pane is wider.
-        let files_w = match (app.in_project_view(), area.width >= WIDE_FROM) {
-            (true, true) => PROJECT_WIDE,
-            (true, false) => PROJECT_NARROW,
-            (false, true) => FILES_WIDE,
-            (false, false) => FILES_NARROW,
-        };
+        // The left pane follows its rows (§9.4).
+        let files_w = files_width(app, area.width);
         let column = chat && app.chat_column && area.width >= CHAT_COLUMN_FROM;
         if column {
             // With the focus, the chat takes half of what the left pane
-            // leaves (cockpit design §9.3); without it, at most its
-            // usual width. The View keeps its columns either way.
-            let left = area.width - files_w;
+            // leaves (cockpit design §9.3); without it, the larger of its
+            // usual 64 and a third of it (§9.4). The View keeps its columns
+            // either way.
+            let left = area.width.saturating_sub(files_w);
             let want = if app.focus == Focus::Chat {
                 (left / 2).max(CHAT_COLUMN_MAX)
             } else {
-                CHAT_COLUMN_MAX
+                (left / 3).max(CHAT_COLUMN_MAX)
             };
             let chat_w = want.min(left - VIEW_KEEPS);
             let [files, view, chat_area] = Layout::default()
@@ -5301,6 +5415,59 @@ mod tests {
         theme::set(Palette::default());
     }
 
+    /// Panes that fit (§9.4): the Files pane as wide as its longest row
+    /// needs, within 30 and a third of the screen while the View keeps 80,
+    /// the state words whole; `files_width` fixes it within 24 and half the
+    /// screen. Goldens at 100, 120, 200 and 280 columns.
+    #[test]
+    fn the_files_pane_fits_its_rows() {
+        let mut app = app_of("targets/zopfli", "fit");
+        app.select(Selection::Unit("u-cache".into()));
+        for w in [100u16, 120, 200, 280] {
+            let buffer = render(&mut app, w, 30);
+            golden(&format!("fit-{w}.txt"), &app, &buffer);
+            let files = files_width(&app, w);
+            let need = app.rows.iter().map(|r| row_need(&app, r)).max().unwrap() as u16 + 2;
+            let upper = (w / 3).min(w - VIEW_KEEPS).max(FILES_MIN);
+            assert_eq!(files, need.clamp(FILES_MIN, upper), "{w}");
+            let screen = text(&buffer);
+            // Every unit row keeps its state word whole once the pane can
+            // hold it.
+            if files >= need {
+                for row in screen.lines().filter(|l| l.contains("◇ u-")) {
+                    assert!(row.contains("no test program"), "{w}: {row}");
+                }
+            }
+        }
+        // The View keeps 80 from 120 columns.
+        assert!(120 - files_width(&app, 120) >= VIEW_KEEPS);
+        // files_width fixes it, within 24 and half the screen.
+        for (set, w, want) in [(40, 200, 40), (10, 200, 24), (500, 200, 100), (50, 80, 40)] {
+            app.files_width = Some(set);
+            assert_eq!(files_width(&app, w), want, "{set} at {w}");
+        }
+        app.files_width = Some(40);
+        let buffer = render(&mut app, 200, 30);
+        assert_eq!(buffer[(40, 0)].symbol(), "┌", "{}", text(&buffer));
+    }
+
+    /// A name that does not fit is cut in the middle; the project row keeps
+    /// its tool's name and gives way at the folder's front (§9.4).
+    #[test]
+    fn names_are_cut_in_the_middle_and_the_tool_kept() {
+        assert_eq!(middle("u-checksum", 9), "u-ch…ksum");
+        assert_eq!(middle("u-checksum", 10), "u-checksum");
+        assert_eq!(width_of(&middle("u-blocksplitter-deflate-squeeze", 17)), 17);
+        let mut app = app_of("targets/zopfli", "fit-name");
+        app.config.tool = Some("t-benchmark".into());
+        let fit = project_name_fit(&app, 30);
+        assert!(
+            fit.starts_with('…') && fit.ends_with(" · tool t-benchmark"),
+            "{fit}"
+        );
+        assert_eq!(width_of(&fit), 30, "{fit}");
+    }
+
     /// The scratch copy's path appears in some texts: replaced so goldens
     /// are machine-independent (the project row shows the copy's name).
     fn golden(name: &str, app: &App, buffer: &Buffer) {
@@ -5342,7 +5509,11 @@ mod tests {
 
     /// The scratch copy's name holds the pid: its digits are masked by
     /// position (a name cut with `…` keeps its length).
-    fn mask_scratch(text: &str) -> String {
+    pub(crate) fn mask_scratch(text: &str) -> String {
+        // A name cut in the middle (§9.4) shows the scratch copy's digits
+        // after its "…": masked too.
+        let masked = mask_after_ellipsis(text);
+        let text = masked.as_str();
         let mut got = String::new();
         let mut rest = text;
         while let Some(i) = rest.find("harness-tui-") {
@@ -5360,6 +5531,26 @@ mod tests {
         }
         got.push_str(rest);
         got
+    }
+
+    fn mask_after_ellipsis(text: &str) -> String {
+        let mut out = String::new();
+        let mut digits = false;
+        for c in text.chars() {
+            if c == '…' {
+                digits = true;
+                out.push(c);
+                continue;
+            }
+            // The rest of the cut name: its digits masked.
+            if digits && (c.is_ascii_alphanumeric() || c == '-') {
+                out.push(if c.is_ascii_digit() { '0' } else { c });
+                continue;
+            }
+            digits = false;
+            out.push(c);
+        }
+        out
     }
 
     fn row_with<'a>(screen: &'a str, needle: &str) -> &'a str {
@@ -9599,7 +9790,7 @@ mod tests {
         let mut app = crate::app::tests::app_of_path(&app.config.target);
         assert!(!app.features.map.current());
         app.select(Selection::Unit("u001-katajainen".into()));
-        let screen = text(&render(&mut app, 160, 40));
+        let screen = text(&render(&mut app, 200, 40));
         assert!(
             screen.contains("your features: not checked since you changed them — Re-check it"),
             "{screen}"
@@ -9916,7 +10107,7 @@ mod tests {
         let (glyph, _) = app.node_label(&Selection::Features);
         assert_eq!(glyph, "⚠");
         app.select(Selection::Features);
-        let screen = text(&render(&mut app, 120, 30));
+        let screen = text(&render(&mut app, 140, 30));
         assert!(screen.contains("Features (error)"), "{screen}");
         assert!(screen.contains("unknown key \"nope\""), "{screen}");
         assert!(screen.contains("Re-checks and"), "{screen}");

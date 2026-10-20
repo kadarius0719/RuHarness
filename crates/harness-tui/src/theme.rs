@@ -386,6 +386,10 @@ pub struct FileSettings {
     pub theme: Option<Theme>,
     /// `[colors]`: role → colour.
     pub colours: Vec<(Role, Color)>,
+    /// `files_width = N` (a top-level key): the Files / Project pane's
+    /// width, fixed (docs/COCKPIT-WRAPPER-DESIGN.md §9.4); the view keeps it
+    /// within 24 and half the screen.
+    pub files_width: Option<u16>,
     /// What was refused, in words.
     pub refused: Vec<String>,
 }
@@ -489,8 +493,16 @@ pub fn parse_settings(text: &str, name: &str) -> FileSettings {
                     }
                 }
             }
+            ("files_width", v) => match v.as_integer().and_then(|i| u16::try_from(i).ok()) {
+                Some(n) if n > 0 => out.files_width = Some(n),
+                _ => out.refused.push(format!(
+                    "{name}: files_width = {v} is not a number of columns; the Files pane's \
+                     width follows its rows"
+                )),
+            },
             _ => out.refused.push(format!(
-                "{name}: [{key}] is not a section (only [theme] and [colors] are); it is ignored"
+                "{name}: [{key}] is not a section (only [theme], [colors] and files_width are); \
+                 it is ignored"
             )),
         }
     }
@@ -687,6 +699,17 @@ mod tests {
         );
         assert_eq!(s.theme, None);
         assert!(s.colours.is_empty());
+        // files_width: a number of columns, at the top of the file.
+        let s = parse_settings("files_width = 40\n[theme]\nname = \"dark\"\n", "c.toml");
+        assert_eq!((s.files_width, s.refused.len()), (Some(40), 0));
+        let s = parse_settings("files_width = \"wide\"\n", "c.toml");
+        assert_eq!(s.files_width, None);
+        assert!(s.refused[0].contains("files_width = \"wide\" is not a number of columns"));
+        let s = parse_settings(
+            "[theme]\nname = \"pink\"\n[colors]\ngoood = \"red\"\nbad = \"crimson\"\n\
+             good = 300\n[keys]\nx = 1\n",
+            "cockpit.toml",
+        );
         let all = s.refused.join("\n");
         for needle in [
             "[theme] name \"pink\" is not a theme",

@@ -1,0 +1,30 @@
+┌ Files ───────────────────────────────┐┌ u-cache · no test program ───────────────────────────────────────────────────┐
+│▾ harness-tui…0000000000 ✓0/13 (+1 ✓?)││Step 6 of 8: Test program                                                     │
+│  ▾ Units (11)                        ││◇ u-cache no test program                                                     │
+│    ▸ ✓? u001-katajainen              ││Next: Make the test program — Enter, then ask in chat                         │
+│    ▸ ◇ u-cache        no test program││                                                                              │
+│    ▸ ◇ u-hash         no test program││5 exported functions: ZopfliCacheToSublen (22 lines), ZopfliCleanCache (5     │
+│    ▸ ◇ u-lz77         no test program││lines), ZopfliInitCache (19 lines), ZopfliMaxCachedSublen (11 lines),         │
+│    ▸ ◇ u-tree         no test program││ZopfliSublenToCache (32 lines)                                                │
+│    ▸ ◇ u-block…queeze no test program││Its C: 1 file — src/zopfli/cache.c                                            │
+│    ▸ ◇ u-gzip_…tainer no test program││No Rust yet                                                                   │
+│    ▸ ◇ u-util         no test program││5 of your features run it · still C — see Features                            │
+│    ▸ ◇ u-zlib_…tainer no test program││Attempts: none yet                                                            │
+│    ▸ ◇ u-zopfli_lib   no test program││                                                                              │
+│    ▸ ◇ u-zopfli_bin   no test program││▸ C source (Tab to the View, then Enter)                                      │
+│  ▾ Features (7)                      ││                                                                              │
+│      ◉ Compress to gzip              ││                                                                              │
+│      ◉ Compress to zlib              ││                                                                              │
+│      ◉ Compress to raw deflate       ││                                                                              │
+│      ◉ Say what it does              ││                                                                              │
+│      ◉ Compress quickly              ││                                                                              │
+│      ◌ Show the help      still all C││                                                                              │
+│      ◌ Report a …ing file still all C││                                                                              │
+│    Speed — not set up                ││                                                                              │
+│  ▸ src/                 ✓0/13 (+1 ✓?)││                                                                              │
+│                                      ││                                                                              │
+│                                      ││                                                                              │
+└──────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────┘
+ Ready — ↑↓ to choose a row, Enter for what you can do
+
+ ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit

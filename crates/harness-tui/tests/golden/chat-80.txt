@@ -1,8 +1,8 @@
 ┌ Files ───────────────┐┌ Chat — waiting for you · h…───[New]─[?]─ View ─ Chat ┐
-│▾ harness-tui-ch… ✓1/1││› Please migrate u-lib.                               │
+│▾ harness…0000000 ✓1/1││› Please migrate u-lib.                               │
 │  ▾ Units (1)         ││                                                      │
 │    ▸ ✓ u-lib     done││I will ask to migrate u-lib.                          │
-│    Features (none ye…││                                                      │
+│    Features …one yet)││                                                      │
 │    Speed — not set up││  · read the project's status — done                  │
 │  ▸ test_case/    ✓1/1││                                                      │
 │                      ││                                                      │

@@ -1,146 +1,146 @@
-┌ Project ─────────────────────────┐┌ liblzg · not mapped yet ─────────────────────────────────────────────────────────┐
+┌ Project ───────────────────┐┌ liblzg · not mapped yet ───────────────────────────────────────────────────────────────┐
   @0-0 fg 75 BOLD "┌"
   @1-9 fg 75 BOLD | REVERSED "Project"
-  @10-35 fg 75 BOLD "─────────────────────────┐"
-  @36-36 fg 244 NONE "┌"
-  @37-61 fg 75 BOLD "liblzg · not mapped yet"
-  @62-119 fg 244 NONE "─────────────────────────────────────────────────────────┐"
-│Map the project                   ││Map ○ · Configure · Accept · then: scan, plan, and each piece                     │
+  @10-29 fg 75 BOLD "───────────────────┐"
+  @30-30 fg 244 NONE "┌"
+  @31-55 fg 75 BOLD "liblzg · not mapped yet"
+  @56-119 fg 244 NONE "───────────────────────────────────────────────────────────────┐"
+│Map the project             ││Map ○ · Configure · Accept · then: scan, plan, and each piece                           │
   @0-0 fg 75 BOLD "│"
   @1-15 fg 75 BOLD | REVERSED "Map the project"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
-  @37-41 fg 81 BOLD "Map ○"
-  @42-97 fg 248 NONE "· Configure · Accept · then: scan, plan, and each piece"
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
+  @31-35 fg 81 BOLD "Map ○"
+  @36-91 fg 248 NONE "· Configure · Accept · then: scan, plan, and each piece"
   @119-119 fg 244 NONE "│"
-│                                  ││Next: Map the project — Enter                                                     │
+│                            ││Next: Map the project — Enter                                                           │
   @0-0 fg 75 BOLD "│"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
-  @37-41 fg 81 BOLD "Next:"
-  @42-65 fg - BOLD "Map the project — Enter"
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
+  @31-35 fg 81 BOLD "Next:"
+  @36-59 fg - BOLD "Map the project — Enter"
   @119-119 fg 244 NONE "│"
-│                                  ││                                                                                  │
+│                            ││                                                                                        │
   @0-0 fg 75 BOLD "│"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
   @119-119 fg 244 NONE "│"
-│                                  ││Nothing is mapped yet.                                                            │
+│                            ││Nothing is mapped yet.                                                                  │
   @0-0 fg 75 BOLD "│"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
   @119-119 fg 244 NONE "│"
-│                                  ││Mapping finds its programs and libraries, the files each one needs, what they     │
+│                            ││Mapping finds its programs and libraries, the files each one needs, what they share, and│
   @0-0 fg 75 BOLD "│"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
-  @37-113 fg 176 NONE "Mapping finds its programs and libraries, the files each one needs, what they"
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
+  @31-118 fg 176 NONE "Mapping finds its programs and libraries, the files each one needs, what they share, and"
   @119-119 fg 244 NONE "│"
-│                                  ││share, and whether each program links. It compiles in the sandbox, runs nothing,  │
+│                            ││whether each program links. It compiles in the sandbox, runs nothing, and writes only   │
   @0-0 fg 75 BOLD "│"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
-  @37-116 fg 176 NONE "share, and whether each program links. It compiles in the sandbox, runs nothing,"
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
+  @31-115 fg 176 NONE "whether each program links. It compiles in the sandbox, runs nothing, and writes only"
   @119-119 fg 244 NONE "│"
-│                                  ││and writes only under migration/.                                                 │
+│                            ││under migration/.                                                                       │
   @0-0 fg 75 BOLD "│"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
-  @37-69 fg 176 NONE "and writes only under migration/."
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
+  @31-47 fg 176 NONE "under migration/."
   @119-119 fg 244 NONE "│"
-│                                  ││                                                                                  │
+│                            ││                                                                                        │
   @0-0 fg 75 BOLD "│"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
   @119-119 fg 244 NONE "│"
-│                                  ││                                                                                  │
+│                            ││                                                                                        │
   @0-0 fg 75 BOLD "│"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
   @119-119 fg 244 NONE "│"
-│                                  ││                                                                                  │
+│                            ││                                                                                        │
   @0-0 fg 75 BOLD "│"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
   @119-119 fg 244 NONE "│"
-│                                  ││                                                                                  │
+│                            ││                                                                                        │
   @0-0 fg 75 BOLD "│"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
   @119-119 fg 244 NONE "│"
-│                                  ││                                                                                  │
+│                            ││                                                                                        │
   @0-0 fg 75 BOLD "│"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
   @119-119 fg 244 NONE "│"
-│                                  ││                                                                                  │
+│                            ││                                                                                        │
   @0-0 fg 75 BOLD "│"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
   @119-119 fg 244 NONE "│"
-│                                  ││                                                                                  │
+│                            ││                                                                                        │
   @0-0 fg 75 BOLD "│"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
   @119-119 fg 244 NONE "│"
-│                                  ││                                                                                  │
+│                            ││                                                                                        │
   @0-0 fg 75 BOLD "│"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
   @119-119 fg 244 NONE "│"
-│                                  ││                                                                                  │
+│                            ││                                                                                        │
   @0-0 fg 75 BOLD "│"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
   @119-119 fg 244 NONE "│"
-│                                  ││                                                                                  │
+│                            ││                                                                                        │
   @0-0 fg 75 BOLD "│"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
   @119-119 fg 244 NONE "│"
-│                                  ││                                                                                  │
+│                            ││                                                                                        │
   @0-0 fg 75 BOLD "│"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
   @119-119 fg 244 NONE "│"
-│                                  ││                                                                                  │
+│                            ││                                                                                        │
   @0-0 fg 75 BOLD "│"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
   @119-119 fg 244 NONE "│"
-│                                  ││                                                                                  │
+│                            ││                                                                                        │
   @0-0 fg 75 BOLD "│"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
   @119-119 fg 244 NONE "│"
-│                                  ││                                                                                  │
+│                            ││                                                                                        │
   @0-0 fg 75 BOLD "│"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
   @119-119 fg 244 NONE "│"
-│                                  ││                                                                                  │
+│                            ││                                                                                        │
   @0-0 fg 75 BOLD "│"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
   @119-119 fg 244 NONE "│"
-│                                  ││                                                                                  │
+│                            ││                                                                                        │
   @0-0 fg 75 BOLD "│"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
   @119-119 fg 244 NONE "│"
-│                                  ││                                                                                  │
+│                            ││                                                                                        │
   @0-0 fg 75 BOLD "│"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
   @119-119 fg 244 NONE "│"
-│                                  ││                                                                                  │
+│                            ││                                                                                        │
   @0-0 fg 75 BOLD "│"
-  @35-35 fg 75 BOLD "│"
-  @36-36 fg 244 NONE "│"
+  @29-29 fg 75 BOLD "│"
+  @30-30 fg 244 NONE "│"
   @119-119 fg 244 NONE "│"
-└──────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────┘
-  @0-35 fg 75 BOLD "└──────────────────────────────────┘"
-  @36-119 fg 244 NONE "└──────────────────────────────────────────────────────────────────────────────────┘"
+└────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────┘
+  @0-29 fg 75 BOLD "└────────────────────────────┘"
+  @30-119 fg 244 NONE "└────────────────────────────────────────────────────────────────────────────────────────┘"
  Ready — ↑↓ to choose a row, Enter for what you can do
   @0-53 fg 250 NONE "Ready — ↑↓ to choose a row, Enter for what you can do"
 
