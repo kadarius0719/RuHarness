@@ -2057,19 +2057,36 @@ after the picks' `message` lines.
 **The cockpit** (`harness-tui`), opened on a project with no root `harness.toml` and no
 `--tool` — no mapped tool yet, a map to act on, or several tools — opens on its **Project
 view** (pass 3 of docs/reviews/2026-10-18-cockpit-usability-critique.md): the cockpit's own
-screen, panes, key bar and dialogs. Its left pane: before a map one row, "Map the project"; after
-a map "Programs (n)" with each program as a row ("t-lzg", its state in words — linked,
-held on a choice, did not compile, did not link, incomplete, fuzzer — and under it its file and
-what the map knows it is, "src/tools/lzg.c (a tool, by its folder)", then a model's label from
-the reply's `p<n>` item, "“LZG compressor”, a tool (the model's label)", when one fits), a
-file holding a `main` that did not compile as a note, "Libraries (n)" likewise ("compiles" or
-"did not compile"), and "Accepted tools (n)" with a row "Open tool <id> — <program's path>"
-each. Its right pane: the folder's name (never the full path), the configuration's state in
-words (a guess / proposed / stated), the programs, libraries and tools again in full, what the
-selected program is (its held choices, the model's advice), and a Next step: no map → Map; a
-guess → Write the build configuration (or Ask for a proposal — ask in chat); a configuration written since
-the map → Map the project again; right after an Accept → open the new tool; a held choice → pick
-it in Accept; a program ready → Accept it; a tool → open it. `Enter` on a row opens its menu, the
+screen, panes, key bar and dialogs. Since 2026-10-19 (docs/COCKPIT-WRAPPER-DESIGN.md §9.3,
+"one list, one card, one line") its left pane (36 columns, 30 under 120) is the only list:
+before a map one row, "Map the project"; after a map the heading "Programs (n)" with the counts
+of the states present ("· 1 accepted · 2 need a decision", "did not compile" and "did not link"
+too), wrapped to the pane, then one row per program — its mark, its id, its state at the right:
+"✓ accepted", "⚠ needs a decision", "✓ links", "✗ did not compile", "✗ did not link", "·
+incomplete", "· fuzzer, not a tool" — an accepted program's row being its tool's row (a tool
+the map does not name keeps a row of its own); a file holding a `main` that did not compile is
+one row, "✗ <file>", "did not compile"; "Libraries (n)" only when there are any. Its right pane
+is titled with the folder's name (never the full path) and "n programs found"; line 1 is the
+Next step, one line "Next: <verb phrase> — <key>" ("Next:" in the accent, the phrase bold):
+"Map the project — Enter"; "Write the build configuration — Enter, it is the first item" (a
+guess; "— Enter, or Ask for a proposal in the chat" while the chat can be used); "Write the build
+configuration — Enter (or harness project map --adopt)" (a configuration that came with the
+project); "Map the project again — Enter" (a configuration written since the map); "Open tool
+<id> — Enter on its row" (right after an Accept); "Accept <id> — Enter on its row, it asks for
+the file" (a decision); "Accept <id> — Enter on its row" (ready); "nothing here — every program
+is a tool; open one". Then a card for the selection: its id (bold) and state; its file and what
+the map knows it is ("src/tools/lzg.c · a tool, by its folder"); a model's label from the
+reply's `p<n>` item ("The model calls it “LZG compressor” (a tool)"); an accepted tool's
+"Its build configuration: migration/tools/<id>/harness.toml"; a failed program's first error
+from the map ("✗ src/a.c:3: a syntax error"); each decision — "Decision: two files define the
+same functions. Keep which?", "Asked only if you keep <file>." when reached only under another,
+its files numbered "1  <path>", the advised one marked "← the model advises this one", "Why
+(<model>): <why>" (the reason in words when the reply holds no why), "This is advice; you pick
+the file when you accept." — or "No advice yet — Enter, then Ask for advice (the chat
+answers)"; and "Enter: <what Enter does>". Before a map the card is the two sentences on
+mapping. The set and definer ids (d1, d1.2) never show on screen; they stay in the reply file
+and the accept command's `--keep` flags. What each state means is in the help (`?`, "What the
+states mean"). `Enter` on a row opens its menu, the
 recommended item first (a menu that would hold only that item is skipped: its dialog opens):
 "Accept this program" (or "this library") and "Accept it under a run name of your own…", "Open
 tool <id>" on an accepted one, once a map exists "Write the build configuration (in <editor>)"
@@ -2082,14 +2099,13 @@ configuration is a guess or nothing is held) or "Ask for advice — ask in chat"
 chat…": the question is typed into the chat, which answers through harness-mcp's
 `harness_map_questions` and `harness_map_answer` (docs/CHAT-PANE-DESIGN.md §3.6; `harness project
 ask` stays the command line's). While the configuration is a guess (or came with the
-project) Accept is greyed with "Accept needs a stated configuration, and this map's is a guess
-(or came with the project): choose Write the build configuration (or Ask for a proposal — ask in chat), then
-Map the project again". Accept asks each held choice first, in a menu titled "Accept <id>":
-"<id> holds the choice d1: two files define the same function, so keep which one?", the
-definers as items, none suggested, skipping a set whose `under` names no choice made so far; a
-reply bound to the map's digests shows its advice above them — "The model's advice (<model>):
-keep d1.2, reason …  — advice only, the choice is yours." — each answer checked as `ask` checks
-one; then, for a run name, a line to type it (letters, digits, `.`, `_`, `-`, not starting with
+project) Accept is greyed with "Accept waits for your build configuration:
+this map's is a guess (or came with the project) — choose Write the build configuration (or Ask
+for a proposal — ask in chat), then Map the project again". Accept asks each decision first, in a
+menu titled "Accept <id>": "Keep which file for the functions both define?", the files as items
+"1  <path>", the advised one marked "← the model advises this one", none recommended, skipping a
+set whose `under` names no choice made so far; a reply bound to the map's digests gives the
+model's "Why (<model>): …" above them, each answer checked as `ask` checks one; then, for a run name, a line to type it (letters, digits, `.`, `_`, `-`, not starting with
 `-` or `.`). The map file's ids, sets and indexes are shape-checked before anything of them is
 shown or put in a command (a map that fails says so and offers Map only), and every string shown
 goes through `safe_line` and the display filter. Each act's dialog says what it runs (the

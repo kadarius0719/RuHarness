@@ -6524,13 +6524,14 @@ harness-tui --target ~/lzg-cockpit
 **You should see** the full-screen cockpit of Parts 4 and 9, opened on its **Project view**. The left pane is titled `Project` and holds one row, `Map the project`. The right pane's title and first lines read:
 
 ```text
-lzg-cockpit · project, not mapped yet
-Next step: No map yet — press Enter to map the project
+lzg-cockpit · not mapped yet
+Next: Map the project — Enter
 
-lzg-cockpit is a C project with no harness.toml: nothing is mapped yet.
+Nothing is mapped yet.
+Mapping finds its programs and libraries, the files each one needs, what they share, and whether each program links. It compiles in the sandbox, runs nothing, and writes only under migration/.
 ```
 
-**What it means.** On a folder with no `harness.toml` the cockpit shows the project itself: what the map found on the left (nothing yet), the project in words on the right, and the one act that makes sense first. It names the folder, never its full path.
+**What it means.** On a folder with no `harness.toml` the cockpit shows the project itself: what the map found on the left (nothing yet), and on the right the one thing to do next, in one line, then what the selected row is. It names the folder, never its full path.
 
 **If you do not see that.** `… is not a harness target …`: the cockpit was started without a real Terminal (for example from a script). Run the box in a Terminal window.
 
@@ -6549,32 +6550,37 @@ lzg-cockpit is a C project with no harness.toml: nothing is mapped yet.
    then `Command:` and the exact command (the path is your own: `… harness project map --target /Users/<you>/lzg-cockpit`), and at the bottom `[ Cancel  Esc ] [ Run  y ]`.
 2. Wait until the dialog's last line reads `ready: → then Enter, or y`, then press `y`. **You should see** the activity line count the seconds, then `Ready. Last: Map the project — done (1 s); c for its words`.
 
-**You should see** the left pane list what the map found:
+**You should see** the left pane list what the map found, under a heading that counts the programs by state:
 
 ```text
-Programs (3)
-    ⚠ t-benchmark             held on a choice
-      src/tools/benchmark.c (a tool, by its f…
-    ✓ t-lzg                             linked
-      src/tools/lzg.c (a tool, by its folder)
-    ⚠ t-unlzg                 held on a choice
-      src/tools/unlzg.c (a tool, by its folde…
+Programs (3) · 2 need a decision
+  1 links
+    ⚠ t-benchmark needs a decision
+    ✓ t-lzg                  links
+    ⚠ t-unlzg     needs a decision
 ```
 
-Under each program, its file and what the map guesses it is (a tool, from the folder it sits in); the right pane says it whole. The right pane begins:
+and the right pane, for the selected row (`t-benchmark`):
 
 ```text
-Next step: The configuration is a guess — press Enter and choose Write the build configuration (or Ask for a proposal — ask in chat), then Map the project again
+Next: Write the build configuration — Enter, or Ask for a proposal in the chat
 
-lzg-cockpit is a C project with no harness.toml; the cockpit shows its map.
-Configuration: a guess — no migration/map/config.toml states the build yet (the map compiled with no flags of yours)
+t-benchmark                                   ⚠ needs a decision
+src/tools/benchmark.c · a tool, by its folder
+
+Decision: two files define the same functions. Keep which?
+  1  src/extra/lzgmini.c
+  2  src/lib/decode.c
+No advice yet — Enter, then Ask for advice (the chat answers)
+
+Enter: Write the build configuration
 ```
 
-and, under the list of programs, what its words mean: `held on a choice: two files define the same function; Accept asks which to keep.` and `linked: its files compile and link into one program.`
+(Without Claude Code on this computer the first line ends `Enter, it is the first item` instead.) The first line is the one thing to do now; the rest is the selected program: its file, what the map guesses it is (a tool, from the folder it sits in), and the decision linking could not make for you. Press `?`, then `↓`, for what each state word means ("What the states mean"); `Esc` closes the help.
 
 **Do.** Press `c`. **You should see** the activity details: the map's own screen of Step 12.2 (without the `.git` line: this copy has no git), ending `exit 0`. Press `c` again to close them.
 
-**What it means.** The cockpit ran exactly Step 12.2's command, through the same kind of dialog as every other act, then read the map again. On a narrower window a row's state word may not fit beside its name; its mark (`⚠`, `✓`) still shows, and the right pane says every state in words.
+**What it means.** The cockpit ran exactly Step 12.2's command, through the same kind of dialog as every other act, then read the map again. On a narrower window a row's state word may not fit beside its name; its mark (`⚠`, `✓`) still shows, and the selected row's card says its state in words.
 
 **If you do not see that.** If the left pane still shows only `Map the project`, the map failed: press `c` to read its words, and see ["The project map" in Troubleshooting](#the-project-map-part-12).
 
@@ -6582,11 +6588,11 @@ and, under the list of programs, what its words mean: `held on a choice: two fil
 
 **Do.** One key at a time:
 
-1. Press `Enter` (the first program, `t-benchmark`, is selected). **You should see** a menu whose first item is `Write the build configuration (in nano)` with `↳ recommended: the configuration is a guess`, then `Accept this program — Accept needs a stated configuration, …` in grey, `Accept it under a run name of your own…` in grey, `Map the project again`, the line `── Uses a model — can take minutes ──`, and under it `Ask for a proposal — ask in chat` and `Ask in chat…`. (The editor's name is your own: `nano` unless you set another. Without Claude Code on this computer, the two chat items are grey with `Claude Code is not installed — choose Check the chat's connection to see how to fix it`, a `Check the chat's connection…` item sits above the line, and the Next step leaves out its "(or Ask for a proposal — ask in chat)".)
+1. Press `Enter` (the first program, `t-benchmark`, is selected). **You should see** a menu whose first item is `Write the build configuration (in nano)` with `↳ recommended: Write the build configuration`, then `Accept this program — Accept waits for your build configuration: …` in grey, `Accept it under a run name of your own…` in grey, `Map the project again`, the line `── Uses a model — can take minutes ──`, and under it `Ask for a proposal — ask in chat` and `Ask in chat…`. (The editor's name is your own: `nano` unless you set another. Without Claude Code on this computer, the two chat items are grey with `Claude Code is not installed — choose Check the chat's connection to see how to fix it`, a `Check the chat's connection…` item sits above the line, and the Next step says `Enter, it is the first item` instead of naming the chat.)
 2. Press `↓` once (to `Accept this program`), then `Enter`. **You should see**, at the bottom of the menu:
 
    ```text
-   Why not: Accept needs a stated configuration, and this map's is a guess (or came with the project): choose Write the build configuration (or Ask for a proposal — ask in chat), then Map the project again
+   Why not: Accept waits for your build configuration: this map's is a guess (or came with the project) — choose Write the build configuration (or Ask for a proposal — ask in chat), then Map the project again
    ```
 
 3. Press `Esc` to close the menu.
@@ -6628,7 +6634,7 @@ and, under the list of programs, what its words mean: `held on a choice: two fil
 5. Press `Ctrl-O`, then `Enter` (it saves), then `Ctrl-X` (it leaves). **You should see** the cockpit again, with the line `migration/map/config.toml is written — choose Map the project again to map with it` under the activity line, and the right pane begin:
 
    ```text
-   Next step: migration/map/config.toml is written but this map was made before it — press Enter and choose Map the project again to use it
+   Next: Map the project again — Enter
    ```
 
 **What it means.** The second copy now states how it is built, like the first, and the cockpit says the map does not use it yet: the map was made before the file. The cockpit checked the file before writing it; a line it cannot read would have brought back a dialog naming that line, with `Edit again`.
@@ -6639,39 +6645,40 @@ and, under the list of programs, what its words mean: `held on a choice: two fil
 
 **Do.** One key at a time:
 
-1. Press `Enter`. **You should see** a menu whose first item is `Map the project again`, with `↳ recommended: migration/map/config.toml is written but this map was made before it`.
+1. Press `Enter`. **You should see** a menu whose first item is `Map the project again`, with `↳ recommended: Map the project again`.
 2. Press `Enter`. **You should see** the dialog of Step 12.24, titled `Map the project again?`.
 3. Wait for `ready: → then Enter, or y`, then press `y`.
 
 **You should see** the right pane now begin:
 
 ```text
-Next step: t-benchmark holds a choice — press Enter on it and choose Accept this program to pick which file to keep
-
-lzg-cockpit is a C project with no harness.toml; the cockpit shows its map.
-Configuration: stated (make)
+Next: Accept t-benchmark — Enter on its row, it asks for the file
 ```
+
+and the card's last line is `Enter: Accept t-benchmark — it asks for the file`.
 
 **What it means.** As in Step 12.3: programs can now be accepted. Press `c` to see the map's own screen, with `configuration: make, from make (stated in config.toml), …` as its second line; `c` again closes it.
 
-**If you do not see that.** `Configuration: a guess` still: the file of Step 12.26 is missing or in the wrong folder. Redo Step 12.26.
+**If you do not see that.** `Next: Write the build configuration` still: the file of Step 12.26 is missing or in the wrong folder. Redo Step 12.26.
 
 #### Step 12.28 — Accept a program from the cockpit
 
 **Do.** One key at a time:
 
-1. Press `↓` twice, to the row `t-unlzg`, the one with a held choice. **You should see** the right pane end with `── t-unlzg ──` and `Choice d1: two files define the same function, so linking cannot tell them apart (d1.1 src/extra/lzgmini.c, d1.2 src/lib/decode.c); Accept asks which to keep.`
-2. Press `Enter`. **You should see** a menu whose first item is `Accept this program`, with `↳ recommended: t-unlzg holds a choice`.
+1. Press `↓` twice, to the row `t-unlzg`, the one that needs a decision. **You should see** the right pane show its card: `Decision: two files define the same functions. Keep which?`, then the two files, `1  src/extra/lzgmini.c` and `2  src/lib/decode.c`, and `Enter: Accept t-unlzg — it asks for the file`.
+2. Press `Enter`. **You should see** a menu whose first item is `Accept this program`, with `↳ recommended: Accept t-unlzg`.
 3. Press `Enter`. **You should see** a menu titled `Accept t-unlzg`:
 
    ```text
-   t-unlzg holds the choice d1: two files define the same function, so keep which one?
+   Keep which file for the functions both define?
 
-     d1.1 src/extra/lzgmini.c
-     d1.2 src/lib/decode.c
+     1  src/extra/lzgmini.c
+     2  src/lib/decode.c
    ```
 
-4. Press `↓` (to `d1.2 src/lib/decode.c`), then `Enter`. **You should see** the dialog, titled `Accept t-unlzg?`:
+   (Had a model advised, its file would be marked `← the model advises this one` and its why written above; nothing is ever chosen for you.)
+
+4. Press `↓` (to `2  src/lib/decode.c`), then `Enter`. **You should see** the dialog, titled `Accept t-unlzg?`:
 
    ```text
    Accept a program: check the map still matches the project, apply your picks, link the program once more and write it as a tool you can scan, plan and migrate.
@@ -6679,20 +6686,23 @@ Configuration: stated (make)
    It writes: migration/tools/<id>/harness.toml only (an id accepted before keeps its ledger and what you added to that file).
    ```
 
-   then `Command:` and the exact command, ending `harness project accept t-unlzg --target /Users/<you>/lzg-cockpit --keep d1=d1.2`.
+   then `Command:` and the exact command, ending `harness project accept t-unlzg --target /Users/<you>/lzg-cockpit --keep d1=d1.2` (the command names the decision `d1` and the file you chose by its number in the map, `d1.2`).
 
-5. Wait for `ready: → then Enter, or y`, then press `y`. **You should see** `Ready. Last: Accept t-unlzg — done (1 s); c for its words`, the row `t-unlzg` now marked `✓ … accepted`, at the end of the left pane the new row, selected:
+5. Wait for `ready: → then Enter, or y`, then press `y`. **You should see** `Ready. Last: Accept t-unlzg — done (1 s); c for its words`, and the left pane:
 
    ```text
-   Accepted tools (1)
-       Open tool t-unlzg — src/tools/unlzg.c
+   Programs (3) · 1 accepted
+     1 needs a decision · 1 links
+       ⚠ t-benchmark needs a decision
+       ✓ t-lzg                  links
+       ✓ t-unlzg             accepted
    ```
 
-   and the right pane begin `Next step: t-unlzg is accepted — open it and scan it: press Enter on its row and choose Open tool t-unlzg` (the tool you just accepted comes first, before `t-benchmark`'s choice).
+   with `t-unlzg` still selected: an accepted program's row is its tool's row. The right pane begins `Next: Open tool t-unlzg — Enter on its row` (the tool you just accepted comes first, before `t-benchmark`'s decision), and the card says `Its build configuration: migration/tools/t-unlzg/harness.toml` and `Enter: Open tool t-unlzg`.
 
-6. Press `Enter`. **You should see** a menu whose first item is `Open tool t-unlzg`, with `↳ recommended: t-unlzg is accepted`.
+6. Press `Enter`. **You should see** a menu whose first item is `Open tool t-unlzg`, with `↳ recommended: Open tool t-unlzg`.
 7. Press `Enter`. **You should see** the tool's screen: `Next step: Nothing is scanned yet — press Enter and choose Scan the project`, and in Files, first, the row `◂ Back to the project view`. Under it come the tool, `Features` and `Speed`, then the project's folders and files, open (the tool has no units yet: once it has, the folders start folded and `Units` comes first). The project's files that are not part of the tool are greyed out and marked `⊖`.
-8. Press `↑` (to `◂ Back to the project view`), then `Enter`. **You should see** the Project view again, `Open tool t-unlzg` selected (that row has only one thing to do, so `Enter` does it).
+8. Press `↑` (to `◂ Back to the project view`), then `Enter`. **You should see** the Project view again, the row `t-unlzg` selected (the back row has only one thing to do, so `Enter` does it).
 
 **Do.** Press `q`.
 
@@ -6713,7 +6723,7 @@ If I edit the C, does the harness notice? Yes: the map named `t-lzg` as changed 
 - [ ] Step 12.14 showed `[SKIP] whole-program` first, and eight checks after you added `[oracle.whole_program]`.
 - [ ] After changing `version.c`, the map named `t-lzg` as changed, and `state status` began with the note (Steps 12.16–12.17).
 - [ ] Step 12.21 ended `verify: u-version GREEN — status set to verified`.
-- [ ] Step 12.26 wrote `migration/map/config.toml` from the cockpit, and Step 12.27's map said `Configuration: stated (make)`.
+- [ ] Step 12.26 wrote `migration/map/config.toml` from the cockpit, and after Step 12.27's map the Next step said `Next: Accept t-benchmark — Enter on its row, it asks for the file`.
 - [ ] Step 12.28's dialog showed `harness project accept t-unlzg --target … --keep d1=d1.2`.
 
 ### If you need to start this part again
