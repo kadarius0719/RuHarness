@@ -5,9 +5,16 @@
   @36-36 fg 244 NONE "┌"
   @37-61 fg 25 BOLD "liblzg · not mapped yet"
   @62-119 fg 244 NONE "─────────────────────────────────────────────────────────┐"
-│Map the project                   ││Next: Map the project — Enter                                                     │
+│Map the project                   ││Map ○ · Configure · Accept · then: scan, plan, and each piece                     │
   @0-0 fg 25 BOLD "│"
   @1-15 fg 25 BOLD | REVERSED "Map the project"
+  @35-35 fg 25 BOLD "│"
+  @36-36 fg 244 NONE "│"
+  @37-41 fg 23 BOLD "Map ○"
+  @42-97 fg 242 NONE "· Configure · Accept · then: scan, plan, and each piece"
+  @119-119 fg 244 NONE "│"
+│                                  ││Next: Map the project — Enter                                                     │
+  @0-0 fg 25 BOLD "│"
   @35-35 fg 25 BOLD "│"
   @36-36 fg 244 NONE "│"
   @37-41 fg 23 BOLD "Next:"
@@ -40,11 +47,6 @@
   @35-35 fg 25 BOLD "│"
   @36-36 fg 244 NONE "│"
   @37-69 fg 127 NONE "and writes only under migration/."
-  @119-119 fg 244 NONE "│"
-│                                  ││                                                                                  │
-  @0-0 fg 25 BOLD "│"
-  @35-35 fg 25 BOLD "│"
-  @36-36 fg 244 NONE "│"
   @119-119 fg 244 NONE "│"
 │                                  ││                                                                                  │
   @0-0 fg 25 BOLD "│"

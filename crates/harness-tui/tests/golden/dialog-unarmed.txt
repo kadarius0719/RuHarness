@@ -1,13 +1,13 @@
 ┌ Files ───────────────────────┐┌ u-lib · done ────────────────────────────────────────────────────────────────────────┐
-│▾ harness-tui-gdialog-00… ✓1/1││✓ u-lib done                                                                          │
-│  ▾ Units (1)                 ││Next: In Rust and checked — nothing to do                                             │
-│    ▸ ✓ u-lib             done││                                                                                      │
-│    Features (none yet)       ││1 exported function: read_scalefactors (44 lines)                                     │
-│    Speed — not set up        ││Its C: 1 file — test_case/src/lib.c                                                   │
-│  ▸ test_case/            ✓1/1││Crate from attempt a-13c9 (pipeline) · verdict green, fresh                           │
+│▾ harness-tui-gdialog-00… ✓1/1││Map ✓ · Configure ✓ · Accept ✓ · Scan ✓ · Plan ✓ · Test program ✓ · Rust ✓ · Accept ✓ │
+│  ▾ Units (1)                 ││✓ u-lib done                                                                          │
+│    ▸ ✓ u-lib             done││Next: In Rust and checked — nothing to do                                             │
+│    Features (none yet)       ││                                                                                      │
+│    Speed — not set up        ││1 exported function: read_scalefactors (44 lines)                                     │
+│  ▸ test_case/            ✓1/1││Its C: 1 file — test_case/src/lib.c                                                   │
+│                              ││Crate from attempt a-13c9 (pipeline) · verdict green, fresh                           │
 │                              ││Attempts: 3 — 2 green, 1 red (listed under its row in the tree)                       │
-│                              ││Checks  – whole program not run  ✓ same exports  ✓ allowed calls only  ✓ driver shape │
-│                     ┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐                     │
+│                     ┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐only  ✓ driver shape │
 │                     │Builds u-lib's Rust and runs it against the C in the sandbox.             │                     │
 │                     │Writes units/u-lib/oracle-latest.json and .md (and oracle-last-green.json │                     │
 │                     │when green) and u-lib's status in plan.toml: green → verified; red → a    │                     │

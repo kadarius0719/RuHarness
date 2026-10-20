@@ -2960,9 +2960,21 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
         area.width as usize
     };
     let block = pane_block(ellipsis(&view_title(app), room.max(4)), focused);
-    let inner = block.inner(area);
+    let mut inner = block.inner(area);
     frame.render_widget(block, area);
     app.hits.push((area, Hit::Pane(Focus::View)));
+    // The journey line under the title, on every screen (§9.4): where the
+    // person is among the eight stages.
+    if inner.height >= 3 {
+        let spans = app
+            .journey()
+            .spans(inner.width as usize, frame.area().width);
+        frame.render_widget(
+            Paragraph::new(Line::from(clipped(spans, inner.width as usize))),
+            Rect::new(inner.x, inner.y, inner.width, 1),
+        );
+        inner = Rect::new(inner.x, inner.y + 1, inner.width, inner.height - 1);
+    }
     let width = inner.width as usize;
     let sel = app.selection.clone();
     // Lists: the project summary, a directory, the units group.
@@ -4971,6 +4983,25 @@ mod tests {
                 text_of(buffer)
             );
         }
+        // The journey line's current stage is its one accent (§9.4).
+        let (journey, accents): (Vec<_>, Vec<_>) = accents
+            .into_iter()
+            .partition(|(t, _)| t.ends_with(" ○") || t.starts_with("Step "));
+        // The folded line's stage: a stage's name, with its count or not.
+        let journey_stage = |t: &str| {
+            crate::journey::STAGES.iter().any(|s| {
+                t.strip_prefix(s)
+                    .is_some_and(|rest| rest.trim().chars().all(|c| c.is_ascii_digit() || c == '/'))
+            })
+        };
+        let (journey_short, accents): (Vec<_>, Vec<_>) = accents
+            .into_iter()
+            .partition(|(t, _)| journey_stage(t) && !t.contains(':'));
+        assert!(
+            journey.len() + journey_short.len() <= 1,
+            "{name} ({}): more than one journey stage in the accent: {journey:?} {journey_short:?}",
+            theme.name()
+        );
         let (next, items): (Vec<_>, Vec<_>) = accents
             .iter()
             .partition(|(t, _)| t == "Next step:" || t == "Next:");
@@ -5124,8 +5155,14 @@ mod tests {
         assert!(!fails(b.clone()));
         b.set_string(0, 1, "Open", Theme::Dark.style(Role::Accent));
         assert!(!fails(b.clone()));
-        b.set_string(12, 0, "Scan", Theme::Dark.style(Role::Accent));
-        assert!(fails(b));
+        b.set_string(12, 0, "Settings", Theme::Dark.style(Role::Accent));
+        assert!(fails(b.clone()));
+        // The journey line's current stage is its own accent, once.
+        let mut j = paint("Next:", Role::Accent);
+        j.set_string(0, 1, "Test program ○", Theme::Dark.style(Role::Accent));
+        assert!(!fails(j.clone()));
+        j.set_string(16, 1, "Rust ○", Theme::Dark.style(Role::Accent));
+        assert!(fails(j));
     }
 
     /// The first screen, a unit's View and the Project view, in each theme
@@ -7090,6 +7127,8 @@ mod tests {
             .map(|l| l.trim_end_matches('│').trim_end().to_string())
             .filter(|l| !l.is_empty())
             .collect();
+        assert_eq!(view[0], "Step 6 of 8: Test program", "{screen}");
+        let view = &view[1..];
         assert_eq!(
             view.first().map(String::as_str),
             Some("◇ u-cache no test program"),

@@ -5,32 +5,33 @@
   @24-24 fg 244 NONE "┌"
   @25-51 fg 25 BOLD "u-cache · no test program"
   @52-79 fg 244 NONE "───────────────────────────┐"
-│▾ harness-tui-theme-u…││◇ u-cache no test program                             │
+│▾ harness-tui-theme-u…││Step 6 of 8: Test program                             │
   @0-0 fg 25 BOLD "│"
   @1-2 fg 242 NONE "▾"
   @3-23 fg 25 BOLD "harness-tui-theme-u…│"
   @24-24 fg 244 NONE "│"
-  @25-26 fg 240 NONE "◇"
-  @27-34 fg - BOLD "u-cache"
+  @25-37 fg 242 NONE "Step 6 of 8:"
+  @38-49 fg 23 BOLD "Test program"
   @79-79 fg 244 NONE "│"
-│  ▾ Units (11)        ││Next: No Rust yet — ask the chat to migrate it (a     │
+│  ▾ Units (11)        ││◇ u-cache no test program                             │
   @0-0 fg 25 BOLD "│"
   @1-4 fg 242 NONE "▾"
   @5-14 fg 25 BOLD "Units (11)"
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
-  @25-29 fg 23 BOLD "Next:"
-  @30-73 fg - BOLD "No Rust yet — ask the chat to migrate it (a"
+  @25-26 fg 240 NONE "◇"
+  @27-34 fg - BOLD "u-cache"
   @79-79 fg 244 NONE "│"
-│    ▸ ✓? u001-katajai…││model writes the Rust, the judge checks it, you accept│
+│    ▸ ✓? u001-katajai…││Next: No Rust yet — ask the chat to migrate it (a     │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 242 NONE "▸"
   @7-9 fg 28 NONE "✓?"
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
-  @25-78 fg - BOLD "model writes the Rust, the judge checks it, you accept"
+  @25-29 fg 23 BOLD "Next:"
+  @30-73 fg - BOLD "No Rust yet — ask the chat to migrate it (a"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-c… no test …││it)                                                   │
+│    ▸ ◇ u-c… no test …││model writes the Rust, the judge checks it, you accept│
   @0-0 fg 25 BOLD "│"
   @1-6 fg 242 BOLD | REVERSED "▸"
   @7-8 fg 240 BOLD | REVERSED "◇"
@@ -38,51 +39,59 @@
   @14-22 fg 240 BOLD | REVERSED "no test …"
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
+  @25-78 fg - BOLD "model writes the Rust, the judge checks it, you accept"
+  @79-79 fg 244 NONE "│"
+│    ▸ ◇ u-hash        ││it)                                                   │
+  @0-0 fg 25 BOLD "│"
+  @1-6 fg 242 NONE "▸"
+  @7-8 fg 240 NONE "◇"
+  @23-23 fg 25 BOLD "│"
+  @24-24 fg 244 NONE "│"
   @25-27 fg - BOLD "it)"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-hash        ││                                                      │
+│    ▸ ◇ u-lz77        ││                                                      │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 242 NONE "▸"
   @7-8 fg 240 NONE "◇"
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-lz77        ││5 exported functions: ZopfliCacheToSublen (22 lines), │
+│    ▸ ◇ u-tree        ││5 exported functions: ZopfliCacheToSublen (22 lines), │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 242 NONE "▸"
   @7-8 fg 240 NONE "◇"
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-tree        ││ZopfliCleanCache (5 lines), ZopfliInitCache (19       │
+│    ▸ ◇ u-blocksplitt…││ZopfliCleanCache (5 lines), ZopfliInitCache (19       │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 242 NONE "▸"
   @7-8 fg 240 NONE "◇"
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-blocksplitt…││lines), ZopfliMaxCachedSublen (11 lines),             │
+│    ▸ ◇ u-gzip_contai…││lines), ZopfliMaxCachedSublen (11 lines),             │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 242 NONE "▸"
   @7-8 fg 240 NONE "◇"
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-gzip_contai…││ZopfliSublenToCache (32 lines)                        │
+│    ▸ ◇ u-util        ││ZopfliSublenToCache (32 lines)                        │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 242 NONE "▸"
   @7-8 fg 240 NONE "◇"
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-util        ││Its C: 1 file — src/zopfli/cache.c                    │
+│    ▸ ◇ u-zlib_contai…││Its C: 1 file — src/zopfli/cache.c                    │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 242 NONE "▸"
   @7-8 fg 240 NONE "◇"
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-zlib_contai…││No Rust yet                                           │
+│    ▸ ◇ u-zopfli_lib  ││No Rust yet                                           │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 242 NONE "▸"
   @7-8 fg 240 NONE "◇"
@@ -90,40 +99,33 @@
   @24-24 fg 244 NONE "│"
   @25-35 fg 242 NONE "No Rust yet"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-zopfli_lib  ││5 of your features run it · still C — see Features    │
+│    ▸ ◇ u-zopfli_bin  ││5 of your features run it · still C — see Features    │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 242 NONE "▸"
   @7-8 fg 240 NONE "◇"
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-zopfli_bin  ││Attempts: none yet                                    │
-  @0-0 fg 25 BOLD "│"
-  @1-6 fg 242 NONE "▸"
-  @7-8 fg 240 NONE "◇"
-  @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
-  @25-33 fg 25 BOLD "Attempts:"
-  @79-79 fg 244 NONE "│"
-│  ▾ Features (7)      ││                                                      │
+│  ▾ Features (7)      ││Attempts: none yet                                    │
   @0-0 fg 25 BOLD "│"
   @1-4 fg 242 NONE "▾"
   @5-16 fg 25 BOLD "Features (7)"
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
+  @25-33 fg 25 BOLD "Attempts:"
   @79-79 fg 244 NONE "│"
-│      ◉ Compress to g…││▸ C source (Tab to the View, then Enter)              │
+│      ◉ Compress to g…││                                                      │
+  @0-0 fg 25 BOLD "│"
+  @7-8 fg 28 NONE "◉"
+  @23-23 fg 25 BOLD "│"
+  @24-24 fg 244 NONE "│"
+  @79-79 fg 244 NONE "│"
+│      ◉ Compress to z…││▸ C source (Tab to the View, then Enter)              │
   @0-0 fg 25 BOLD "│"
   @7-8 fg 28 NONE "◉"
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
   @25-64 fg 25 BOLD "▸ C source (Tab to the View, then Enter)"
-  @79-79 fg 244 NONE "│"
-│      ◉ Compress to z…││                                                      │
-  @0-0 fg 25 BOLD "│"
-  @7-8 fg 28 NONE "◉"
-  @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
 │      ◉ Compress to r…││                                                      │
   @0-0 fg 25 BOLD "│"

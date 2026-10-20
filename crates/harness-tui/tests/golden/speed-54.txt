@@ -1,29 +1,29 @@
 ┌ Files ───────────────┐┌ Speed (1 of 1) ──────────────────────────────────────┐
-│▾ harness-tui-speed-v…││Next: u001-katajainen's Rust is slower than the C —   │
-│  ▾ Units (11)        ││open it under Units to see how to change it, if speed │
-│    ▸ ✓? u001-katajai…││matters there                                         │
-│    ▸ ◇ u-cache       ││                                                      │
-│    ▸ ◇ u-hash        ││Speed — your workloads, the C against the Rust in use │
-│    ▸ ◇ u-lz77        ││measured on Apple M3 with 2 compilers — see each row ·│
-│    ▸ ◇ u-tree        ││as verify builds them · 15 runs each · compares what  │
-│    ▸ ◇ u-blocksplitt…││the program prints and how it ends                    │
-│    ▸ ◇ u-gzip_contai…││                                                      │
-│    ▸ ◇ u-util        ││The original C                                        │
-│    ▸ ◇ u-zlib_contai…││  big-text                  CPU 1.22 s · 12.4 MB      │
-│    ▸ ◇ u-zopfli_lib  ││  many-small                too short to time         │
-│    ▸ ◇ u-zopfli_bin  ││  compress-a-big-text-file  CPU 12.4 s · 124 MB       │
-│  ▾ Features (7)      ││    last try: the C ends or prints differently from   │
-│      ◉ Compress to g…││    one run to the next                               │
-│      ◉ Compress to z…││As it stands (1 of 2 units — 1 left out)              │
-│      ◉ Compress to r…││  big-text                  slower 6.2 % (5.6–6.8 %)  │
-│      ◉ Say what it d…││  many-small                too short to time         │
-│      ◉ Compress quic…││u001-katajainen                                       │
-│      ◌ Show the help ││  big-text                  slower 6.2 % (5.6–6.8 %)  │
-│      ◌ Report a miss…││  compress-a-big-text-file  slower 6.2 % · parallel   │
-│    Speed (1 of 1)    ││  many-small                too short to time         │
-│  ▸ src/ ✓0/13 (+1 ✓?)││                                                      │
-│                      ││Move to a row (Tab, then ↓) to read its full words.   │
+│▾ harness-tui-speed-v…││Step 6 of 8: Test program 1/11                        │
+│  ▾ Units (11)        ││Next: u001-katajainen's Rust is slower than the C —   │
+│    ▸ ✓? u001-katajai…││open it under Units to see how to change it, if speed │
+│    ▸ ◇ u-cache       ││matters there                                         │
+│    ▸ ◇ u-hash        ││                                                      │
+│    ▸ ◇ u-lz77        ││Speed — your workloads, the C against the Rust in use │
+│    ▸ ◇ u-tree        ││measured on Apple M3 with 2 compilers — see each row ·│
+│    ▸ ◇ u-blocksplitt…││as verify builds them · 15 runs each · compares what  │
+│    ▸ ◇ u-gzip_contai…││the program prints and how it ends                    │
+│    ▸ ◇ u-util        ││                                                      │
+│    ▸ ◇ u-zlib_contai…││The original C                                        │
+│    ▸ ◇ u-zopfli_lib  ││  big-text                  CPU 1.22 s · 12.4 MB      │
+│    ▸ ◇ u-zopfli_bin  ││  many-small                too short to time         │
+│  ▾ Features (7)      ││  compress-a-big-text-file  CPU 12.4 s · 124 MB       │
+│      ◉ Compress to g…││    last try: the C ends or prints differently from   │
+│      ◉ Compress to z…││    one run to the next                               │
+│      ◉ Compress to r…││As it stands (1 of 2 units — 1 left out)              │
+│      ◉ Say what it d…││  big-text                  slower 6.2 % (5.6–6.8 %)  │
+│      ◉ Compress quic…││  many-small                too short to time         │
+│      ◌ Show the help ││u001-katajainen                                       │
+│      ◌ Report a miss…││  big-text                  slower 6.2 % (5.6–6.8 %)  │
+│    Speed (1 of 1)    ││  compress-a-big-text-file  slower 6.2 % · parallel   │
+│  ▸ src/ ✓0/13 (+1 ✓?)││  many-small                too short to time         │
 │                      ││                                                      │
+│                      ││Move to a row (Tab, then ↓) to read its full words.   │
 │                      ││                                                      │
 │                      ││                                                      │
 │                      ││                                                      │

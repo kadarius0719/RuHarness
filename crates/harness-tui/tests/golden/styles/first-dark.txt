@@ -5,39 +5,48 @@
   @24-24 fg 244 NONE "┌"
   @25-78 fg 75 BOLD "harness-tui-theme-first-0000000000 · 0 of 13 C files"
   @79-79 fg 244 NONE "┐"
-│▾ harness… ✓0/13 (+1 …││Next: 3 units have no Rust yet — migrate the first,   │
+│▾ harness… ✓0/13 (+1 …││Step 6 of 8: Test program 1/11                        │
   @0-0 fg 75 BOLD "│"
   @1-2 fg 248 BOLD | REVERSED "▾"
   @3-10 fg 75 BOLD | REVERSED "harness…"
   @12-22 fg 250 BOLD | REVERSED "✓0/13 (+1 …"
   @23-23 fg 75 BOLD "│"
   @24-24 fg 244 NONE "│"
-  @25-29 fg 81 BOLD "Next:"
-  @30-75 fg - BOLD "3 units have no Rust yet — migrate the first,"
+  @25-37 fg 248 NONE "Step 6 of 8:"
+  @38-54 fg 81 BOLD "Test program 1/11"
   @79-79 fg 244 NONE "│"
-│  ▾ Units (11)        ││u-cache: press Enter and choose Migrate — ask in chat │
+│  ▾ Units (11)        ││Next: 3 units have no Rust yet — migrate the first,   │
   @0-0 fg 75 BOLD "│"
   @1-4 fg 248 NONE "▾"
   @5-14 fg 75 BOLD "Units (11)"
   @23-23 fg 75 BOLD "│"
   @24-24 fg 244 NONE "│"
-  @25-77 fg - BOLD "u-cache: press Enter and choose Migrate — ask in chat"
+  @25-29 fg 81 BOLD "Next:"
+  @30-75 fg - BOLD "3 units have no Rust yet — migrate the first,"
   @79-79 fg 244 NONE "│"
-│    ▸ ✓? u001-katajai…││                                                      │
+│    ▸ ✓? u001-katajai…││u-cache: press Enter and choose Migrate — ask in chat │
   @0-0 fg 75 BOLD "│"
   @1-6 fg 248 NONE "▸"
   @7-9 fg 114 NONE "✓?"
   @23-23 fg 75 BOLD "│"
   @24-24 fg 244 NONE "│"
+  @25-77 fg - BOLD "u-cache: press Enter and choose Migrate — ask in chat"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-cache       ││26 files scanned                                      │
+│    ▸ ◇ u-cache       ││                                                      │
   @0-0 fg 75 BOLD "│"
   @1-6 fg 248 NONE "▸"
   @7-8 fg 250 NONE "◇"
   @23-23 fg 75 BOLD "│"
   @24-24 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-hash        ││Units (11): 1 ✓? verified, origin not recorded · 10 ◇ │
+│    ▸ ◇ u-hash        ││26 files scanned                                      │
+  @0-0 fg 75 BOLD "│"
+  @1-6 fg 248 NONE "▸"
+  @7-8 fg 250 NONE "◇"
+  @23-23 fg 75 BOLD "│"
+  @24-24 fg 244 NONE "│"
+  @79-79 fg 244 NONE "│"
+│    ▸ ◇ u-lz77        ││Units (11): 1 ✓? verified, origin not recorded · 10 ◇ │
   @0-0 fg 75 BOLD "│"
   @1-6 fg 248 NONE "▸"
   @7-8 fg 250 NONE "◇"
@@ -45,34 +54,27 @@
   @24-24 fg 244 NONE "│"
   @25-35 fg 75 BOLD "Units (11):"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-lz77        ││no test program                                       │
+│    ▸ ◇ u-tree        ││no test program                                       │
   @0-0 fg 75 BOLD "│"
   @1-6 fg 248 NONE "▸"
   @7-8 fg 250 NONE "◇"
   @23-23 fg 75 BOLD "│"
   @24-24 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-tree        ││                                                      │
+│    ▸ ◇ u-blocksplitt…││                                                      │
   @0-0 fg 75 BOLD "│"
   @1-6 fg 248 NONE "▸"
   @7-8 fg 250 NONE "◇"
   @23-23 fg 75 BOLD "│"
   @24-24 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-blocksplitt…││Features: 7 — 5 hold so far, 2 still all C            │
+│    ▸ ◇ u-gzip_contai…││Features: 7 — 5 hold so far, 2 still all C            │
   @0-0 fg 75 BOLD "│"
   @1-6 fg 248 NONE "▸"
   @7-8 fg 250 NONE "◇"
   @23-23 fg 75 BOLD "│"
   @24-24 fg 244 NONE "│"
   @25-33 fg 75 BOLD "Features:"
-  @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-gzip_contai…││                                                      │
-  @0-0 fg 75 BOLD "│"
-  @1-6 fg 248 NONE "▸"
-  @7-8 fg 250 NONE "◇"
-  @23-23 fg 75 BOLD "│"
-  @24-24 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
 │    ▸ ◇ u-util        ││                                                      │
   @0-0 fg 75 BOLD "│"

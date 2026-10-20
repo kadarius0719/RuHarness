@@ -952,7 +952,7 @@ fn the_card_of_each_selection() {
         let screen = text(&render(app, 160, 40));
         screen
             .lines()
-            .skip(1)
+            .skip(2)
             .map(|l| l.split('│').nth(3).unwrap_or("").trim_end().to_string())
             .collect()
     };

@@ -1,38 +1,38 @@
 ┌ Files ───────────────────────┐┌ src/zopfli · 1 failing · 1 needs attention · 1 changed since the scan · 1 not scanned┐
-│▾ harness-tui-gglyph-00000000…││1 failing · 1 needs attention · 1 changed since the scan · 1 not scanned yet · 1      │
-│  ▾ Units (11)                ││missing · 2 of 14 C files in Rust · 3 more verified, origin not recorded              │
-│    ▸ ⊘ u001-katajain… blocked││✓? blocksplitter.c  verified, origin not recorded                                     │
-│    ▸ ⚠ u-cache               ││·  blocksplitter.h  header                                                            │
-│    ▸ ✗ u-hash         failing││⚠  cache.c  needs attention                                                           │
-│    ▸ ✓ u-lz77            done││·  cache.h  header                                                                    │
-│    ▸ ✓ u-tree  done (steered)││✓? deflate.c  verified, origin not recorded                                           │
-│    ▸ ✓? u-blocksplitter-defl…││·  deflate.h  header                                                                  │
-│    ▸ ✓? u-gzip_container     ││!  edited.c  changed since scan                                                       │
-│    ▸ ◐ u-util      Rust tried││+  fresh.c  not scanned yet                                                           │
-│    ▸ ◇ u-zlib_container      ││?  gone.c  missing                                                                    │
-│    ▸ ◇ u-zopfli_lib          ││✓? gzip_container.c  Rust green — accept it                                           │
-│    ▸ u-zopfli_bin in progress││·  gzip_container.h  header                                                           │
-│  ▾ Features (7)              ││✗  hash.c  failing                                                                    │
-│      ◉ Compress to gzip      ││·  hash.h  header                                                                     │
-│      ◉ Compress to zlib      ││○  katajainen.c  not in the plan                                                      │
-│      ◉ Compress to raw defla…││·  katajainen.h  header                                                               │
-│      ◉ Say what it does      ││○  loose.c  not in the plan                                                           │
-│      ◉ Compress quickly      ││✓  lz77.c  done                                                                       │
-│      ◌ Show the help         ││·  lz77.h  header                                                                     │
-│      ◌ Report a missing file ││✓? squeeze.c  verified, origin not recorded                                           │
-│    Speed — not set up        ││·  squeeze.h  header                                                                  │
-│  ▾ src/                      ││–  statics.c  no exported functions                                                   │
-│    ▾ zopfli/ ✗1 ⚠1 !1 +1 ?1 …││·  symbols.h  header                                                                  │
-│      ▸ ✓? blocksplitter.c    ││✓  tree.c  done (steered)                                                             │
-│        · blocksplitte… header││·  tree.h  header                                                                     │
-│      ▸ ⚠ cache.c             ││◐  util.c  Rust tried                                                                 │
-│        · cache.h       header││·  util.h  header                                                                     │
-│      ▸ ✓? deflate.c          ││◇  zlib_container.c  test program ready                                               │
-│        · deflate.h     header││·  zlib_container.h  header                                                           │
-│      ▸ ! edited.c            ││·  zopfli.h  header                                                                   │
-│      ▸ + fresh.c             ││   zopfli_bin.c  in progress                                                          │
-│      ▸ ? gone.c       missing││◇  zopfli_lib.c  no test program                                                      │
-│      ▸ ✓? gzip_container.c   ││                                                                                      │
+│▾ harness-tui-gglyph-00000000…││Step 4 of 8: Scan                                                                     │
+│  ▾ Units (11)                ││1 failing · 1 needs attention · 1 changed since the scan · 1 not scanned yet · 1      │
+│    ▸ ⊘ u001-katajain… blocked││missing · 2 of 14 C files in Rust · 3 more verified, origin not recorded              │
+│    ▸ ⚠ u-cache               ││✓? blocksplitter.c  verified, origin not recorded                                     │
+│    ▸ ✗ u-hash         failing││·  blocksplitter.h  header                                                            │
+│    ▸ ✓ u-lz77            done││⚠  cache.c  needs attention                                                           │
+│    ▸ ✓ u-tree  done (steered)││·  cache.h  header                                                                    │
+│    ▸ ✓? u-blocksplitter-defl…││✓? deflate.c  verified, origin not recorded                                           │
+│    ▸ ✓? u-gzip_container     ││·  deflate.h  header                                                                  │
+│    ▸ ◐ u-util      Rust tried││!  edited.c  changed since scan                                                       │
+│    ▸ ◇ u-zlib_container      ││+  fresh.c  not scanned yet                                                           │
+│    ▸ ◇ u-zopfli_lib          ││?  gone.c  missing                                                                    │
+│    ▸ u-zopfli_bin in progress││✓? gzip_container.c  Rust green — accept it                                           │
+│  ▾ Features (7)              ││·  gzip_container.h  header                                                           │
+│      ◉ Compress to gzip      ││✗  hash.c  failing                                                                    │
+│      ◉ Compress to zlib      ││·  hash.h  header                                                                     │
+│      ◉ Compress to raw defla…││○  katajainen.c  not in the plan                                                      │
+│      ◉ Say what it does      ││·  katajainen.h  header                                                               │
+│      ◉ Compress quickly      ││○  loose.c  not in the plan                                                           │
+│      ◌ Show the help         ││✓  lz77.c  done                                                                       │
+│      ◌ Report a missing file ││·  lz77.h  header                                                                     │
+│    Speed — not set up        ││✓? squeeze.c  verified, origin not recorded                                           │
+│  ▾ src/                      ││·  squeeze.h  header                                                                  │
+│    ▾ zopfli/ ✗1 ⚠1 !1 +1 ?1 …││–  statics.c  no exported functions                                                   │
+│      ▸ ✓? blocksplitter.c    ││·  symbols.h  header                                                                  │
+│        · blocksplitte… header││✓  tree.c  done (steered)                                                             │
+│      ▸ ⚠ cache.c             ││·  tree.h  header                                                                     │
+│        · cache.h       header││◐  util.c  Rust tried                                                                 │
+│      ▸ ✓? deflate.c          ││·  util.h  header                                                                     │
+│        · deflate.h     header││◇  zlib_container.c  test program ready                                               │
+│      ▸ ! edited.c            ││·  zlib_container.h  header                                                           │
+│      ▸ + fresh.c             ││·  zopfli.h  header                                                                   │
+│      ▸ ? gone.c       missing││   zopfli_bin.c  in progress                                                          │
+│      ▸ ✓? gzip_container.c   ││◇  zopfli_lib.c  no test program                                                      │
 │        · gzip_contain… header││                                                                                      │
 │      ▸ ✗ hash.c       failing││                                                                                      │
 │        · hash.h        header││                                                                                      │

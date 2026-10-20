@@ -3,9 +3,13 @@
   @1-9 fg Blue BOLD | REVERSED "Project"
   @10-35 fg Blue BOLD "─────────────────────────┐"
   @37-61 fg Blue BOLD "liblzg · not mapped yet"
-│Map the project                   ││Next: Map the project — Enter                                                     │
+│Map the project                   ││Map ○ · Configure · Accept · then: scan, plan, and each piece                     │
   @0-0 fg Blue BOLD "│"
   @1-15 fg Blue BOLD | REVERSED "Map the project"
+  @35-35 fg Blue BOLD "│"
+  @37-41 fg Cyan BOLD "Map ○"
+│                                  ││Next: Map the project — Enter                                                     │
+  @0-0 fg Blue BOLD "│"
   @35-35 fg Blue BOLD "│"
   @37-41 fg Cyan BOLD "Next:"
   @42-65 fg - BOLD "Map the project — Enter"
@@ -27,9 +31,6 @@
   @0-0 fg Blue BOLD "│"
   @35-35 fg Blue BOLD "│"
   @37-69 fg Magenta NONE "and writes only under migration/."
-│                                  ││                                                                                  │
-  @0-0 fg Blue BOLD "│"
-  @35-35 fg Blue BOLD "│"
 │                                  ││                                                                                  │
   @0-0 fg Blue BOLD "│"
   @35-35 fg Blue BOLD "│"

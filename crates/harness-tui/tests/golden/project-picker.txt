@@ -1,22 +1,22 @@
 ┌ Project ─────────────────────────┐┌ liblzg · 4 programs found ───────────────────────────────────────────────────────┐
-│Programs (4)                      ││Next: Accept t-unlzg — Enter on its row, it asks for the file                     │
-│✓ t-lzg                      links││                                                                                  │
-│⚠ t-unlzg         needs a decision││t-unlzg                                                         ⚠ needs a decision│
-│· t-fuzz        fuzzer, not a tool││tools/unlzg.c · looks like a tool (it is not in a test, example or benchmark      │
-│✗ tools/broken.c   did not compile││folder)                                                                           │
-│Libraries (2)                     ││                                                                                  │
-│✓ l-checksum              compiles││Decision: two files define the same functions. Keep which?                        │
-│✗ l-bad            did not compile││  1  src/decode.c                                                                 │
+│Programs (4)                      ││Map ✓ · Configure ✓ · Accept ○ · then: scan, plan, and each piece                 │
+│✓ t-lzg                      links││Next: Accept t-unlzg — Enter on its row, it asks for the file                     │
+│⚠ t-unlzg         needs a decision││                                                                                  │
+│· t-fuzz        fuzzer, not a tool││t-unlzg                                                         ⚠ needs a decision│
+│✗ tools/broken.c   did not compile││tools/unlzg.c · looks like a tool (it is not in a test, example or benchmark      │
+│Libraries (2)                     ││folder)                                                                           │
+│✓ l-checksum              compiles││                                                                                  │
+│✗ l-bad            did not compile││Decision: two files define the same functions. Keep which?                        │
+│                                  ││  1  src/decode.c                                                                 │
 │                                  ││  2  src/mini.c  ← the model advises this one                                     │
 │                                  ││Why (claude-x): they are two implementations of the same thing.                   │
 │                                  ││This is advice; you pick the file when you accept.                                │
-│                                  ││                                                                                  │
-│                           ┌ Accept t-unlzg ──────────────────────────────────────────────┐ch?                        │
-│                           │Keep which file for the functions both define?                │                           │
+│                           ┌ Accept t-unlzg ──────────────────────────────────────────────┐                           │
+│                           │Keep which file for the functions both define?                │ch?                        │
 │                           │Why (claude-x): they are two implementations of the same      │                           │
 │                           │thing.                                                        │                           │
-│                           │                                                              │ the command line (the     │
-│                           │  1  src/decode.c                                             │                           │
+│                           │                                                              │                           │
+│                           │  1  src/decode.c                                             │ the command line (the     │
 │                           │  2  src/mini.c  ← the model advises this one                 │                           │
 │                           └ Enter choose · Esc close ────────────────────────────────────┘                           │
 │                                  ││                                                                                  │

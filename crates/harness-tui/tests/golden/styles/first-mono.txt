@@ -3,40 +3,41 @@
   @1-7 fg - BOLD | REVERSED "Files"
   @8-23 fg - BOLD "───────────────┐"
   @25-78 fg - BOLD "harness-tui-theme-first-0000000000 · 0 of 13 C files"
-│▾ harness… ✓0/13 (+1 …││Next: 3 units have no Rust yet — migrate the first,   │
+│▾ harness… ✓0/13 (+1 …││Step 6 of 8: Test program 1/11                        │
   @0-0 fg - BOLD "│"
   @1-22 fg - BOLD | REVERSED "▾ harness… ✓0/13 (+1 …"
   @23-23 fg - BOLD "│"
-  @25-29 fg - BOLD | UNDERLINED "Next:"
-  @30-75 fg - BOLD "3 units have no Rust yet — migrate the first,"
-│  ▾ Units (11)        ││u-cache: press Enter and choose Migrate — ask in chat │
+  @38-54 fg - BOLD | UNDERLINED "Test program 1/11"
+│  ▾ Units (11)        ││Next: 3 units have no Rust yet — migrate the first,   │
   @0-0 fg - BOLD "│"
   @5-14 fg - BOLD "Units (11)"
   @23-23 fg - BOLD "│"
+  @25-29 fg - BOLD | UNDERLINED "Next:"
+  @30-75 fg - BOLD "3 units have no Rust yet — migrate the first,"
+│    ▸ ✓? u001-katajai…││u-cache: press Enter and choose Migrate — ask in chat │
+  @0-0 fg - BOLD "│"
+  @23-23 fg - BOLD "│"
   @25-77 fg - BOLD "u-cache: press Enter and choose Migrate — ask in chat"
-│    ▸ ✓? u001-katajai…││                                                      │
+│    ▸ ◇ u-cache       ││                                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│    ▸ ◇ u-cache       ││26 files scanned                                      │
+│    ▸ ◇ u-hash        ││26 files scanned                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│    ▸ ◇ u-hash        ││Units (11): 1 ✓? verified, origin not recorded · 10 ◇ │
+│    ▸ ◇ u-lz77        ││Units (11): 1 ✓? verified, origin not recorded · 10 ◇ │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
   @25-35 fg - BOLD "Units (11):"
-│    ▸ ◇ u-lz77        ││no test program                                       │
+│    ▸ ◇ u-tree        ││no test program                                       │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│    ▸ ◇ u-tree        ││                                                      │
+│    ▸ ◇ u-blocksplitt…││                                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│    ▸ ◇ u-blocksplitt…││Features: 7 — 5 hold so far, 2 still all C            │
+│    ▸ ◇ u-gzip_contai…││Features: 7 — 5 hold so far, 2 still all C            │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
   @25-33 fg - BOLD "Features:"
-│    ▸ ◇ u-gzip_contai…││                                                      │
-  @0-0 fg - BOLD "│"
-  @23-23 fg - BOLD "│"
 │    ▸ ◇ u-util        ││                                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"

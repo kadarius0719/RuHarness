@@ -41,6 +41,8 @@ pub mod handedit;
 #[cfg(feature = "tui")]
 pub mod highlight;
 #[cfg(feature = "tui")]
+pub mod journey;
+#[cfg(feature = "tui")]
 pub mod menu;
 #[cfg(feature = "tui")]
 pub mod narrate;

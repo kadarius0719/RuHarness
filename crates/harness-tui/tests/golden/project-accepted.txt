@@ -1,12 +1,12 @@
 ┌ Project ─────────────────────────┐┌ liblzg · 4 programs found ───────────────────────────────────────────────────────┐
-│Programs (4)                      ││Next: Accept t-unlzg — Enter on its row, it asks for the file                     │
-│✓ t-lzg                   accepted││                                                                                  │
-│⚠ t-unlzg         needs a decision││t-lzg                                                                   ✓ accepted│
-│· t-fuzz        fuzzer, not a tool││tools/lzg.c                                                                       │
-│✗ tools/broken.c   did not compile││Its build configuration: migration/tools/t-lzg/harness.toml                       │
-│Libraries (2)                     ││                                                                                  │
-│✓ l-checksum              compiles││Enter: Open tool t-lzg                                                            │
-│✗ l-bad            did not compile││                                                                                  │
+│Programs (4)                      ││Map ✓ · Configure ✓ · Accept ✓ · then: scan, plan, and each piece                 │
+│✓ t-lzg                   accepted││Next: Accept t-unlzg — Enter on its row, it asks for the file                     │
+│⚠ t-unlzg         needs a decision││                                                                                  │
+│· t-fuzz        fuzzer, not a tool││t-lzg                                                                   ✓ accepted│
+│✗ tools/broken.c   did not compile││tools/lzg.c                                                                       │
+│Libraries (2)                     ││Its build configuration: migration/tools/t-lzg/harness.toml                       │
+│✓ l-checksum              compiles││                                                                                  │
+│✗ l-bad            did not compile││Enter: Open tool t-lzg                                                            │
 │                                  ││                                                                                  │
 │                                  ││                                                                                  │
 │                                  ││                                                                                  │
