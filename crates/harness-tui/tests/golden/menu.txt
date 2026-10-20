@@ -9,16 +9,16 @@
 │                                  ││  ⚠ u-lib · test_case/src/lib.c                                                   │
 │                                  ││    its C changed since the plan — Refresh the plan                               │
 │                                  ││                                                                                  │
-│                 ┌ harness-tui-gmenu-0000000000 ────────────────────────────────────────────────────┐                 │
-│                 │  Scan the project                                                                │                 │
-│                 │    ↳ recommended: 1 file changed since the scan                                  │                 │
-│                 │  Refresh the plan — 1 file changed or new since the scan — scan first            │                 │
-│                 │  Find risky patterns in the C — 1 file changed or new since the scan — scan first│                 │
-│                 │  Re-read the project                                                            g│                 │
-│                 │  What is this?                                                                  i│                 │
-│                 │                                                                                  │                 │
-│                 │Why not: 1 file changed or new since the scan — scan first                        │                 │
-│                 └ Enter choose · Esc close ────────────────────────────────────────────────────────┘                 │
+│                          ┌ harness-tui-gmenu-0000000000 ─────────────────────────────────┐                           │
+│                          │  Scan the project                                             │                           │
+│                          │    ↳ recommended: 1 file changed since the scan               │                           │
+│                          │  Refresh the plan                                             │                           │
+│                          │  Find risky patterns in the C                                 │                           │
+│                          │  Re-read the project                                         g│                           │
+│                          │  What is this?                                               i│                           │
+│                          │                                                               │                           │
+│                          │Why not: 1 file changed or new since the scan — scan first     │                           │
+│                          └ Enter choose · Esc close ─────────────────────────────────────┘                           │
 │                                  ││                                                                                  │
 │                                  ││                                                                                  │
 │                                  ││                                                                                  │

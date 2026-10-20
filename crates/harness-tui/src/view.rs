@@ -4320,18 +4320,13 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect, m: &Menu) {
         .reason
         .as_ref()
         .map_or(0, |r| width_of(&display::line(r)) as u16 + 36);
-    // As wide as its longest item (a greyed one with its reason), up to the
-    // screen less 4 (fix pass, item 16).
+    // As wide as its longest label (§9.5: a greyed item's reason is on the
+    // hint line while it is focused, not in the menu), up to the screen
+    // less 4.
     let longest = m
         .items
         .iter()
-        .map(|it| {
-            let why = it
-                .greyed
-                .as_ref()
-                .map_or(0, |w| 3 + width_of(&display::line(w)));
-            width_of(&display::line(&it.label)) + why + it.accel.map_or(0, |a| a.len() + 1) + 4
-        })
+        .map(|it| width_of(&display::line(&it.label)) + it.accel.map_or(0, |a| a.len() + 1) + 4)
         .max()
         .unwrap_or(0);
     let longest = u16::try_from(longest).unwrap_or(u16::MAX);
@@ -4365,23 +4360,7 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect, m: &Menu) {
         }
         let accel = it.accel.map(|a| format!(" {a}")).unwrap_or_default();
         let aw = width_of(&accel);
-        let name = display::line(&it.label);
-        let mut label = name.clone();
-        // A reason that still does not fit goes on the next lines,
-        // indented, whole.
-        let mut why_rows: Vec<String> = Vec::new();
-        if let Some(why) = &it.greyed {
-            let whole = format!("{label} — {}", display::line(why));
-            if width_of(&whole) <= inner_w.saturating_sub(aw + 2) {
-                label = whole;
-            } else {
-                why_rows = word_wrap(
-                    &format!("— {}", display::line(why)),
-                    inner_w.saturating_sub(6).max(8),
-                );
-            }
-        }
-        let label = ellipsis(&label, inner_w.saturating_sub(aw + 2));
+        let label = ellipsis(&display::line(&it.label), inner_w.saturating_sub(aw + 2));
         let pad = inner_w.saturating_sub(2 + width_of(&label) + aw);
         let mut style = if it.greyed.is_some() {
             disabled()
@@ -4390,25 +4369,14 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect, m: &Menu) {
         } else {
             Style::default()
         };
-        // A greyed item's reason, after its name, reads muted.
-        let mut why_style = muted();
         if i == m.focus {
             style = style.patch(selected_row());
-            why_style = why_style.patch(selected_row());
         }
         item_rows.push((i, rows.len()));
-        let (head, why) = match label.strip_prefix(name.as_str()) {
-            Some(rest) if it.greyed.is_some() => (name.clone(), rest.to_string()),
-            _ => (label.clone(), String::new()),
-        };
         rows.push(Line::from(vec![
-            Span::styled(format!("  {head}"), style),
-            Span::styled(why, why_style),
+            Span::styled(format!("  {label}"), style),
             Span::styled(format!("{}{accel}", " ".repeat(pad)), style),
         ]));
-        for row in why_rows {
-            rows.push(Line::from(Span::styled(format!("    {row}"), muted())));
-        }
         if let (true, Some(reason)) = (recommended, &m.reason) {
             let mut why = format!("recommended: {}", display::line(reason));
             if it.model {
@@ -5683,22 +5651,41 @@ mod tests {
         assert_eq!(UnitState::RustGreen.short_word(), "accept?");
     }
 
-    /// Fix pass, item 16: a menu widens to its longest greyed reason, and
-    /// wraps what still does not fit onto indented lines.
+    /// §9.5: menus stay narrow — a greyed item shows its label only, as
+    /// wide as the longest label; its reason is on the hint line while it
+    /// is focused (and in the menu's "Why not:" after Enter on it).
     #[test]
-    fn a_menu_shows_its_greyed_reasons_whole() {
-        let mut app = app_of("targets/zopfli", "menu-wide");
+    fn a_menus_greyed_reason_is_on_the_hint_line() {
+        let mut app = app_of("targets/zopfli", "menu-narrow");
         app.chat_on = false;
         app.select(Selection::Unit("u-cache".into()));
         app.open_menu();
-        let wide = text(&render(&mut app, 200, 40));
+        let reason = "the chat is off — run harness gen-driver u-cache, or start the cockpit \
+                      without --no-chat";
+        let screen = text(&render(&mut app, 200, 40));
+        assert!(!screen.contains(reason), "{screen}");
+        // The menu is as wide as its longest label, well under 100 columns.
+        let widest = screen
+            .lines()
+            .filter_map(|l| l.find("┌ u-cache ─").map(|at| (at, l)))
+            .map(|(at, l)| l[at..].chars().take_while(|c| *c != '┐').count() + 1)
+            .next()
+            .unwrap();
+        assert!(widest <= 80, "{widest}\n{screen}");
+        let Mode::Menu(m) = &mut app.mode else {
+            panic!()
+        };
+        m.focus = m
+            .items
+            .iter()
+            .position(|i| i.greyed.as_deref() == Some(reason))
+            .unwrap();
+        let label = m.items[m.focus].label.clone();
+        let screen = text(&render(&mut app, 200, 40));
         assert!(
-            wide.contains("the chat is off — run harness gen-driver u-cache, or start the cockpit without --no-chat"),
-            "{wide}"
+            screen.contains(&format!("\n {label}: {reason}")),
+            "{screen}"
         );
-        let narrow = text(&render(&mut app, 80, 40));
-        assert!(narrow.contains("    — the chat is off"), "{narrow}");
-        assert!(narrow.contains("without --no-chat"), "{narrow}");
     }
 
     /// Panes that fit (§9.4): the Files pane as wide as its longest row

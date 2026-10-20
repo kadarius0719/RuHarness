@@ -255,8 +255,19 @@ fn while_the_chat_is_unavailable_its_items_are_greyed_and_never_recommended() {
         Some(reason)
     );
     assert_eq!(find("Ask in chat…").as_deref(), Some(reason));
-    let screen = text(&render(&mut app, 120, 40));
+    // Focused, a greyed item's reason is on the hint line (§9.5).
+    if let Mode::Menu(m) = &mut app.mode {
+        m.focus = m
+            .items
+            .iter()
+            .position(|i| i.label == "Ask in chat…")
+            .unwrap();
+    }
+    let screen = text(&render(&mut app, 160, 40));
     assert!(screen.contains("Claude Code is not signed in"), "{screen}");
+    if let Mode::Menu(m) = &mut app.mode {
+        m.focus = 0;
+    }
     choose(&mut app, "Check the chat's connection…");
     assert_eq!(dialog(&app).0, "Claude Code is not signed in");
 
