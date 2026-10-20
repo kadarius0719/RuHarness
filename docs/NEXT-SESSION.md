@@ -95,7 +95,12 @@ the states mean, Accept's picker numbers the files, the focused frame is in the 
 the chat with the focus takes half the width. The map's reply gains an optional `why` (300
 characters, one line) through `project ask`, harness-mcp and the chat's brief. Open from it: the
 person's own look at the Project view on liblzg (with a chat answer, so the why shows), and the live
-chat tests once (the brief changed).
+chat tests once (the brief changed). An Opus newcomer check of the build found fifteen snags, fixed
+the same day (the DECISIONS entry's "Fix pass after the newcomer check"); the one it left for later:
+**the tool's screen still speaks the old way** — the Back row's pane is a paragraph, and the unit
+views explain rather than show. The next cockpit pass applies §9.3's three rules (one list, one
+card, one line) to the tool's screen; design it first, as §9.3 was, then build it with Opus and
+check it with a newcomer walk.
 
 ## The work, in order
 
