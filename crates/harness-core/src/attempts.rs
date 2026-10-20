@@ -254,15 +254,30 @@ pub fn sample_base(id: &str) -> &str {
 /// yet" is not the test — a resume stores its record turn-less, §R5 NEW-1).
 /// A repair's key is not in the record.
 pub fn first_request_of(record: &AttemptRecord, key: &str) -> bool {
-    attempt_id_with(
-        &record.unit,
-        &record.unit_source,
-        &record.driver,
-        &record.provider_kind,
-        &record.model,
-        key,
-        record.requester.as_deref(),
-    ) == sample_base(&record.id)
+    // A driver attempt's id (`d-…`) is derived its own way: the same key
+    // must be recognised there, or the chat can never read or answer a
+    // test program's hand-off (the person's first live run, 2026-10-20).
+    let id = if is_driver_attempt(&record.id) {
+        driver_attempt_id_with(
+            &record.unit,
+            &record.unit_source,
+            &record.provider_kind,
+            &record.model,
+            key,
+            record.requester.as_deref(),
+        )
+    } else {
+        attempt_id_with(
+            &record.unit,
+            &record.unit_source,
+            &record.driver,
+            &record.provider_kind,
+            &record.model,
+            key,
+            record.requester.as_deref(),
+        )
+    };
+    id == sample_base(&record.id)
 }
 
 /// A BLIND hand-off's record (docs/CHAT-PANE-DESIGN.md §4.2): an unseeded
@@ -881,6 +896,69 @@ mod tests {
         assert_eq!(chat(None), d);
         assert_ne!(chat(Some(REQUESTER_CHAT)), d);
         assert!(is_driver_attempt(&d) && !is_driver_attempt(&a));
+    }
+
+    /// A driver attempt's first request is recognised through the driver
+    /// derivation of its id — the check the chat's hand-off reading and
+    /// answering rely on (the person's first live Make the test program
+    /// was refused "not the one this attempt waits on", 2026-10-20).
+    #[test]
+    fn a_driver_attempts_first_request_is_recognised() {
+        let key = "abcd1234";
+        let base = AttemptRecord {
+            features: String::new(),
+            program: String::new(),
+            schema: "ruharness-attempt".into(),
+            schema_version: 2,
+            id: String::new(),
+            unit: "u1".into(),
+            stage: Some(DRIVER_STAGE.into()),
+            provider: "external".into(),
+            provider_kind: "external".into(),
+            model: "m".into(),
+            prompt_digest: String::new(),
+            unit_source: "blake3:s".into(),
+            driver: String::new(),
+            toolchain: vec![],
+            outcome: "in-progress".into(),
+            turns: vec![],
+            candidate_digest: String::new(),
+            promoted: false,
+            seeded_from: None,
+            steer_note: None,
+            seed_verdict: None,
+            note: None,
+            requester: Some(REQUESTER_CHAT.into()),
+        };
+        let driver = AttemptRecord {
+            id: driver_attempt_id_with(
+                "u1",
+                "blake3:s",
+                "external",
+                "m",
+                key,
+                Some(REQUESTER_CHAT),
+            ),
+            ..base.clone()
+        };
+        assert!(first_request_of(&driver, key));
+        assert!(!first_request_of(&driver, "ffff0000"));
+        // A migrate attempt keeps its own derivation.
+        let migrate = AttemptRecord {
+            id: attempt_id_with(
+                "u1",
+                "blake3:s",
+                "",
+                "external",
+                "m",
+                key,
+                Some(REQUESTER_CHAT),
+            ),
+            stage: None,
+            ..base
+        };
+        assert!(first_request_of(&migrate, key));
+        assert!(!first_request_of(&migrate, "ffff0000"));
     }
 
     const GOLDEN_M3_ID: &str = "a-7189df7f664d";

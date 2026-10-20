@@ -87,6 +87,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-10-19 — **A conversation in the chat asks before a move, and a new chat ends it** — Open tool / Back ask and start a new chat; a conversation is this chat's own messages, not the screen's old lines.
 - 2026-10-19 — **The Project view, revision 2: one list, one card, one line** — the left pane the only list; the right pane a card with the decision and the model's why; the Next step one line; the reply's optional `why`.
 - 2026-10-20 — **The guided path: the journey on every screen, the test program in the cockpit, dialogs that stand out, panes that fit** — the stage words and the journey line; Make the test program asked in chat; migrate's refusal in words; the backdrop and panel roles; panes as wide as their rows.
+- 2026-10-20 — **The chat can read a test program's hand-off; the terminal theme's sections are bright blue** — the first-request check knows driver attempts; plain blue was navy on black.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -3746,3 +3747,22 @@ Decided:
   the short words, rows keep a state word there (the 100-column golden shows it).
 - `harness migrate`'s stage refusals now leave as the CLI's plain error (`kind: harness`
   under `--json`), not `invalid-plan`; the plan's real structural errors keep `invalid plan:`.
+
+## 2026-10-20 — The chat can read a test program's hand-off; the terminal theme's sections are bright blue
+
+**Seen.** The person's first live Make the test program: the cockpit ran gen-driver as asked in
+chat, the run paused on its first request, and the chat's read of that request was refused —
+"request … is not the one this attempt waits on" — twice, with the chat then inventing a way out.
+The check behind the refusal recomputes the attempt's id from the key to prove the key is the
+attempt's first request, and it only knew the migrate derivation; a driver attempt's id (`d-…`) is
+derived its own way, so for every test-program hand-off the check failed. The build's tests used a
+fake Claude Code and no live driver hand-off, which is how it got through.
+
+**Decided.** `first_request_of` branches on the attempt's kind and uses the driver derivation for
+`d-…` records (one place; the answered check goes through it too), with a test for both kinds.
+Nothing else in the path was wrong: the cockpit's answer re-runs the hand-off's own argv with
+`--answer=-`, which is gen-driver's for a driver attempt.
+
+**Also.** The terminal theme drew sections, pane titles, dialog frames and the menu's separator in
+the terminal's plain blue, which is navy on a black terminal (the person: "that blue is hard to
+read"). It is the terminal's bright blue now; the designed themes are unchanged.

@@ -287,7 +287,9 @@ impl Theme {
                 Role::Bad => Some(Color::Red),
                 Role::Attention => Some(Color::Yellow),
                 Role::Accent => Some(Color::Cyan),
-                Role::Section => Some(Color::Blue),
+                // Bright blue: the plain blue is navy on a black terminal
+                // (the person's screen, 2026-10-20).
+                Role::Section => Some(Color::LightBlue),
                 Role::Notice => Some(Color::Magenta),
                 // The terminal's own "bright black" (§9.4).
                 Role::Backdrop => Some(Color::DarkGray),
