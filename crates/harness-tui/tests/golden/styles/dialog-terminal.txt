@@ -1,0 +1,87 @@
+┌ Files ───────────────┐┌ u-lib · done ────────────────────────────────────────────────────────────┐
+  @0-99 fg DarkGray NONE "┌ Files ───────────────┐┌ u-lib · done ────────────────────────────────────────────────────────────┐"
+│▾ harness-tui-th… ✓1/1││All 8 steps done ✓                                                        │
+  @0-99 fg DarkGray NONE "│▾ harness-tui-th… ✓1/1││All 8 steps done ✓                                                        │"
+│  ▾ Units (1)         ││✓ u-lib done                                                              │
+  @0-99 fg DarkGray NONE "│  ▾ Units (1)         ││✓ u-lib done                                                              │"
+│    ▸ ✓ u-lib     done││Next: In Rust and checked — nothing to do                                 │
+  @0-99 fg DarkGray NONE "│    ▸ ✓ u-lib     done││Next: In Rust and checked — nothing to do                                 │"
+│    Features (none ye…││                                                                          │
+  @0-99 fg DarkGray NONE "│    Features (none ye…││                                                                          │"
+│    Speed — not set up││1 exported function: read_scalefactors (44 lines)                         │
+  @0-99 fg DarkGray NONE "│    Speed — not set up││1 exported function: read_scalefactors (44 lines)                         │"
+│  ▸ test_ca┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐           │
+  @0-11 fg DarkGray NONE "│  ▸ test_ca"
+  @12-87 fg Blue BOLD "┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐"
+  @88-99 fg DarkGray NONE "│"
+│           │Builds u-lib's Rust and runs it against the C in the sandbox.             │           │
+  @0-11 fg DarkGray NONE "│"
+  @12-12 fg Blue BOLD "│"
+  @87-87 fg Blue BOLD "│"
+  @88-99 fg DarkGray NONE "│"
+│           │Writes units/u-lib/oracle-latest.json and .md (and oracle-last-green.json │           │
+  @0-11 fg DarkGray NONE "│"
+  @12-12 fg Blue BOLD "│"
+  @87-87 fg Blue BOLD "│"
+  @88-99 fg DarkGray NONE "│"
+│           │when green) and u-lib's status in plan.toml: green → verified; red → a    │s only     │
+  @0-11 fg DarkGray NONE "│"
+  @12-12 fg Blue BOLD "│"
+  @87-87 fg Blue BOLD "│"
+  @88-99 fg DarkGray NONE "s only     │"
+│           │verified unit becomes "in progress" (a merged one keeps its status).      │           │
+  @0-11 fg DarkGray NONE "│"
+  @12-12 fg Blue BOLD "│"
+  @87-87 fg Blue BOLD "│"
+  @88-99 fg DarkGray NONE "│"
+│           │Changes no code. The crate is unchanged since the cockpit last showed it. │           │
+  @0-11 fg DarkGray NONE "│"
+  @12-12 fg Blue BOLD "│"
+  @87-87 fg Blue BOLD "│"
+  @88-99 fg DarkGray NONE "│"
+│           │                                                                          │           │
+  @0-11 fg DarkGray NONE "│"
+  @12-12 fg Blue BOLD "│"
+  @87-87 fg Blue BOLD "│"
+  @88-99 fg DarkGray NONE "│"
+│           │Command: /opt/ruharness/bin/harness --json verify u-lib --target=/work/rea│           │
+  @0-11 fg DarkGray NONE "│"
+  @12-12 fg Blue BOLD "│"
+  @87-87 fg Blue BOLD "│"
+  @88-99 fg DarkGray NONE "│"
+│           │d_scalefactors_lib                                                        │           │
+  @0-11 fg DarkGray NONE "│"
+  @12-12 fg Blue BOLD "│"
+  @87-87 fg Blue BOLD "│"
+  @88-99 fg DarkGray NONE "│"
+│           │ ready: → then Enter, or y                                                │           │
+  @0-11 fg DarkGray NONE "│"
+  @12-12 fg Blue BOLD "│"
+  @13-38 fg Green NONE "ready: → then Enter, or y"
+  @87-87 fg Blue BOLD "│"
+  @88-99 fg DarkGray NONE "│"
+│           │ [ Cancel  Esc ] [ Run  y ]                                               │           │
+  @0-11 fg DarkGray NONE "│"
+  @12-12 fg Blue BOLD "│"
+  @14-28 fg - BOLD | REVERSED "[ Cancel  Esc ]"
+  @30-39 fg Cyan REVERSED "[ Run  y ]"
+  @87-87 fg Blue BOLD "│"
+  @88-99 fg DarkGray NONE "│"
+│           └──────────────────────────────────────────────────────────────────────────┘           │
+  @0-11 fg DarkGray NONE "│"
+  @12-87 fg Blue BOLD "└──────────────────────────────────────────────────────────────────────────┘"
+  @88-99 fg DarkGray NONE "│"
+│                      ││                                                                          │
+  @0-99 fg DarkGray NONE "│                      ││                                                                          │"
+│                      ││                                                                          │
+  @0-99 fg DarkGray NONE "│                      ││                                                                          │"
+└──────────────────────┘└──────────────────────────────────────────────────────────────────────────┘
+  @0-99 fg DarkGray NONE "└──────────────────────┘└──────────────────────────────────────────────────────────────────────────┘"
+ Ready.
+  @0-99 fg DarkGray NONE "Ready."
+
+ ↑↓ scroll   Esc cancel   ←→ button   Enter press
+  @0-2 fg - BOLD "↑↓"
+  @12-15 fg - BOLD "Esc"
+  @25-27 fg - BOLD "←→"
+  @37-42 fg - BOLD "Enter"

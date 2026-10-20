@@ -21,6 +21,11 @@
 //!   is shown and always beside a mark or a word.
 //! - `selected`: reverse video. `disabled`: a greyed menu item, still
 //!   readable. `border`: an unfocused pane's frame.
+//! - `backdrop`: every pane behind an open dialog, menu or help, in one
+//!   grey, so the dialog holds every bright thing; `panel`: the background
+//!   of a dialog's, a menu's and the help's cells (a background, not a
+//!   foreground; none in the terminal and mono themes)
+//!   (docs/COCKPIT-WRAPPER-DESIGN.md §9.4).
 //!
 //! The themes: **terminal** (the default: the terminal's own blue, cyan,
 //! magenta, green, red and yellow, so the person's terminal theme decides
@@ -82,11 +87,16 @@ pub enum Role {
     Disabled,
     /// An unfocused pane's frame.
     Border,
+    /// Every pane behind an open dialog, menu or help: one grey, no bold,
+    /// no state colours, no reverse.
+    Backdrop,
+    /// The background of a dialog's, a menu's and the help's cells.
+    Panel,
 }
 
 impl Role {
     /// Every role, for the tests, the file and the docs.
-    pub const ALL: [Role; 14] = [
+    pub const ALL: [Role; 16] = [
         Role::Text,
         Role::Muted,
         Role::Heading,
@@ -101,6 +111,8 @@ impl Role {
         Role::Selected,
         Role::Disabled,
         Role::Border,
+        Role::Backdrop,
+        Role::Panel,
     ];
 
     /// The role's name, as the docs and the file say it.
@@ -120,14 +132,31 @@ impl Role {
             Role::Selected => "selected",
             Role::Disabled => "disabled",
             Role::Border => "border",
+            Role::Backdrop => "backdrop",
+            Role::Panel => "panel",
         }
     }
 
     /// Words are read in this role (4.5:1 contrast); otherwise it carries
-    /// frames (3:1).
+    /// frames (3:1), or it is a background (the panel).
     pub fn is_text(self) -> bool {
-        !matches!(self, Role::Border)
+        !matches!(self, Role::Border | Role::Panel)
     }
+
+    /// The roles drawn in words on a panel (a dialog, a menu, the help):
+    /// each readable on it (the contrast test).
+    pub const ON_PANEL: [Role; 10] = [
+        Role::Muted,
+        Role::Accent,
+        Role::Section,
+        Role::Notice,
+        Role::Label,
+        Role::Good,
+        Role::Bad,
+        Role::Attention,
+        Role::Disabled,
+        Role::Status,
+    ];
 
     fn index(self) -> usize {
         Role::ALL.iter().position(|r| *r == self).unwrap_or(0)
@@ -215,20 +244,30 @@ impl Theme {
             (Theme::Dark, R::Good) => Some(114),
             (Theme::Dark, R::Bad) => Some(203),
             (Theme::Dark, R::Attention) => Some(214),
-            (Theme::Dark, R::Disabled) => Some(245),
+            // 245 was 4.4:1 on the panel (235): 246.
+            (Theme::Dark, R::Disabled) => Some(246),
             (Theme::Dark, R::Border) => Some(244),
+            // The label grey (§9.4).
+            (Theme::Dark, R::Backdrop) => Some(248),
+            // One shade off the page.
+            (Theme::Dark, R::Panel) => Some(235),
             (Theme::Light, R::Muted) => Some(240),
             // 31, the first choice, is 4.1:1 on white: too faint.
             (Theme::Light, R::Accent) => Some(23),
             (Theme::Light, R::Section) => Some(25),
             (Theme::Light, R::Status) => Some(240),
             (Theme::Light, R::Notice) => Some(127),
-            (Theme::Light, R::Label) => Some(242),
-            (Theme::Light, R::Good) => Some(28),
-            (Theme::Light, R::Bad) => Some(160),
-            (Theme::Light, R::Attention) => Some(130),
-            (Theme::Light, R::Disabled) => Some(243),
+            // Darker than the first choices (242, 28, 160, 130, 243), which
+            // were under 4.5:1 on the panel (254): words in a dialog are
+            // read there (§9.4).
+            (Theme::Light, R::Label) => Some(241),
+            (Theme::Light, R::Good) => Some(22),
+            (Theme::Light, R::Bad) => Some(124),
+            (Theme::Light, R::Attention) => Some(94),
+            (Theme::Light, R::Disabled) => Some(240),
             (Theme::Light, R::Border) => Some(244),
+            (Theme::Light, R::Backdrop) => Some(242),
+            (Theme::Light, R::Panel) => Some(254),
         }
     }
 
@@ -245,9 +284,22 @@ impl Theme {
                 Role::Accent => Some(Color::Cyan),
                 Role::Section => Some(Color::Blue),
                 Role::Notice => Some(Color::Magenta),
+                // The terminal's own "bright black" (§9.4).
+                Role::Backdrop => Some(Color::DarkGray),
                 _ => None,
             },
+            // The panel is a background (see [`Theme::bg`]).
+            _ if role == Role::Panel => None,
             _ => self.colour(role).map(Color::Indexed),
+        }
+    }
+
+    /// A role's background in this theme: only the panel has one, in the
+    /// designed themes.
+    pub fn bg(self, role: Role) -> Option<Color> {
+        match (self, role) {
+            (Theme::Dark | Theme::Light, Role::Panel) => self.colour(role).map(Color::Indexed),
+            _ => None,
         }
     }
 
@@ -261,6 +313,8 @@ impl Theme {
             // Mono: the marks and words carry the state; a failure and a
             // state that wants a look are also bold.
             (Theme::Mono, Role::Bad | Role::Attention) => Modifier::BOLD,
+            // Mono has no grey: the backdrop is dim there (§9.4).
+            (Theme::Mono, Role::Backdrop) => Modifier::DIM,
             _ => Modifier::empty(),
         }
     }
@@ -294,9 +348,21 @@ impl Palette {
         self
     }
 
-    /// A role's foreground: the person's, else the theme's.
+    /// A role's foreground: the person's, else the theme's (the panel has
+    /// none: its colour is a background).
     pub fn fg(&self, role: Role) -> Option<Color> {
+        if role == Role::Panel {
+            return None;
+        }
         self.overrides[role.index()].or_else(|| self.theme.fg(role))
+    }
+
+    /// A role's background: the panel's, the person's or the theme's.
+    pub fn bg(&self, role: Role) -> Option<Color> {
+        if role != Role::Panel {
+            return None;
+        }
+        self.overrides[role.index()].or_else(|| self.theme.bg(role))
     }
 
     /// A role's whole style.
@@ -304,6 +370,9 @@ impl Palette {
         let mut s = Style::default().add_modifier(self.theme.modifiers(role));
         if let Some(c) = self.fg(role) {
             s = s.fg(c);
+        }
+        if let Some(c) = self.bg(role) {
+            s = s.bg(c);
         }
         s
     }
@@ -720,7 +789,7 @@ mod tests {
     fn every_designed_role_is_readable_on_its_background() {
         for theme in [Theme::Dark, Theme::Light] {
             for role in Role::ALL {
-                let Some(i) = theme.colour(role) else {
+                let Some(i) = theme.colour(role).filter(|_| role != Role::Panel) else {
                     continue;
                 };
                 assert_eq!(theme.fg(role), Some(Color::Indexed(i)));
@@ -739,22 +808,67 @@ mod tests {
         }
     }
 
-    /// Every theme: nothing dims, blinks or sets a background; text is never
-    /// recoloured; no dark grey; the terminal theme colours only the three
-    /// states, the accent, sections and notices; mono has no colour.
+    /// The panel (§9.4): one shade off the page in the designed themes, and
+    /// every role a dialog, a menu or the help draws in words is readable on
+    /// it (4.5:1); the backdrop is the label grey, readable on the page.
+    #[test]
+    fn words_on_the_panel_and_the_backdrop_are_readable() {
+        assert_eq!(Theme::Dark.bg(Role::Panel), Some(Color::Indexed(235)));
+        assert_eq!(Theme::Light.bg(Role::Panel), Some(Color::Indexed(254)));
+        assert_eq!(Theme::Terminal.bg(Role::Panel), None);
+        assert_eq!(Theme::Mono.bg(Role::Panel), None);
+        assert_eq!(Theme::Dark.colour(Role::Backdrop), Some(248));
+        assert_eq!(Theme::Light.colour(Role::Backdrop), Some(242));
+        assert_eq!(Theme::Terminal.fg(Role::Backdrop), Some(Color::DarkGray));
+        assert!(Theme::Mono
+            .style(Role::Backdrop)
+            .add_modifier
+            .contains(Modifier::DIM));
+        for theme in [Theme::Dark, Theme::Light] {
+            let panel = rgb(theme.colour(Role::Panel).unwrap()).unwrap();
+            for role in Role::ON_PANEL {
+                let fg = rgb(theme.colour(role).unwrap()).unwrap();
+                let ratio = contrast(fg, panel);
+                assert!(
+                    ratio >= 4.5,
+                    "{} {} on the panel: {ratio:.2}:1 < 4.5:1",
+                    theme.name(),
+                    role.name()
+                );
+            }
+        }
+        // The person's colour for the panel is a background.
+        let p = Palette::of(Theme::Terminal).with(Role::Panel, Color::Indexed(236));
+        assert_eq!(p.style(Role::Panel).bg, Some(Color::Indexed(236)));
+        assert_eq!(p.fg(Role::Panel), None);
+    }
+
+    /// Every theme: nothing dims (but mono's backdrop, which has no grey),
+    /// blinks or sets a background (but the panel); text is never
+    /// recoloured; no dark grey (but the terminal theme's backdrop, its own
+    /// "bright black"); the terminal theme colours only the three states,
+    /// the accent, sections, notices and the backdrop; mono has no colour.
     #[test]
     fn every_theme_keeps_the_rules() {
         for theme in Theme::ALL {
             for role in Role::ALL {
                 let style = theme.style(role);
-                let banned = Modifier::DIM | Modifier::SLOW_BLINK | Modifier::RAPID_BLINK;
+                let banned = if (theme, role) == (Theme::Mono, Role::Backdrop) {
+                    Modifier::SLOW_BLINK | Modifier::RAPID_BLINK
+                } else {
+                    Modifier::DIM | Modifier::SLOW_BLINK | Modifier::RAPID_BLINK
+                };
                 let what = format!("{} {}", theme.name(), role.name());
                 assert!(
                     !style.add_modifier.intersects(banned),
                     "{what}: dims or blinks"
                 );
-                assert_eq!(style.bg, None, "{what}");
-                assert_ne!(style.fg, Some(Color::DarkGray), "{what}");
+                if role != Role::Panel {
+                    assert_eq!(style.bg, None, "{what}");
+                }
+                if (theme, role) != (Theme::Terminal, Role::Backdrop) {
+                    assert_ne!(style.fg, Some(Color::DarkGray), "{what}");
+                }
                 let coloured = matches!(
                     role,
                     Role::Good
@@ -763,6 +877,7 @@ mod tests {
                         | Role::Accent
                         | Role::Section
                         | Role::Notice
+                        | Role::Backdrop
                 );
                 match theme {
                     Theme::Mono => assert_eq!(style.fg, None, "{what}"),
@@ -810,6 +925,6 @@ mod tests {
         assert_eq!(Theme::Dark.colour(Role::Status), Some(250));
         assert_eq!(Theme::Dark.colour(Role::Label), Some(248));
         assert_eq!(Theme::Light.colour(Role::Status), Some(240));
-        assert_eq!(Theme::Light.colour(Role::Label), Some(242));
+        assert_eq!(Theme::Light.colour(Role::Label), Some(241));
     }
 }

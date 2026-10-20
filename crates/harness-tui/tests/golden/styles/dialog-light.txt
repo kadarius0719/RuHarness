@@ -1,0 +1,98 @@
+┌ Files ───────────────┐┌ u-lib · done ────────────────────────────────────────────────────────────┐
+  @0-99 fg 242 NONE "┌ Files ───────────────┐┌ u-lib · done ────────────────────────────────────────────────────────────┐"
+│▾ harness-tui-th… ✓1/1││All 8 steps done ✓                                                        │
+  @0-99 fg 242 NONE "│▾ harness-tui-th… ✓1/1││All 8 steps done ✓                                                        │"
+│  ▾ Units (1)         ││✓ u-lib done                                                              │
+  @0-99 fg 242 NONE "│  ▾ Units (1)         ││✓ u-lib done                                                              │"
+│    ▸ ✓ u-lib     done││Next: In Rust and checked — nothing to do                                 │
+  @0-99 fg 242 NONE "│    ▸ ✓ u-lib     done││Next: In Rust and checked — nothing to do                                 │"
+│    Features (none ye…││                                                                          │
+  @0-99 fg 242 NONE "│    Features (none ye…││                                                                          │"
+│    Speed — not set up││1 exported function: read_scalefactors (44 lines)                         │
+  @0-99 fg 242 NONE "│    Speed — not set up││1 exported function: read_scalefactors (44 lines)                         │"
+│  ▸ test_ca┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐           │
+  @0-11 fg 242 NONE "│  ▸ test_ca"
+  @12-87 fg 25 bg 254 BOLD "┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐"
+  @88-99 fg 242 NONE "│"
+│           │Builds u-lib's Rust and runs it against the C in the sandbox.             │           │
+  @0-11 fg 242 NONE "│"
+  @12-12 fg 25 bg 254 BOLD "│"
+  @13-86 fg - bg 254 NONE "Builds u-lib's Rust and runs it against the C in the sandbox."
+  @87-87 fg 25 bg 254 BOLD "│"
+  @88-99 fg 242 NONE "│"
+│           │Writes units/u-lib/oracle-latest.json and .md (and oracle-last-green.json │           │
+  @0-11 fg 242 NONE "│"
+  @12-12 fg 25 bg 254 BOLD "│"
+  @13-86 fg - bg 254 NONE "Writes units/u-lib/oracle-latest.json and .md (and oracle-last-green.json"
+  @87-87 fg 25 bg 254 BOLD "│"
+  @88-99 fg 242 NONE "│"
+│           │when green) and u-lib's status in plan.toml: green → verified; red → a    │s only     │
+  @0-11 fg 242 NONE "│"
+  @12-12 fg 25 bg 254 BOLD "│"
+  @13-86 fg - bg 254 NONE "when green) and u-lib's status in plan.toml: green → verified; red → a"
+  @87-87 fg 25 bg 254 BOLD "│"
+  @88-99 fg 242 NONE "s only     │"
+│           │verified unit becomes "in progress" (a merged one keeps its status).      │           │
+  @0-11 fg 242 NONE "│"
+  @12-12 fg 25 bg 254 BOLD "│"
+  @13-86 fg - bg 254 NONE "verified unit becomes \"in progress\" (a merged one keeps its status)."
+  @87-87 fg 25 bg 254 BOLD "│"
+  @88-99 fg 242 NONE "│"
+│           │Changes no code. The crate is unchanged since the cockpit last showed it. │           │
+  @0-11 fg 242 NONE "│"
+  @12-12 fg 25 bg 254 BOLD "│"
+  @13-86 fg - bg 254 NONE "Changes no code. The crate is unchanged since the cockpit last showed it."
+  @87-87 fg 25 bg 254 BOLD "│"
+  @88-99 fg 242 NONE "│"
+│           │                                                                          │           │
+  @0-11 fg 242 NONE "│"
+  @12-12 fg 25 bg 254 BOLD "│"
+  @87-87 fg 25 bg 254 BOLD "│"
+  @88-99 fg 242 NONE "│"
+│           │Command: /opt/ruharness/bin/harness --json verify u-lib --target=/work/rea│           │
+  @0-11 fg 242 NONE "│"
+  @12-12 fg 25 bg 254 BOLD "│"
+  @13-86 fg 241 bg 254 NONE "Command: /opt/ruharness/bin/harness --json verify u-lib --target=/work/rea"
+  @87-87 fg 25 bg 254 BOLD "│"
+  @88-99 fg 242 NONE "│"
+│           │d_scalefactors_lib                                                        │           │
+  @0-11 fg 242 NONE "│"
+  @12-12 fg 25 bg 254 BOLD "│"
+  @13-30 fg 241 bg 254 NONE "d_scalefactors_lib"
+  @87-87 fg 25 bg 254 BOLD "│"
+  @88-99 fg 242 NONE "│"
+│           │ ready: → then Enter, or y                                                │           │
+  @0-11 fg 242 NONE "│"
+  @12-12 fg 25 bg 254 BOLD "│"
+  @13-38 fg 22 bg 254 NONE "ready: → then Enter, or y"
+  @87-87 fg 25 bg 254 BOLD "│"
+  @88-99 fg 242 NONE "│"
+│           │ [ Cancel  Esc ] [ Run  y ]                                               │           │
+  @0-11 fg 242 NONE "│"
+  @12-12 fg 25 bg 254 BOLD "│"
+  @14-28 fg - bg 254 BOLD | REVERSED "[ Cancel  Esc ]"
+  @30-39 fg 23 bg 254 REVERSED "[ Run  y ]"
+  @87-87 fg 25 bg 254 BOLD "│"
+  @88-99 fg 242 NONE "│"
+│           └──────────────────────────────────────────────────────────────────────────┘           │
+  @0-11 fg 242 NONE "│"
+  @12-87 fg 25 bg 254 BOLD "└──────────────────────────────────────────────────────────────────────────┘"
+  @88-99 fg 242 NONE "│"
+│                      ││                                                                          │
+  @0-99 fg 242 NONE "│                      ││                                                                          │"
+│                      ││                                                                          │
+  @0-99 fg 242 NONE "│                      ││                                                                          │"
+└──────────────────────┘└──────────────────────────────────────────────────────────────────────────┘
+  @0-99 fg 242 NONE "└──────────────────────┘└──────────────────────────────────────────────────────────────────────────┘"
+ Ready.
+  @0-99 fg 242 NONE "Ready."
+
+ ↑↓ scroll   Esc cancel   ←→ button   Enter press
+  @0-2 fg - BOLD "↑↓"
+  @3-10 fg 241 NONE "scroll"
+  @12-15 fg - BOLD "Esc"
+  @16-23 fg 241 NONE "cancel"
+  @25-27 fg - BOLD "←→"
+  @28-35 fg 241 NONE "button"
+  @37-42 fg - BOLD "Enter"
+  @43-49 fg 241 NONE "press"

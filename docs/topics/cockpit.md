@@ -22,7 +22,7 @@ To keep a choice, or to change one colour, write the settings file `cockpit.toml
 [theme]
 name = "terminal"        # terminal (the default), dark, light or mono
 
-[colors]                 # any of the fourteen roles; leave out what you like as it is
+[colors]                 # any of the sixteen roles; leave out what you like as it is
 # text      = "default"  # ordinary words
 # muted     = 250        # code comments, a greyed item's reason
 # heading   = "default"  # bold words that are not a section
@@ -35,8 +35,10 @@ name = "terminal"        # terminal (the default), dark, light or mono
 # bad       = "red"      # beside ✗
 attention   = "#ffaf00"  # beside ⚠ — an amber, for example
 # selected  = "default"  # the selected row is reversed
-# disabled  = 245        # a greyed menu item
+# disabled  = 246        # a greyed menu item
 # border    = 244        # an unfocused pane's frame
+# backdrop  = 248        # the panes behind an open dialog, menu or help
+# panel     = 235        # the background of a dialog, a menu and the help
 ```
 
 A row with `▸` is folded and `▾` is open; `→` and `←` open and close. `Esc` steps back one level. `g` reads the project again, for example after a command you typed elsewhere. `c` shows the exact command of the last action and everything it reported.

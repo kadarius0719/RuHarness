@@ -3536,6 +3536,39 @@ fn pct(n: u16, p: u16) -> u16 {
 
 /// An overlay of pre-wrapped rows, scrolled by ROWS: `scroll` is clamped and
 /// returned; `prompt` sits on the bottom border.
+/// The backdrop (§9.4): while a dialog, a menu or the help is open, every
+/// cell behind it in one grey — no bold, no state colours, no reverse — so
+/// the page keeps its shape and the box holds every bright thing.
+fn backdrop(frame: &mut Frame, area: Rect) {
+    let style = theme::style(Role::Backdrop);
+    let buf = frame.buffer_mut();
+    let area = area.intersection(buf.area);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let cell = &mut buf[(x, y)];
+            cell.fg = style.fg.unwrap_or(ratatui::style::Color::Reset);
+            cell.bg = ratatui::style::Color::Reset;
+            cell.modifier = style.add_modifier;
+        }
+    }
+}
+
+/// The panel (§9.4): a box's cells on the panel's background, one shade
+/// off the page (none in the terminal and mono themes: the backdrop alone
+/// sets the box apart there).
+fn panel(frame: &mut Frame, rect: Rect) {
+    let Some(bg) = theme::style(Role::Panel).bg else {
+        return;
+    };
+    let buf = frame.buffer_mut();
+    let rect = rect.intersection(buf.area);
+    for y in rect.top()..rect.bottom() {
+        for x in rect.left()..rect.right() {
+            buf[(x, y)].bg = bg;
+        }
+    }
+}
+
 fn overlay(
     frame: &mut Frame,
     area: Rect,
@@ -3549,10 +3582,14 @@ fn overlay(
     let page = area.height.saturating_sub(2) as usize;
     let scroll = scroll.min(rows.len().saturating_sub(page));
     let more = rows.len() > scroll + page;
-    let mut block = Block::default().borders(Borders::ALL).title(Span::styled(
-        safe(title, area.width.saturating_sub(4) as usize),
-        section_role(),
-    ));
+    // Its frame and title in the section role, bold (§9.4).
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(section_role())
+        .title(Span::styled(
+            safe(title, area.width.saturating_sub(4) as usize),
+            section_role(),
+        ));
     let hint = more_key.map(|k| format!(" — {k}")).unwrap_or_default();
     let bottom = match (prompt, more) {
         (Some(p), true) => Some(format!(" ↓ more below{hint} · {p} ")),
@@ -3568,6 +3605,7 @@ fn overlay(
     }
     let visible: Vec<Line<'static>> = rows.iter().skip(scroll).take(page).cloned().collect();
     frame.render_widget(Paragraph::new(visible).block(block), area);
+    panel(frame, area);
     scroll
 }
 
@@ -4203,9 +4241,11 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         rows.push(Line::from(""));
         // Filtered but NEVER cut: the whole command must be seen (it scrolls).
+        // The command in the label role, not bold: the words above say what
+        // it does; this is for whoever reads commands (§9.4).
         let argv = Sanitizer::default().push(&format!("Command: {}", shell_line(&p.argv)));
         for row in hard_wrap(&argv, inner_w) {
-            rows.push(Line::from(Span::styled(row, bold())));
+            rows.push(Line::from(Span::styled(row, label_role())));
         }
     }
     // Two rows pinned at the bottom: the dialog's state, its buttons.
@@ -4251,13 +4291,19 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
         } else {
             format!("[ {}  {} ]", b.label, b.key)
         };
-        let mut style = if i == 0 || c.dialog.armed {
-            bold()
+        // The safe button plain reversed; the armed one in the accent,
+        // reversed; one not armed yet muted. The focus is bold (§9.4).
+        let mut style = if i == 0 {
+            selected_row()
+        } else if c.dialog.armed {
+            accent().patch(selected_row())
         } else {
             muted()
         };
         if i == c.dialog.focus {
-            style = style.patch(selected_row());
+            style = style.add_modifier(Modifier::BOLD);
+        } else if i == 0 || c.dialog.armed {
+            style = style.remove_modifier(Modifier::BOLD);
         }
         let w = width_of(&text) as u16;
         spots.push((i, x, w));
@@ -4292,7 +4338,7 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(Clear, rect);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(bold())
+        .border_style(section_role())
         .title(Span::styled(
             ellipsis(&format!(" {} ", c.title), inner_w),
             section_role(),
@@ -4329,6 +4375,7 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
         1,
     );
     frame.render_widget(Paragraph::new(buttons), bar);
+    panel(frame, rect);
     app.hits.push((rect, Hit::Dialog));
     // Only a button drawn whole is clickable, on a frame that can show the
     // dialog: never one the bar cut, nor one past the dialog's edge.
@@ -4758,6 +4805,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     frame.render_widget(Paragraph::new(row), act1);
     frame.render_widget(Paragraph::new(notice_row(app, act2.width as usize)), act2);
     draw_hints(frame, app, hint);
+    // A dialog, a menu or the help stands out: everything behind it but the
+    // key bar (which names the box's own keys) in the backdrop (§9.4).
+    if matches!(
+        app.mode,
+        Mode::Dialog(_) | Mode::Menu(_) | Mode::Help { .. }
+    ) {
+        backdrop(
+            frame,
+            Rect::new(area.x, area.y, area.width, hint.y - area.y),
+        );
+    }
     draw_overlay(frame, app, area);
 }
 
@@ -4914,11 +4972,22 @@ mod tests {
     /// Next step's label and one menu item.
     fn assert_colour_rules(name: &str, palette: Palette, buffer: &Buffer) {
         let theme = palette.theme;
-        let banned = Modifier::DIM | Modifier::SLOW_BLINK | Modifier::RAPID_BLINK;
         let roles: Vec<Color> = Role::ALL.iter().filter_map(|r| palette.fg(*r)).collect();
+        // The backdrop behind a box (§9.4): its grey (the terminal's "bright
+        // black" in the terminal theme), dim in mono; the box on the panel.
+        let backdrop = palette.style(Role::Backdrop);
+        let panel = palette.bg(Role::Panel).unwrap_or(Color::Reset);
         for y in 0..buffer.area.height {
             for x in 0..buffer.area.width {
                 let cell = &buffer[(x, y)];
+                let behind = backdrop.fg.is_none_or(|c| c == cell.fg)
+                    && cell.modifier == backdrop.add_modifier
+                    && cell.bg == Color::Reset;
+                let banned = if behind {
+                    Modifier::SLOW_BLINK | Modifier::RAPID_BLINK
+                } else {
+                    Modifier::DIM | Modifier::SLOW_BLINK | Modifier::RAPID_BLINK
+                };
                 assert!(
                     !cell.modifier.intersects(banned),
                     "{name} ({}): dim or blinking at {x},{y}",
@@ -4926,8 +4995,8 @@ mod tests {
                 );
                 assert!(
                     (cell.fg == Color::Reset || roles.contains(&cell.fg))
-                        && cell.fg != Color::DarkGray
-                        && cell.bg == Color::Reset,
+                        && (cell.fg != Color::DarkGray || behind)
+                        && (cell.bg == Color::Reset || cell.bg == panel),
                     "{name} ({}): a colour {:?}/{:?} that is no role's at {x},{y}",
                     theme.name(),
                     cell.fg,
@@ -5060,6 +5129,8 @@ mod tests {
                 let frame = text
                     .chars()
                     .all(|c| matches!(c, '│' | '┌' | '┐' | '└' | '┘' | '─'));
+                // A box's frame with its title in it (a dialog, a menu, §9.4).
+                let frame = frame || text.starts_with(['┌', '└']);
                 if Some(r.fg) == own(Role::Section) && !frame {
                     assert!(
                         starts_line(x) && !next_step,
@@ -5112,21 +5183,31 @@ mod tests {
                 while x < buffer.area.width
                     && buffer[(x, y)].fg == fg
                     && buffer[(x, y)].modifier == m
+                    && buffer[(x, y)].bg == cell.bg
                 {
                     text.push_str(buffer[(x, y)].symbol());
                     x += 1;
                 }
-                if (fg == Color::Reset && m.is_empty()) || text.trim().is_empty() {
+                if (fg == Color::Reset && m.is_empty() && cell.bg == Color::Reset)
+                    || text.trim().is_empty()
+                {
                     continue;
                 }
-                let colour = match fg {
+                let name = |c: Color| match c {
                     Color::Indexed(i) => format!("{i}"),
                     Color::Reset => "-".into(),
                     named => format!("{named:?}"),
                 };
+                // The panel's background, where a box sets one (§9.4).
+                let bg = if cell.bg == Color::Reset {
+                    String::new()
+                } else {
+                    format!(" bg {}", name(cell.bg))
+                };
                 out.push_str(&format!(
-                    "  @{start}-{} fg {colour} {m:?} {:?}\n",
+                    "  @{start}-{} fg {}{bg} {m:?} {:?}\n",
                     x - 1,
+                    name(fg),
                     text.trim()
                 ));
             }
@@ -5178,10 +5259,20 @@ mod tests {
             unit.select(Selection::Unit("u-cache".into()));
             let (_tmp, root) = project::project("theme-project");
             let mut proj = project::cockpit(&root);
+            // A dialog, armed, over its backdrop, on its panel (§9.4).
+            let mut dialog = app("theme-dialog");
+            dialog.select(Selection::Unit("u-lib".into()));
+            let mut p = dialog
+                .act_argv(Act::Verify, Some("u-lib"), None, None)
+                .unwrap();
+            p.argv[4] = OsString::from("--target=/work/read_scalefactors_lib");
+            dialog.ask(p);
+            arm(&mut dialog);
             for (screen, app, w, h) in [
                 ("first", &mut first, 80, 30),
                 ("unit", &mut unit, 80, 30),
                 ("project", &mut proj, 120, 30),
+                ("dialog", &mut dialog, 100, 24),
             ] {
                 app.palette = Palette::of(theme);
                 let buffer = render(app, w, h);
