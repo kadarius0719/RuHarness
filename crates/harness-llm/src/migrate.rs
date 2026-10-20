@@ -964,26 +964,35 @@ fn preconditions<'u>(
     unit: &'u Unit,
 ) -> Result<(&'u str, &'u str), Error> {
     plan.unit(&unit.id)?;
-    let refuse = |what: String| {
-        Error::InvalidPlan(format!(
-            "unit `{}`: {what} — the executor migrates only units that already have a \
-             `{ORACLE_KIND}` oracle with a differential driver and a crate name ([unit.oracle] \
-             kind, driver, rust_crate); generating drivers is a later milestone",
-            unit.id
-        ))
-    };
+    // The refusal says which stage is missing, in words
+    // (docs/COCKPIT-WRAPPER-DESIGN.md §9.4): the unit's test program first.
+    let id = &unit.id;
+    let make = format!("`harness gen-driver {id}`, or Make the test program in the cockpit");
+    let refuse = |what: String| Error::InvalidPlan(what);
     if unit.oracle_kind() != Some(ORACLE_KIND) {
         return Err(refuse(match unit.oracle_kind() {
-            Some(kind) => format!("[unit.oracle] kind is `{}`", printable(kind, 64)),
-            None => "there is no [unit.oracle] kind".to_string(),
+            Some(kind) => format!(
+                "{id}'s test program is of the kind `{}`, which migrate cannot use: it needs a \
+                 differential test program (`kind = \"{ORACLE_KIND}\"` under its [unit.oracle] \
+                 in the plan, then {make})",
+                printable(kind, 64)
+            ),
+            None => format!("{id} has no test program yet: make one first ({make})"),
         }));
     }
-    let driver = unit
-        .oracle_param_str("driver")
-        .ok_or_else(|| refuse("[unit.oracle] has no `driver`".to_string()))?;
-    let crate_name = unit
-        .oracle_param_str("rust_crate")
-        .ok_or_else(|| refuse("[unit.oracle] has no `rust_crate`".to_string()))?;
+    let driver = unit.oracle_param_str("driver").ok_or_else(|| {
+        refuse(format!(
+            "{id} has no test program yet: its [unit.oracle] names no driver — add `driver = \
+             \"…/units/{id}/driver.c\"` under it in the plan, then make one ({make})"
+        ))
+    })?;
+    let crate_name = unit.oracle_param_str("rust_crate").ok_or_else(|| {
+        refuse(format!(
+            "{id} has no name for its Rust crate yet: its [unit.oracle] has no rust_crate — add \
+             `rust_crate = \"{}_rs\"` under it in the plan",
+            id.replace('-', "_")
+        ))
+    })?;
     // Both become path segments (and the crate name a manifest string);
     // Plan::parse validates them, a hand-built Unit might not have been.
     if !is_clean_segment(&unit.id) || !is_clean_segment(crate_name) {
@@ -5444,19 +5453,25 @@ int add(int a, int b) { return a + b; }\n";
     #[test]
     fn units_without_a_driver_oracle_are_refused() {
         let fx = fixture("preconditions");
+        // Each shape says what is missing, in words, and how to make it
+        // (cockpit design §9.4).
         for (oracle_table, expect) in [
-            ("", "there is no [unit.oracle] kind"),
+            (
+                "",
+                "has no test program yet: make one first (`harness gen-driver ID`, or Make the \
+                 test program in the cockpit)",
+            ),
             (
                 "\n[unit.oracle]\nkind = \"proptest\"\ndriver = \"d.c\"\nrust_crate = \"x\"\n",
-                "kind is `proptest`",
+                "'s test program is of the kind `proptest`, which migrate cannot use",
             ),
             (
                 "\n[unit.oracle]\nkind = \"c-abi-differential\"\nrust_crate = \"x\"\n",
-                "has no `driver`",
+                "has no test program yet: its [unit.oracle] names no driver",
             ),
             (
                 "\n[unit.oracle]\nkind = \"c-abi-differential\"\ndriver = \"d.c\"\n",
-                "has no `rust_crate`",
+                "has no name for its Rust crate yet: its [unit.oracle] has no rust_crate",
             ),
         ] {
             let plan = plan_with_oracle(oracle_table);
@@ -5485,8 +5500,14 @@ int add(int a, int b) { return a + b; }\n";
             .unwrap_err();
             assert!(matches!(err, Error::InvalidPlan(_)), "{err}");
             let message = err.to_string();
-            assert!(message.contains(expect), "{message}");
-            assert!(message.contains("later milestone"), "{message}");
+            let id = &plan.units[0].id;
+            let expect = expect.replace("ID", id);
+            assert!(
+                message.starts_with(&format!("invalid plan: {id}")),
+                "{message}"
+            );
+            assert!(message.contains(&expect), "{message}");
+            assert!(!message.contains("later milestone"), "{message}");
             assert!(seen.borrow().is_empty());
         }
         assert!(!fx.attempts_dir().exists());

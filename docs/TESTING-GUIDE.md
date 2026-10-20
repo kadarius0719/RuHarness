@@ -4118,7 +4118,7 @@ harness migrate u-encode --target targets/lzg
 **You should see.**
 
 ```text
-error: invalid plan: unit `u-encode`: there is no [unit.oracle] kind — the executor migrates only units that already have a `c-abi-differential` oracle with a differential driver and a crate name ([unit.oracle] kind, driver, rust_crate); generating drivers is a later milestone
+error: invalid plan: u-encode has no test program yet: make one first (`harness gen-driver u-encode`, or Make the test program in the cockpit)
 ```
 
 **Run.**
@@ -4129,7 +4129,7 @@ echo "exit=$?"
 
 **You should see** `exit=1`: the harness refused.
 
-**What it means.** `u-encode` has no tested driver, so the harness will not translate it. The end of the message ("generating drivers is a later milestone") is out of date (see [Known quirks](#known-quirks-in-this-version) at the end of the guide): driver generation exists, and you used it in Part 3. For this unit, though, even `gen-driver` would fail, because its driver cannot be linked without `checksum.c`.
+**What it means.** `u-encode` has no test program (no tested driver), so the harness will not translate it. The message names the step that was skipped and how to take it, as Part 3 did for `u-checksum`. For this unit, though, even `gen-driver` would fail, because its driver cannot be linked without `checksum.c`.
 
 **If you do not see that.** Anything that starts `awaiting response:` means the harness is about to ask a model: that should not happen for `u-encode`. Run `git status --short`; if it lists files, run `git restore targets/lzg` and ask for help.
 
@@ -6795,9 +6795,8 @@ docs/TUTORIAL.md "Mapping a whole C project" covers the same ground for a projec
 
 A few messages and documents in this version of RuHarness are out of date. The steps above point here when you meet one of them.
 
-1. When `migrate` refuses a unit that has no driver, the message ends with `generating drivers is a later milestone`. Driver generation already exists: it is `harness gen-driver`, which you use in Part 3 (Step 3.1); Step 7.1 shows the message.
-2. The chat's first line may add a note in brackets naming the Claude Code version the cockpit was tested with. A newer Claude Code works; the note is harmless (Step 4.5).
-3. Some reference docs show the `[oracle] allowlist` without `nm`. All four tools are required, as the `harness.toml` of Step 1.12 has them.
+1. The chat's first line may add a note in brackets naming the Claude Code version the cockpit was tested with. A newer Claude Code works; the note is harmless (Step 4.5).
+2. Some reference docs show the `[oracle] allowlist` without `nm`. All four tools are required, as the `harness.toml` of Step 1.12 has them.
 
 ---
 
@@ -6841,7 +6840,7 @@ In Part 12 the paths and the flag differ from Parts 1–11: where a row says `ta
 | `gen-driver` asks again, and its attempt record shows `generate -> format` | The answer was not in the expected layout. | Run ["Check the start of your answer file"](#check-the-start-of-your-answer-file) below, then answer the new request the same way. |
 | `gen-driver` ends RED (exit 10) | The driver failed validation on every turn. | Run ["List why a driver failed"](#list-why-a-driver-failed) below. (A `driver-build` failure often means the include edit of Step 1.5 is missing.) |
 | `error: mutation: <number> site(s) but none of the <number> sampled mutant(s) compiled — a harness limitation …` | The harness could not build its planted bugs. This is not your driver's fault. | Follow ["If the harness cannot build its planted bugs"](#if-the-harness-cannot-build-its-planted-bugs) below. |
-| `migrate` refuses: `… there is no [unit.oracle] kind …` | The unit has no validated driver yet. | Run `harness gen-driver` for the unit first (Part 3, from Step 3.1). See also Known quirks, item 1. |
+| `migrate` refuses: `… has no test program yet …` | The unit has no validated driver yet. | Run `harness gen-driver` for the unit first (Part 3, from Step 3.1), or choose Make the test program in the cockpit. |
 | `migrate` refuses: ``… its generated driver's validation is `failed` …`` (or `stale`, or `missing`) | The driver's validation is not a fresh GREEN. | `harness gen-driver u-checksum --target targets/lzg --model guide-written` (for u-version, change the name; Part 12: `harness gen-driver u-version --tool t-lzg --model guide-written`). |
 
 ### The chat (Part 4)
