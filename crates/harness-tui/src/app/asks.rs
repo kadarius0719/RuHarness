@@ -327,6 +327,20 @@ impl Asks {
 /// The dialog's chat lines (§3.2): who asked, who answers the turns. A
 /// Continue's answer is drawn whole after them by the view, behind a
 /// gutter only the cockpit writes (`view::answer_rows`).
+/// The chat's one line in a dialog (§9.5): who asked, and what it answers.
+pub fn chat_line(tag: &ChatTag, turns: u32) -> String {
+    if tag.grant {
+        format!(
+            "Asked in chat by {}; it answers the model's turns here, up to {turns}.",
+            tag.model
+        )
+    } else {
+        format!("Asked in chat by {}.", tag.model)
+    }
+}
+
+/// The chat's words on an act's card: who asked, to read before running,
+/// and what its answers may do.
 pub fn chat_words(tag: &ChatTag, body: &mut Vec<String>, turns: u32) {
     body.insert(
         0,

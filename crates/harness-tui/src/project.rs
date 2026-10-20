@@ -822,11 +822,11 @@ pub fn dialog(act: Act, map: Option<&MapView>, argv: &[String]) -> Vec<String> {
         Act::Ask => {
             let calls = map.map_or(1, |m| m.held_sets().div_ceil(ASK_BATCH).max(1));
             (
-                "Ask a model which file to keep in each held choice: its answer is advice, shown \
-                 beside the choice when you Accept a program; you still decide."
+                "Ask a model which file to keep in each decision: its answer is advice, shown \
+                 beside the decision when you Accept a program; you still decide."
                     .to_string(),
                 format!(
-                    "{} through the external hand-off (one for each {ASK_BATCH} held choices): \
+                    "{} through the external hand-off (one for each {ASK_BATCH} decisions): \
                      the command stops and waits for the answer files, and prints the command \
                      that resumes",
                     if calls == 1 {
@@ -1005,10 +1005,10 @@ pub(crate) mod tests {
         let words = dialog(Act::Ask, Some(&map), &ask).join("\n");
         assert!(!words.contains("It runs"), "{words}");
         for w in [
-            "Ask a model which file to keep in each held choice: its answer is advice, shown \
-             beside the choice when you Accept a program; you still decide.",
-            "It takes: one model call through the external hand-off (one for each 10 held \
-             choices)",
+            "Ask a model which file to keep in each decision: its answer is advice, shown \
+             beside the decision when you Accept a program; you still decide.",
+            "It takes: one model call through the external hand-off (one for each 10 \
+             decisions)",
             "It writes: migration/map/project-map.reply.json",
         ] {
             assert!(words.contains(w), "{w}\n{words}");

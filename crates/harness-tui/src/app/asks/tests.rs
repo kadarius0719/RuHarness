@@ -353,9 +353,13 @@ fn the_request_line_settles_sends_drafts_reviews_and_declines() {
                 "{}",
                 c.title
             );
-            assert!(c.body[0].starts_with(&format!("Asked in chat by {MODEL}")));
+            assert!(c.body.len() <= 3, "{:#?}", c.body);
             assert!(c
                 .body
+                .iter()
+                .any(|l| l.starts_with(&format!("Asked in chat by {MODEL}; it answers"))));
+            let (_, card) = a.act_card(c);
+            assert!(card
                 .iter()
                 .any(|l| l.contains("The chat answers its model turns (up to 4) here")));
         }
@@ -1916,8 +1920,23 @@ fn make_the_test_program_maps_onto_gen_driver() {
             "--requester=chat"
         ]
     );
-    let (title, body) = a.dialog_words(&r.pending);
+    let (title, short) = a.dialog_words(&r.pending);
     assert_eq!(title, "The chat asks: Make u-hash's test program?");
+    // The dialog in one breath (§9.5); the rest on the act's card.
+    assert_eq!(short.len(), 3, "{short:#?}");
+    assert!(
+        short[0].starts_with("The chat writes a small C program that calls "),
+        "{short:#?}"
+    );
+    assert_eq!(
+        short[1],
+        "Writes: the test program under migration/units/u-hash/ and the plan's entry."
+    );
+    assert!(
+        short[2].starts_with(&format!("Asked in chat by {MODEL}; it answers")),
+        "{short:#?}"
+    );
+    let (_, body) = a.act_words(&r.pending);
     let body = body.join("\n");
     assert!(
         body.contains("The chat writes a small C program that calls ")

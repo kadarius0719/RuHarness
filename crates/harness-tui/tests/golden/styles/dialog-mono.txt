@@ -10,31 +10,23 @@
   @0-99 fg - DIM "│    Features (none yet)     ││                                                                    │"
 │    Speed — not set up      ││1 exported function: read_scalefactors (44 lines)                   │
   @0-99 fg - DIM "│    Speed — not set up      ││1 exported function: read_scalefactors (44 lines)                   │"
-│  ▸ test_ca┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐           │
-  @0-11 fg - DIM "│  ▸ test_ca"
-  @12-87 fg - BOLD "┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐"
-  @88-99 fg - DIM "│"
-│           │Builds u-lib's Rust and runs it against the C in the sandbox.             │ate        │
+│  ▸ test_case/          ✓1/1││Its C: 1 file — test_case/src/lib.c                                 │
+  @0-99 fg - DIM "│  ▸ test_case/          ✓1/1││Its C: 1 file — test_case/src/lib.c                                 │"
+│           ┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐ate        │
   @0-11 fg - DIM "│"
-  @12-12 fg - BOLD "│"
-  @87-87 fg - BOLD "│"
+  @12-87 fg - BOLD "┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐"
   @88-99 fg - DIM "ate        │"
-│           │Writes units/u-lib/oracle-latest.json and .md (and oracle-last-green.json │ tree)     │
+│           │Builds u-lib's Rust and runs it against the C in the sandbox.             │ tree)     │
   @0-11 fg - DIM "│"
   @12-12 fg - BOLD "│"
   @87-87 fg - BOLD "│"
   @88-99 fg - DIM "tree)     │"
-│           │when green) and u-lib's status in plan.toml: green → verified; red → a    │           │
+│           │Writes: the judge's check of u-lib and its status in the plan; changes no │           │
   @0-11 fg - DIM "│"
   @12-12 fg - BOLD "│"
   @87-87 fg - BOLD "│"
   @88-99 fg - DIM "│"
-│           │verified unit becomes "in progress" (a merged one keeps its status).      │           │
-  @0-11 fg - DIM "│"
-  @12-12 fg - BOLD "│"
-  @87-87 fg - BOLD "│"
-  @88-99 fg - DIM "│"
-│           │Changes no code. The crate is unchanged since the cockpit last showed it. │           │
+│           │code.                                                                     │           │
   @0-11 fg - DIM "│"
   @12-12 fg - BOLD "│"
   @87-87 fg - BOLD "│"
@@ -73,13 +65,16 @@
   @0-99 fg - DIM "│                            ││                                                                    │"
 │                            ││                                                                    │
   @0-99 fg - DIM "│                            ││                                                                    │"
+│                            ││                                                                    │
+  @0-99 fg - DIM "│                            ││                                                                    │"
 └────────────────────────────┘└────────────────────────────────────────────────────────────────────┘
   @0-99 fg - DIM "└────────────────────────────┘└────────────────────────────────────────────────────────────────────┘"
  Ready.
   @0-99 fg - DIM "Ready."
 
- ↑↓ scroll   Esc cancel   ←→ button   Enter press
+ ↑↓ scroll   Esc cancel   i what it does   ←→ button   Enter press
   @0-2 fg - BOLD "↑↓"
   @12-15 fg - BOLD "Esc"
-  @25-27 fg - BOLD "←→"
-  @37-42 fg - BOLD "Enter"
+  @25-26 fg - BOLD "i"
+  @42-44 fg - BOLD "←→"
+  @54-59 fg - BOLD "Enter"

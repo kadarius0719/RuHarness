@@ -3590,7 +3590,7 @@ fn overlay_hints(app: &App) -> Option<Vec<(&'static str, &'static str)>> {
         // N-C1-2) — and never sits under the panes' first entry, `x cancel`
         // while a command runs, which opens this very kind of dialog (N2-6).
         Mode::Dialog(c) => {
-            let mut h = vec![("↑↓", "scroll"), ("Esc", "cancel")];
+            let mut h = vec![("↑↓", "scroll"), ("Esc", "cancel"), ("i", "what it does")];
             if c.dialog.armed {
                 h.push(("←→", "button"));
                 h.push(("Enter", "press"));
@@ -6235,11 +6235,14 @@ mod tests {
         key(&mut app, 'a');
         // Esc where arming never moves it (review N-C1-2), not first — under
         // the panes' `x cancel` (N2-6).
-        assert_eq!(bar(&mut app).trim(), "↑↓ scroll   Esc cancel");
+        assert_eq!(
+            bar(&mut app).trim(),
+            "↑↓ scroll   Esc cancel   i what it does"
+        );
         arm(&mut app);
         assert_eq!(
             bar(&mut app).trim(),
-            "↑↓ scroll   Esc cancel   ←→ button   Enter press"
+            "↑↓ scroll   Esc cancel   i what it does   ←→ button   Enter press"
         );
     }
 
@@ -8966,7 +8969,10 @@ mod tests {
             find(&items, "Measure the program as it stands").is_none(),
             "one measurable unit: {items:?}"
         );
-        let (title, body) = app.dialog_words(&p);
+        let (_, short) = app.dialog_words(&p);
+        assert!(short.len() <= 3, "{short:#?}");
+        assert_eq!(short[0..2], app.act_words(&p).1[0..2]);
+        let (title, body) = app.act_words(&p);
         assert_eq!(title, "Measure speed?");
         assert_eq!(
             body[0],
@@ -10371,10 +10377,11 @@ mod tests {
         );
         assert!(screen.contains("1 unit not re-checked"), "{screen}");
 
-        // §8.4/§8.5: the dialogs say what the features do.
+        // §8.4/§8.5: the acts' cards (`i` in their dialogs, §9.5) say what
+        // the features do.
         let words = |app: &App, act, unit, attempt| {
             let p = app.act_argv(act, unit, attempt, None).expect("pending");
-            app.dialog_words(&p).1.join("\n")
+            app.act_words(&p).1.join("\n")
         };
         let recheck = words(&app, crate::app::Act::Verify, Some("u001-katajainen"), None);
         assert!(
@@ -10394,7 +10401,7 @@ mod tests {
                     Some("keep it"),
                 )
                 .expect("pending");
-            app.dialog_words(&p).1.join("\n")
+            app.act_words(&p).1.join("\n")
         };
         assert!(
             migrate.contains("Each judged turn also runs your 2 feature scenarios."),

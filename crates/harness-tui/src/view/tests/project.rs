@@ -769,17 +769,16 @@ fn the_project_view_after_a_map_with_a_held_choice() {
     let Mode::Dialog(c) = &app.mode else { panic!() };
     assert_eq!(c.title, "Accept t-unlzg?");
     assert!(c.body[0].starts_with("Accept t-unlzg: check the map still matches the project"));
-    // The decisions in words, before the command's --keep flags.
+    // The decisions in words, before the command's --keep flags: one line
+    // (§9.5, at most three before the command).
     assert_eq!(
-        c.body[1..3],
-        [
-            "Keeps src/decode.c for the functions both files define (the model advised \
-             src/mini.c instead).",
-            "Keeps src/check_b.c for the functions both files define.",
-        ]
+        c.body[1],
+        "Keeps src/decode.c for the functions both files define (the model advised \
+         src/mini.c instead). Keeps src/check_b.c for the functions both files define."
     );
+    assert_eq!(c.body.len(), 3, "{:#?}", c.body);
     assert_eq!(
-        c.body[4],
+        c.body[2],
         "It writes: the tool's build configuration, migration/tools/t-unlzg/harness.toml (a tool \
          accepted before keeps its results and what you added to that file)."
     );

@@ -7,12 +7,11 @@
 │  ▸ test_case/                    ✓1/1││Its C: 1 file — test_case/src/lib.c                                           │
 │                                      ││Its Rust: from try a-13c9 · the judge says green, up to date                  │
 │                                      ││Attempts: 3 — 2 green, 1 red (listed under its row in the tree)               │
-│                     ┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐d calls only         │
-│                     │Builds u-lib's Rust and runs it against the C in the sandbox.             │  ✓ boundary calls   │
-│                     │Writes units/u-lib/oracle-latest.json and .md (and oracle-last-green.json │                     │
-│                     │when green) and u-lib's status in plan.toml: green → verified; red → a    │                     │
-│                     │verified unit becomes "in progress" (a merged one keeps its status).      │                     │
-│                     │Changes no code. The crate is unchanged since the cockpit last showed it. │                     │
+│                                      ││Checks  – whole program not run  ✓ same exports  ✓ allowed calls only         │
+│                     ┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐  ✓ boundary calls   │
+│                     │Builds u-lib's Rust and runs it against the C in the sandbox.             │                     │
+│                     │Writes: the judge's check of u-lib and its status in the plan; changes no │                     │
+│                     │code.                                                                     │                     │
 │                     │                                                                          │                     │
 │                     │Command: /opt/ruharness/bin/harness --json verify u-lib --target=/work/rea│                     │
 │                     │d_scalefactors_lib                                                        │                     │
@@ -24,7 +23,8 @@
 │                                      ││                                                                              │
 │                                      ││                                                                              │
 │                                      ││                                                                              │
+│                                      ││                                                                              │
 └──────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────┘
  Ready.
 
- ↑↓ scroll   Esc cancel
+ ↑↓ scroll   Esc cancel   i what it does
