@@ -2059,9 +2059,10 @@ after the picks' `message` lines.
 view** (pass 3 of docs/reviews/2026-10-18-cockpit-usability-critique.md): the cockpit's own
 screen, panes, key bar and dialogs. Since 2026-10-19 (docs/COCKPIT-WRAPPER-DESIGN.md §9.3,
 "one list, one card, one line") its left pane (36 columns, 30 under 120) is the only list:
-before a map one row, "Map the project"; after a map the heading "Programs (n)" with the counts
+before a map one row, "Map the project"; after a map the heading "Programs (n)", with the counts
 of the states present ("· 1 accepted · 2 need a decision", "did not compile" and "did not link"
-too), wrapped to the pane, then one row per program — its mark, its id, its state at the right:
+too) only when the whole heading fits the pane on one line, then one row per program from the
+pane's edge — its mark, its id (cut with "…" when needed, never the state), its state at the right:
 "✓ accepted", "⚠ needs a decision", "✓ links", "✗ did not compile", "✗ did not link", "·
 incomplete", "· fuzzer, not a tool" — an accepted program's row being its tool's row (a tool
 the map does not name keeps a row of its own); a file holding a `main` that did not compile is
@@ -2075,18 +2076,25 @@ project); "Map the project again — Enter" (a configuration written since the m
 <id> — Enter on its row" (right after an Accept); "Accept <id> — Enter on its row, it asks for
 the file" (a decision); "Accept <id> — Enter on its row" (ready); "nothing here — every program
 is a tool; open one". Then a card for the selection: its id (bold) and state; its file and what
-the map knows it is ("src/tools/lzg.c · a tool, by its folder"); a model's label from the
+the map knows it is and why ("src/tools/lzg.c · looks like a tool (it is not in a test, example or
+benchmark folder)", "looks like a library (nothing in it has a main)"; only the path once
+accepted); a model's label from the
 reply's `p<n>` item ("The model calls it “LZG compressor” (a tool)"); an accepted tool's
 "Its build configuration: migration/tools/<id>/harness.toml"; a failed program's first error
 from the map ("✗ src/a.c:3: a syntax error"); each decision — "Decision: two files define the
 same functions. Keep which?", "Asked only if you keep <file>." when reached only under another,
 its files numbered "1  <path>", the advised one marked "← the model advises this one", "Why
 (<model>): <why>" (the reason in words when the reply holds no why), "This is advice; you pick
-the file when you accept." — or "No advice yet — Enter, then Ask for advice (the chat
-answers)"; and "Enter: <what Enter does>". Before a map the card is the two sentences on
-mapping. The set and definer ids (d1, d1.2) never show on screen; they stay in the reply file
-and the accept command's `--keep` flags. What each state means is in the help (`?`, "What the
-states mean"). `Enter` on a row opens its menu, the
+the file when you accept." — or, with no advice, how it comes: "Advice comes once the build
+configuration is written and the project mapped again" (a guess), "No advice yet — Enter, then
+Ask for advice (the chat answers)" (the chat on), "No advice yet — ask a model with harness
+project ask on the command line (the models topic)" (the chat off); and "Enter: <what Enter
+does>" unless the Next step says the same. The card is at most 100 columns wide; the pane holds
+no "Last:" line (the status line does). Before a map the card is the two sentences on
+mapping. A menu's "↳ recommended:" line gives the reason ("it needs a decision", "it links",
+"the configuration is a guess"), not the item again. The set and definer ids (d1, d1.2) never show on screen; they stay in the reply file
+and the accept command's `--keep` flags. The help (`?`) opens on the Project view's own page:
+its keys, "What the states mean" (each mark and state word in one line) and what mapping does. `Enter` on a row opens its menu, the
 recommended item first (a menu that would hold only that item is skipped: its dialog opens):
 "Accept this program" (or "this library") and "Accept it under a run name of your own…", "Open
 tool <id>" on an accepted one, once a map exists "Write the build configuration (in <editor>)"
@@ -2103,9 +2111,9 @@ project) Accept is greyed with "Accept waits for your build configuration:
 this map's is a guess (or came with the project) — choose Write the build configuration (or Ask
 for a proposal — ask in chat), then Map the project again". Accept asks each decision first, in a
 menu titled "Accept <id>": "Keep which file for the functions both define?", the files as items
-"1  <path>", the advised one marked "← the model advises this one", none recommended, skipping a
+"1  <path>", the advised one marked "← the model advises this one", none recommended but the highlight starting on it, skipping a
 set whose `under` names no choice made so far; a reply bound to the map's digests gives the
-model's "Why (<model>): …" above them, each answer checked as `ask` checks one; then, for a run name, a line to type it (letters, digits, `.`, `_`, `-`, not starting with
+model's "Why (<model>): …" above them, each answer checked as `ask` checks one; the Accept dialog then says each choice in words before its command ("Keeps <path> for the functions both files define (the model advised this file)", or which file it advised instead); then, for a run name, a line to type it (letters, digits, `.`, `_`, `-`, not starting with
 `-` or `.`). The map file's ids, sets and indexes are shape-checked before anything of them is
 shown or put in a command (a map that fails says so and offers Map only), and every string shown
 goes through `safe_line` and the display filter. Each act's dialog says what it runs (the

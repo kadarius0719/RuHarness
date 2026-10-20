@@ -726,7 +726,7 @@ and no map opens that tool, as the command line does.
   model for a proposal?", "Accept t-lzg?"), what it does, "It takes:
   …", "It writes: …", then the exact argv (§5.1) — run without `--json`, so the details show the
   command's own screen, indentation kept. It arms and runs as every act (§5.3). Its end says
-  "Map the project — done (2 s); c for its words" (or "done, with a problem: <its first error
+  "Map the project — done (2 s); c for details" (or "done, with a problem: <its first error
   line>", or "failed (exit N): <its first error line>" — never "done" for a run that failed; when
   the folder is then refused as made elsewhere, the adoption question opens again as a dialog and
   the menus offer "Adopt this folder…") and reads the map
@@ -881,8 +881,8 @@ The light accent is 23, not the 31 first proposed: 31 is 4.1:1 on white, under t
 | section | pane titles ("Project", "Files", the View's, a dialog's, an overlay's) and in-pane section headings ("Programs (3)", "Libraries:", "Accepted tools", "── t-benchmark ──", "Checks", the tree's groups) | blue, bold | 75, bold | 25, bold | bold |
 | status | the bottom status line ("Ready…", "Last: …") and a running command's progress | — | 250 | 240 | — |
 | notice | informational lines that are neither a state nor the next step: the notice row, a project-changed notice, an explanation ("Mapping finds its programs…"), the chat's own lines | magenta | 176 | 127 | — |
-| label | secondary labels beside or under what they describe: a program's file, "c for its words", the key bar's words, a check's note | — | 248 | 242 | — |
-| accent | only the `Next step:` label and the menu's recommended item | cyan, bold | 81, bold | 23, bold | bold, underlined |
+| label | secondary labels beside or under what they describe: a program's file, "c for details", the key bar's words, a check's note | — | 248 | 242 | — |
+| accent | only the `Next:` label (`Next step:` before 2026-10-19) and the menu's recommended item | cyan, bold | 81, bold | 23, bold | bold, underlined |
 | good | a state that is fine, beside `✓`, `◉` or a word | green | 114 | 28 | — |
 | bad | a failed state, beside `✗`, `?` or a word | red | 203 | 160 | bold |
 | attention | a state that wants a look, beside `⚠`, `!`, `◐`, `⚑`, `↻`, `–` or a word; a hand-off's pause ("waiting for your answer: …") | yellow | 214 | 130 | bold |
@@ -900,7 +900,7 @@ the details and the Next step say `waiting for your answer: <file> — write the
 run Ask a model again (or answer it in the chat)` — `then choose Resume` for a unit's attempt —
 in the attention role; `failed (exit N)` is kept for real failures. The status line shortens a
 long path to its last three parts (`…/a/b/c`) and never cuts the sentence's end after its last
-`; ` (`c for its words`).
+`; ` (`c for details`).
 
 (— is the terminal's own foreground. Numbers are 256-colour indexes.)
 
@@ -926,7 +926,7 @@ The rules, each enforced by a test:
   always beside its mark or word, so the screen means the same in mono. Every golden screen is
   walked: a run of a state colour (a wrapped paragraph counts as one) must hold a state mark or
   word. Code is shown plain: keywords bold, comments muted, no syntax colours.
-- **One accent.** On any screen it marks at most the `Next step:` label and one menu item.
+- **One accent.** On any screen it marks at most the `Next:` label and one menu item.
 - **Each delineating role in its place** (checked where the role's colour is its own in the
   palette): the section colour only on a run that starts its line (a heading or a pane title);
   the notice colour only on whole lines; the label colour never on the Next step or a state mark.

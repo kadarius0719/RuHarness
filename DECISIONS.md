@@ -3576,3 +3576,38 @@ without a word would be the quiet surprise the cockpit avoids everywhere else. O
 - The chat's typed question ("Which file should t-x keep for choice d1, and why?") is the chat's
   (CHAT-PANE-DESIGN §3.6) and was left as it is; it is the one place `d1` still shows.
 - The chat-width rule applies on every screen, not only the Project view (the layout is shared).
+
+**Fix pass after the newcomer check** (an Opus checker walked the build on liblzg at 200×55,
+120×40 and 100×30, the same day). Changed:
+- Accept could be decided wrong with two Enters: the picker's highlight now starts on the advised
+  file (nothing is picked until Enter), and the Accept dialog says each choice in words before its
+  command ("Keeps src/lib/decode.c for the functions both files define (the model advised this
+  file)", or which file it advised instead). The dialog names the program and its build
+  configuration's path; no `<id>`, no "ledger".
+- The help on the Project view opens on its own page (a tool's page said ✓ means "in Rust"): its
+  keys, "What the states mean" (each mark and state word, one line each) and what mapping does;
+  every key, the mouse and the chat after `↓`.
+- The card: how advice comes from where the person is (after the build configuration while it is
+  a guess; Ask for advice with the chat on; `harness project ask` with it off); no `Enter:` line
+  when the Next step says the same; no in-pane `Last:` line; what the map guesses said with its
+  evidence ("looks like a tool (it is not in a test, example or benchmark folder)", "looks like a
+  library (nothing in it has a main)", "a fuzzer (it defines LLVMFuzzerTestOneInput, no main)"),
+  and only the path once accepted; at most 100 columns wide, the advised mark right after its file.
+- The rows start at the pane's edge and cut the id, never the state; the heading keeps its counts
+  only when it fits on one line (with liblzg's three programs it is `Programs (3)` alone).
+- The selected row is reversed whichever pane has the focus, and bold while the left pane has it.
+- The tool just accepted is the Next step only until the selection moves or a tool is opened.
+- A menu's "↳ recommended:" line gives the reason ("it needs a decision", "it links", "it is
+  accepted", "the configuration is a guess"), carried by the Next step's own rule (a `reason` beside
+  its words; the rules themselves unchanged).
+- `c for its words` became `c for details`; the tool screen's `Next step:` became `Next:`; a screen
+  opened by Open tool or Back to the project view starts with no `Last:` of the other screen's.
+
+Decided: the help page lists each mark once with its meaning rather than a marks block and a
+glosses block (both would not fit a 30-row terminal); the unfocused selection is the theme's
+`selected` role without bold, the focused one adds bold (the frame's colour already says which
+pane has the focus); Step 12.23's quoted card has no `Enter: Map the project` line, because the
+card now leaves out what the Next step already says; the tool's "looks like a tool" rests on what
+the map really checks (the first folder is not a test, example or benchmark one), not on a
+`tools/` folder.
+
