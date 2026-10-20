@@ -1444,11 +1444,17 @@ impl App {
         if let Some(n) = self.plan_before.take() {
             self.plan_notice = Some(if n == 0 {
                 "plan: no changes".into()
-            } else {
+            } else if self.in_git() {
                 format!(
                     "plan changed {n} unit{} — review `git diff {}/plan.toml` (c for the lines)",
                     if n == 1 { "" } else { "s" },
                     self.snapshot.ledger_rel()
+                )
+            } else {
+                // No git here: its diff is no way to look (fix pass, item 6).
+                format!(
+                    "plan changed {n} unit{} — review the plan's changes with c",
+                    if n == 1 { "" } else { "s" }
                 )
             });
         }
@@ -2659,14 +2665,14 @@ impl App {
                     "Scan the project?".to_string(),
                     vec![
                         format!(
-                            "Reads {} and rewrites {}/facts.jsonl.",
+                            "Reads {} again and notes what changed (in {}/facts.jsonl).",
                             match self.snapshot.target.source_dir() {
                                 Some(_) => "every C file",
-                                None => "the tool's listed C files and the headers they reach",
+                                None => "the tool's C files",
                             },
                             self.snapshot.ledger_rel()
                         ),
-                        "A changed C file makes the verdicts that used it out of date.".into(),
+                        "A changed file means its checks must run again.".into(),
                     ]
                     .into_iter()
                     // §8.5: the map is built from the facts.
@@ -2680,15 +2686,19 @@ impl App {
                 "Refresh the plan?".into(),
                 vec![
                     format!(
-                        "Rewrites {}/plan.toml: re-approves the changed sources of every \
-                         unit whose C changed, verified units included; adds and removes units; \
-                         blocks units whose files left.",
+                        "Cuts the C into pieces again in {}/plan.toml: a piece whose C changed \
+                         is taken as it is now (a done piece then needs its check again), new \
+                         code gets pieces, and pieces whose files are gone are set aside.",
                         self.snapshot.ledger_rel()
                     ),
-                    format!(
-                        "Review `git diff {}/plan.toml` afterwards.",
-                        self.snapshot.ledger_rel()
-                    ),
+                    if self.in_git() {
+                        format!(
+                            "Look over the changes afterwards: `git diff {}/plan.toml`, or c.",
+                            self.snapshot.ledger_rel()
+                        )
+                    } else {
+                        "Look over the changes afterwards with c.".to_string()
+                    },
                 ],
             ),
             Act::Detect => (
@@ -2758,11 +2768,11 @@ impl App {
                     },
                     vec![
                         format!(
-                            "Replaces {unit}'s crate with {attempt}'s candidate and verifies it \
-                             in place; writes the oracle files and {unit}'s status in plan.toml, \
-                             and marks the attempt promoted."
+                            "Makes this try {unit}'s Rust and runs the judge on it once more \
+                             (it writes {unit}'s crate, the judge's verdict files and {unit}'s \
+                             status in plan.toml; c shows them afterwards)."
                         ),
-                        "If it does not verify in place, the old crate is put back.".into(),
+                        "If the judge does not pass it there, the Rust it had is put back.".into(),
                     ]
                     .into_iter()
                     // §8.4: which features run the unit, without marks —
@@ -2993,6 +3003,12 @@ impl App {
             ),
         };
         let mut dialog = Dialog::new(kind, self.now);
+        // Accept's button says what it does (fix pass, item 10).
+        if matches!(&purpose, Purpose::Act(p) if p.act == Act::Accept) {
+            if let Some(b) = dialog.buttons.get_mut(1) {
+                b.label = "Accept".into();
+            }
+        }
         // The walk-through opens from the chat too, and its Check again
         // keeps its letter: it runs nothing but the check (and the person's
         // own last message again); typed-ahead keys before it arms are still
@@ -3740,31 +3756,38 @@ impl App {
                 .unit(id)
                 .is_some_and(|u| u.unit.depends_on.is_empty())
         };
+        // A piece whose attempt waits for an answer: answer it, before any
+        // new attempt (fix pass, item 3).
+        if let Some((id, _)) = states.iter().find(|(_, s)| **s == UnitState::Waiting) {
+            return say(
+                format!("{id} waits for your answer — open {id}: Enter"),
+                Some(Action::OpenUnit(id.to_string())),
+            );
+        }
         let movable = |(id, s): &&(&str, &UnitState)| no_rust(s) && leaf(id);
-        let waiting = states.iter().filter(movable).count();
+        let can_move = states.iter().filter(movable).count();
+        // The pieces there are: a blocked one is set aside.
+        let pieces = states
+            .iter()
+            .filter(|(_, s)| **s != UnitState::Blocked)
+            .count();
+        let how_many = format!("{can_move} of the {pieces} can move to Rust now");
         // A unit with its test program moves first; with none ready, the
-        // first unit is opened for its test program (§9.4).
+        // first unit is opened for its test program (§9.4). One line, the
+        // verb — key form (fix pass, item 6).
         if let Some((id, _)) = states
             .iter()
             .filter(movable)
             .find(|(_, s)| !s.needs_test_program())
         {
             return say(
-                format!(
-                    "{waiting} unit{} no Rust yet — migrate the first, {id}: press Enter and \
-                     choose Migrate — ask in chat",
-                    if waiting == 1 { " has" } else { "s have" }
-                ),
+                format!("{how_many} — Migrate {id}: Enter"),
                 Some(Action::Migrate),
             );
         }
         if let Some((id, _)) = states.iter().find(movable) {
             return say(
-                format!(
-                    "{waiting} unit{} no Rust yet — {id} needs its test program first: open it, \
-                     then Make the test program",
-                    if waiting == 1 { " has" } else { "s have" }
-                ),
+                format!("{how_many} — open {id}: Enter"),
                 Some(Action::OpenUnit(id.to_string())),
             );
         }
@@ -5280,11 +5303,11 @@ pub fn provenance_words(unit: &UnitView) -> String {
         ProvenanceView::None if matches!(unit.report.status.as_str(), "verified" | "merged") => {
             "origin not recorded".into()
         }
-        ProvenanceView::None => "no attempt produced it".into(),
-        ProvenanceView::Pipeline(id) => format!("from attempt {} (pipeline)", short_id(id)),
-        ProvenanceView::Ambiguous(ids) => format!("ambiguous: {} attempts match", ids.len()),
-        ProvenanceView::Steered(id) => format!("from attempt {} (steered)", short_id(id)),
-        ProvenanceView::Chat(id) => format!("from attempt {} (asked in chat)", short_id(id)),
+        ProvenanceView::None => "no try produced it".into(),
+        ProvenanceView::Pipeline(id) => format!("from try {}", short_id(id)),
+        ProvenanceView::Ambiguous(ids) => format!("from one of {} tries alike", ids.len()),
+        ProvenanceView::Steered(id) => format!("from try {} (steered)", short_id(id)),
+        ProvenanceView::Chat(id) => format!("from try {} (asked in chat)", short_id(id)),
         ProvenanceView::Human { attempt, origin } if attempt == origin => {
             format!("from hand edit {}", short_id(origin))
         }
@@ -5438,6 +5461,29 @@ pub fn awaiting_file(lines: &[RunLine]) -> Option<String> {
     })
 }
 
+impl App {
+    /// The project is in a git checkout (its folder or one above holds
+    /// `.git`): a `git diff` is a way to look at a change.
+    pub fn in_git(&self) -> bool {
+        self.config
+            .target
+            .ancestors()
+            .any(|d| d.join(".git").exists())
+    }
+}
+
+/// A file's path as one line can hold it: its last three parts.
+pub fn short_file(path: &std::path::Path) -> String {
+    let parts: Vec<String> = path
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    if parts.len() <= 3 {
+        return path.display().to_string();
+    }
+    format!("…/{}", parts[parts.len() - 3..].join("/"))
+}
+
 /// What a hand-off's pause says, on the status line, in the details and as
 /// the Next step: the harness waits for the person's answer in `file`;
 /// `again` is how to go on once it is written.
@@ -5560,10 +5606,13 @@ pub fn attempt_tags(unit: &UnitView, a: &AttemptView) -> Vec<String> {
     let mut tags = Vec::new();
     let id = a.record.id.as_str();
     match &unit.provenance {
-        ProvenanceView::Pipeline(p) if p == id => tags.push("*".into()),
-        ProvenanceView::Steered(p) if p == id => tags.push("*s".into()),
-        ProvenanceView::Chat(p) if p == id => tags.push("*c".into()),
-        ProvenanceView::Human { attempt, .. } if attempt == id => tags.push("*h".into()),
+        // In words (fix pass, item 10): the try the unit's Rust came from.
+        ProvenanceView::Pipeline(p) if p == id => tags.push("in use".into()),
+        ProvenanceView::Steered(p) if p == id => tags.push("in use (steered)".into()),
+        ProvenanceView::Chat(p) if p == id => tags.push("in use".into()),
+        ProvenanceView::Human { attempt, .. } if attempt == id => {
+            tags.push("in use (by hand)".into())
+        }
         ProvenanceView::None
         | ProvenanceView::Pipeline(_)
         | ProvenanceView::Steered(_)
@@ -5587,7 +5636,7 @@ pub fn attempt_tags(unit: &UnitView, a: &AttemptView) -> Vec<String> {
         tags.push(format!("(hand edit {})", short_id(origin)));
     }
     if !a.bound {
-        tags.push("stale".into());
+        tags.push("of older C".into());
     }
     tags
 }
@@ -6912,6 +6961,20 @@ pub(crate) mod tests {
         for text in ["plan: u-lib: re-approved", "plan: execution order: u-lib"] {
             app.on_child_msg(ChildMsg::Event(Event::Message { text: text.into() }));
         }
+        app.on_child_exit(ExitStatus::from_raw(0));
+        app.load_now();
+        // No git here: the details are the way to look (fix pass, item 6).
+        assert_eq!(
+            app.plan_notice.as_deref(),
+            Some("plan changed 1 unit — review the plan's changes with c")
+        );
+        // In a git checkout, its diff.
+        std::fs::create_dir_all(app.config.target.join(".git")).unwrap();
+        let p = app.act_argv(Act::Plan, None, None, None).unwrap();
+        app.on_spawned(&p);
+        app.on_child_msg(ChildMsg::Event(Event::Message {
+            text: "plan: u-lib: re-approved".into(),
+        }));
         app.on_child_exit(ExitStatus::from_raw(0));
         app.load_now();
         assert_eq!(

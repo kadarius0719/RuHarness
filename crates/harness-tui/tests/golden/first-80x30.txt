@@ -1,17 +1,17 @@
 ┌ Files ───────────────┐┌ harness-tui-heads00-0000000000 · 0 of 13 C files in R┐
-│▾ harn…000 ✓0/13 (+1 …││Step 6 of 8: Test program 1/11                        │
-│  ▾ Units (11)        ││Next: 3 units have no Rust yet — u-cache needs its    │
-│    ▸ ✓? u001-k…jainen││test program first: open it, then Make the test       │
-│    ▸ ◇ u-cache       ││program                                               │
-│    ▸ ◇ u-hash        ││                                                      │
-│    ▸ ◇ u-lz77        ││26 files scanned                                      │
-│    ▸ ◇ u-tree        ││Units (11): 1 ✓? verified, origin not recorded · 10 ◇ │
-│    ▸ ◇ u-block…queeze││no test program                                       │
-│    ▸ ◇ u-gzip_…tainer││                                                      │
-│    ▸ ◇ u-util        ││Features: 7 — 5 hold so far, 2 still all C            │
-│    ▸ ◇ u-zlib_…tainer││                                                      │
-│    ▸ ◇ u-zopfli_lib  ││                                                      │
-│    ▸ ◇ u-zopfli_bin  ││                                                      │
+│▾ harn…000 ✓0/13 (+1 …││Step 6 of 8: Test program 1/4                         │
+│  ▾ Units (11)        ││Next: 3 of the 11 can move to Rust now — open u-cache:│
+│    ▸ ✓ u001…inen done││Enter                                                 │
+│    ▸ ◇ u-c…he no test││                                                      │
+│    ▸ ◇ u-hash no test││26 files scanned                                      │
+│    ▸ · u-lz77 stays C││Units (11): 1 ✓ done · 3 ◇ no test program · 7 · stays│
+│    ▸ · u-tree stays C││C                                                     │
+│    ▸ · u-b…ze stays C││                                                      │
+│    ▸ · u-g…er stays C││Features: 7 — 5 hold so far, 2 still all C            │
+│    ▸ ◇ u-util no test││                                                      │
+│    ▸ · u-z…er stays C││                                                      │
+│    ▸ · u-z…ib stays C││                                                      │
+│    ▸ · u-z…in stays C││                                                      │
 │  ▾ Features (7)      ││                                                      │
 │      ◉ Compres…o gzip││                                                      │
 │      ◉ Compres…o zlib││                                                      │

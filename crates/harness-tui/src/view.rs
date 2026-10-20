@@ -822,7 +822,41 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
     let project_row = app.in_project_view()
         && matches!(sel, Selection::Program(_) | Selection::Tool(_))
         && !word.is_empty();
-    let (name_text, pad, word_text) = if project_row {
+    // A unit's state on its row (or its file's): the name keeps at least 6
+    // letters; the word's padding goes first, then the word gets short
+    // (`no test`, `ready`, …), then the name is cut (fix pass, item 8).
+    let unit_words = match sel {
+        Selection::Unit(_) | Selection::File(_) if !internal && !name_first => {
+            let state = match sel {
+                Selection::File(p) => match app.files.file(p).map(|f| &f.state) {
+                    Some(FileState::Owned(u)) => app.files.units.get(*u).map(|i| &i.state),
+                    _ => None,
+                },
+                _ => app
+                    .owning_unit(sel)
+                    .and_then(|u| app.files.units.get(u))
+                    .map(|i| &i.state),
+            };
+            state.map(|s| (word.clone(), s.short_word()))
+        }
+        _ => None,
+    };
+    let (name_text, pad, word_text) = if let Some((full, short)) = unit_words {
+        const KEEP: usize = 6;
+        let keep = name_w.min(KEEP);
+        let word_text = [full, short]
+            .into_iter()
+            .find(|w| keep + 1 + width_of(&display::line(w)) <= room)
+            .unwrap_or_default();
+        if word_text.is_empty() {
+            (cut(room), 0, String::new())
+        } else {
+            let w = width_of(&display::line(&word_text));
+            let name_text = cut(room.saturating_sub(w + 1));
+            let pad = room.saturating_sub(width_of(&name_text) + w);
+            (name_text, pad, word_text)
+        }
+    } else if project_row {
         let word_text = ellipsis(&word, room.saturating_sub(2));
         let name_room = room.saturating_sub(width_of(&word_text) + 1).max(1);
         let name_text = cut(name_room);
@@ -900,7 +934,7 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
         Span::styled(glyph_text, glyph_style(glyph)),
         Span::styled(name_text, name_style),
     ];
-    if show_word {
+    if !word_text.is_empty() {
         spans.push(Span::raw(" ".repeat(pad)));
         spans.push(Span::styled(word_text, muted()));
     }
@@ -1225,10 +1259,13 @@ fn unit_record(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
     match app.shown_attempt() {
         Some(a) => {
             let r = &a.record;
-            let mut text = format!(
-                "Attempt {} · {} · provider {} · model {}",
-                r.id, r.outcome, r.provider, r.model
-            );
+            // In words a person follows (fix pass, item 10).
+            let outcome = match r.outcome.as_str() {
+                "in-progress" if app.running => "running".to_string(),
+                "in-progress" => "waiting for your answer".to_string(),
+                other => other.to_string(),
+            };
+            let mut text = format!("Try {} · {outcome} · model {}", short_id(&r.id), r.model);
             let tags = attempt_tags(unit, a);
             if !tags.is_empty() {
                 text.push_str(&format!(" · {}", tags.join(" ")));
@@ -1273,10 +1310,16 @@ fn unit_record(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
                 &unit.report.verdict.green,
                 unit.report.verdict.stale.is_empty(),
             ) {
-                (Some(true), true) => "green, fresh".to_string(),
+                (Some(true), true) => "green, up to date".to_string(),
                 (Some(false), true) => "red".to_string(),
+                (Some(g), false) if unit.report.verdict.stale.iter().any(|s| s == "source") => {
+                    format!(
+                        "{}, but the C changed since — re-check",
+                        if *g { "green" } else { "red" }
+                    )
+                }
                 (Some(g), false) => format!(
-                    "{} but out of date ({})",
+                    "{}, but out of date ({}) — re-check",
                     if *g { "green" } else { "red" },
                     unit.report.verdict.stale.join(", ")
                 ),
@@ -1288,15 +1331,18 @@ fn unit_record(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
             let attention = matches!(unit_state(app, unit), Some(UnitState::Attention(_)));
             let mut origin = match (&unit.crate_dir, attention) {
                 (Some(_), true) => format!(
-                    "The judge's last verdict: {verdict} · crate {}",
+                    "The judge's last check: {verdict} · its Rust {}",
                     provenance_words(unit)
                 ),
                 (Some(_), false) if verdict == "none yet" => {
-                    format!("Crate {} · no verdict yet", provenance_words(unit))
+                    format!("Its Rust: {} · not checked yet", provenance_words(unit))
                 }
-                (Some(_), false) => format!("Crate {} · verdict {verdict}", provenance_words(unit)),
+                (Some(_), false) => format!(
+                    "Its Rust: {} · the judge says {verdict}",
+                    provenance_words(unit)
+                ),
                 (None, true) if verdict != "none yet" => {
-                    format!("No Rust yet · the judge's last verdict: {verdict}")
+                    format!("No Rust yet · the judge's last check: {verdict}")
                 }
                 (None, _) => "No Rust yet".to_string(),
             };
@@ -1922,9 +1968,12 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
     if !app.snapshot.units.is_empty() {
         let mut counts: Vec<(String, usize)> = Vec::new();
         for info in &app.files.units {
-            let key = format!("{} {}", info.state.glyph(), info.state.word())
-                .trim()
-                .to_string();
+            // The pieces that stay C count as one group, whatever they call.
+            let word = match &info.state {
+                UnitState::StaysC(_) => info.state.short_word(),
+                s => s.word(),
+            };
+            let key = format!("{} {word}", info.state.glyph()).trim().to_string();
             match counts.iter_mut().find(|(k, _)| *k == key) {
                 Some((_, n)) => *n += 1,
                 None => counts.push((key, 1)),
@@ -1953,9 +2002,7 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
             attention(),
         ));
     }
-    if let Some(last) = &app.last {
-        lines.extend(wrapped(&format!("Last: {last}"), width, last_style(app)));
-    }
+    // No in-pane "Last:" line: the status line holds it (fix pass, item 14).
     // A failing unit, or one that needs attention: one item per unit, a
     // jump to its row in the Units list (its one place in the tree).
     type UnitPick = fn(&UnitState) -> bool;
@@ -3770,24 +3817,31 @@ const HELP_KEYS: &[(&str, &str)] = &[
 ];
 
 const HELP_LEGEND: &[(&str, &str)] = &[
-    ("✗", "failing: the current verdict is red"),
+    ("✗", "failing: the judge's last check failed"),
     (
         "⚠",
         "needs attention: a cause you can fix, named in the View",
     ),
     (
         "✓",
-        "done: its Rust is accepted and checked (steered / by hand when a note or an edit made it)",
+        "done: its Rust is accepted and checked (steered / by hand when a note or an edit made \
+         it; the card says when the cockpit does not know which try made it)",
     ),
     (
         "✓?",
-        "Rust green — accept it: an attempt passed every check and waits for you; on a done \
-         unit, verified with no attempt known to have produced it",
+        "Rust green — accept it: a try passed every check and waits for you",
     ),
-    ("◐", "Rust tried: attempts exist, none green"),
+    ("◐", "Rust tried: tries exist, none green"),
+    ("⚑", "waiting for your answer: a try stopped at a question for a model"),
+    ("◈", "test program ready: its Rust is next"),
     (
         "◇",
-        "no test program / test program ready: no Rust yet — make its test program, then its Rust",
+        "no test program (or out of date): make its test program first",
+    ),
+    (
+        "·",
+        "stays C: a piece that calls other pieces cannot be tested alone in this version; also \
+         a header",
     ),
     ("⊘", "blocked"),
     ("!", "changed since the scan"),
@@ -3796,8 +3850,7 @@ const HELP_LEGEND: &[(&str, &str)] = &[
         "?",
         "missing: the scan recorded it, the tree no longer has it",
     ),
-    ("·", "a header"),
-    ("–", "no exported functions (never planned)"),
+    ("–", "nothing to move (no functions of its own)"),
     ("○", "not in the plan"),
     (
         files::NOT_IN_TOOL,
@@ -3983,7 +4036,7 @@ pub const HELP_FIRST_KEYS: &[(&str, &str)] = &[
 
 /// The three marks of the first page.
 pub const HELP_FIRST_MARKS: &[(&str, &str)] = &[
-    ("◇", "no Rust yet: no test program, or test program ready"),
+    ("◇", "no test program yet: make it first (◈: it is ready)"),
     ("✓", "done: in Rust, and the judge's checks pass"),
     ("⚠", "needs attention: the View says why and what to do"),
 ];
@@ -4034,6 +4087,7 @@ fn help_project_page(width: usize, chat: bool) -> Vec<Line<'static>> {
         width,
         Style::default(),
     ));
+    rows.extend(wrapped(HELP_FILES_WIDTH, width, label_role()));
     rows.push(Line::from(""));
     rows.extend(wrapped(
         "↓ more: every key, the mouse, the chat",
@@ -4056,10 +4110,15 @@ fn help_first_page(width: usize, chat: bool) -> Vec<Line<'static>> {
     for (g, v) in HELP_FIRST_MARKS {
         rows.extend(wrapped(&format!("{g:<7} {v}"), width, Style::default()));
     }
+    rows.extend(wrapped(HELP_FILES_WIDTH, width, label_role()));
     rows.push(Line::from(""));
     rows.extend(wrapped(HELP_MORE, width, bold()));
     rows
 }
+
+/// The left pane's width, fixed in the settings file (fix pass, item 8).
+pub const HELP_FILES_WIDTH: &str =
+    "Left pane too narrow or too wide? files_width = 40 at the top of cockpit.toml fixes it.";
 
 /// Help's rows, and which of them are the mouse on/off line (a click there
 /// is `m`).
@@ -4207,9 +4266,25 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect, m: &Menu) {
         .reason
         .as_ref()
         .map_or(0, |r| width_of(&display::line(r)) as u16 + 36);
+    // As wide as its longest item (a greyed one with its reason), up to the
+    // screen less 4 (fix pass, item 16).
+    let longest = m
+        .items
+        .iter()
+        .map(|it| {
+            let why = it
+                .greyed
+                .as_ref()
+                .map_or(0, |w| 3 + width_of(&display::line(w)));
+            width_of(&display::line(&it.label)) + why + it.accel.map_or(0, |a| a.len() + 1) + 4
+        })
+        .max()
+        .unwrap_or(0);
+    let longest = u16::try_from(longest).unwrap_or(u16::MAX);
     let width = 64u16
         .max(reason_w.min(96))
-        .min(area.width.saturating_sub(2))
+        .max(longest)
+        .min(area.width.saturating_sub(4))
         .max(20);
     let inner_w = width.saturating_sub(2) as usize;
     let mut rows: Vec<Line<'static>> = Vec::new();
@@ -4238,8 +4313,19 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect, m: &Menu) {
         let aw = width_of(&accel);
         let name = display::line(&it.label);
         let mut label = name.clone();
+        // A reason that still does not fit goes on the next lines,
+        // indented, whole.
+        let mut why_rows: Vec<String> = Vec::new();
         if let Some(why) = &it.greyed {
-            label = format!("{label} — {}", display::line(why));
+            let whole = format!("{label} — {}", display::line(why));
+            if width_of(&whole) <= inner_w.saturating_sub(aw + 2) {
+                label = whole;
+            } else {
+                why_rows = word_wrap(
+                    &format!("— {}", display::line(why)),
+                    inner_w.saturating_sub(6).max(8),
+                );
+            }
         }
         let label = ellipsis(&label, inner_w.saturating_sub(aw + 2));
         let pad = inner_w.saturating_sub(2 + width_of(&label) + aw);
@@ -4266,6 +4352,9 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect, m: &Menu) {
             Span::styled(why, why_style),
             Span::styled(format!("{}{accel}", " ".repeat(pad)), style),
         ]));
+        for row in why_rows {
+            rows.push(Line::from(Span::styled(format!("    {row}"), muted())));
+        }
         if let (true, Some(reason)) = (recommended, &m.reason) {
             let mut why = format!("recommended: {}", display::line(reason));
             if it.model {
@@ -4410,20 +4499,18 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
         } else {
             format!("[ {}  {} ]", b.label, b.key)
         };
-        // The safe button plain reversed; the armed one in the accent,
-        // reversed; one not armed yet muted. The focus is bold (§9.4).
-        let mut style = if i == 0 {
-            selected_row()
-        } else if c.dialog.armed {
-            accent().patch(selected_row())
-        } else {
-            muted()
+        // Only the focused button is reversed, so Enter's target is
+        // unmistakable (fix pass, item 15): the safe one plain reversed,
+        // the armed one in the accent reversed; the other plain, one not
+        // armed yet muted.
+        let focused = i == c.dialog.focus;
+        let style = match (i, c.dialog.armed, focused) {
+            (0, _, true) => selected_row().add_modifier(Modifier::BOLD),
+            (0, _, false) => Style::default(),
+            (_, true, true) => accent().patch(selected_row()),
+            (_, true, false) => Style::default(),
+            (_, false, _) => muted(),
         };
-        if i == c.dialog.focus {
-            style = style.add_modifier(Modifier::BOLD);
-        } else if i == 0 || c.dialog.armed {
-            style = style.remove_modifier(Modifier::BOLD);
-        }
         let w = width_of(&text) as u16;
         spots.push((i, x, w));
         spans.push(Span::raw(" "));
@@ -5415,6 +5502,115 @@ mod tests {
         theme::set(Palette::default());
     }
 
+    /// Fix pass, item 1: with the chat off, the test-program step names the
+    /// command line's way, on the Next line and on the greyed item.
+    #[test]
+    fn with_the_chat_off_the_command_line_way_is_named() {
+        let mut app = app_of("targets/zopfli", "chat-off-way");
+        app.chat_on = false;
+        app.select(Selection::Unit("u-cache".into()));
+        let next = app.advice(&app.selection.clone()).unwrap();
+        assert_eq!(
+            next.text,
+            "Make the test program — run harness gen-driver u-cache (the chat is off)"
+        );
+        app.open_menu();
+        let Mode::Menu(m) = &app.mode else {
+            panic!("a menu")
+        };
+        let make = m
+            .items
+            .iter()
+            .find(|i| i.label == "Make the test program — ask in chat")
+            .unwrap();
+        assert_eq!(
+            make.greyed.as_deref(),
+            Some("the chat is off — run harness gen-driver u-cache, or start the cockpit without --no-chat")
+        );
+    }
+
+    /// Fix pass, item 3: an attempt the command line left waiting is the
+    /// unit's state, and its Next names the answer file — never a new try.
+    #[test]
+    fn a_unit_whose_try_waits_says_so_and_names_its_answer_file() {
+        let mut app = app("waiting-try");
+        let target = app.config.target.clone();
+        let edit = |rel: &str, f: &dyn Fn(String) -> String| {
+            let p = target.join(rel);
+            std::fs::write(&p, f(std::fs::read_to_string(&p).unwrap())).unwrap();
+        };
+        edit("migration/plan.toml", &|s| {
+            s.replace("status = \"verified\"", "status = \"pending\"")
+        });
+        std::fs::remove_dir_all(target.join("migration/units/u-lib/u_lib_rs")).unwrap();
+        std::fs::remove_file(target.join("migration/units/u-lib/oracle-latest.json")).unwrap();
+        let rec = target.join(format!(
+            "migration/units/u-lib/attempts/{PROVENANCE}/attempt.json"
+        ));
+        edit(&rec.to_string_lossy(), &|s| {
+            s.replace("\"outcome\": \"green\"", "\"outcome\": \"in-progress\"")
+        });
+        let traces = target.join("migration/units/u-lib/traces");
+        std::fs::create_dir_all(&traces).unwrap();
+        std::fs::write(traces.join("0badcafe.request.json"), "{}").unwrap();
+        assert!(app.reload(true));
+        assert_eq!(app.files.units[0].state, UnitState::Waiting);
+        app.select(Selection::Unit("u-lib".into()));
+        let next = app.advice(&app.selection.clone()).unwrap();
+        assert!(
+            next.text.starts_with("waiting for your answer: …/")
+                && next.text.contains("0badcafe.response.json")
+                && next.text.contains("run the same migrate command again"),
+            "{}",
+            next.text
+        );
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(
+            screen.contains("⚑ u-lib waiting for your answer"),
+            "{screen}"
+        );
+        assert!(app
+            .next_step()
+            .unwrap()
+            .text
+            .starts_with("u-lib waits for your answer"));
+    }
+
+    /// Fix pass, item 8: a unit row keeps its state word in a narrow pane —
+    /// short (`no test`) when the whole one does not fit — and never cuts
+    /// its name below 6 letters.
+    #[test]
+    fn narrow_rows_use_short_words_and_keep_six_letters() {
+        let mut app = app_of("targets/zopfli", "narrow-words");
+        app.files_width = Some(24);
+        let screen = text(&render(&mut app, 80, 30));
+        let row = row_with(&screen, "u-hash");
+        assert!(row.contains("u-hash no test"), "{row}");
+        // Cut in the middle, six letters kept, the word short.
+        assert!(screen.contains("◇ u-c…he no test"), "{screen}");
+        assert!(screen.contains("· u-b…ze stays C"), "{screen}");
+        assert!(UnitState::TestProgramReady.short_word() == "ready");
+        assert_eq!(UnitState::RustGreen.short_word(), "accept?");
+    }
+
+    /// Fix pass, item 16: a menu widens to its longest greyed reason, and
+    /// wraps what still does not fit onto indented lines.
+    #[test]
+    fn a_menu_shows_its_greyed_reasons_whole() {
+        let mut app = app_of("targets/zopfli", "menu-wide");
+        app.chat_on = false;
+        app.select(Selection::Unit("u-cache".into()));
+        app.open_menu();
+        let wide = text(&render(&mut app, 200, 40));
+        assert!(
+            wide.contains("the chat is off — run harness gen-driver u-cache, or start the cockpit without --no-chat"),
+            "{wide}"
+        );
+        let narrow = text(&render(&mut app, 80, 40));
+        assert!(narrow.contains("    — the chat is off"), "{narrow}");
+        assert!(narrow.contains("without --no-chat"), "{narrow}");
+    }
+
     /// Panes that fit (§9.4): the Files pane as wide as its longest row
     /// needs, within 30 and a third of the screen while the View keeps 80,
     /// the state words whole; `files_width` fixes it within 24 and half the
@@ -5704,7 +5900,6 @@ mod tests {
             ("⚠", "needs attention"),
             ("✗", "failing"),
             ("✓", "done"),
-            ("✓?", "origin not recorded"),
             ("✓?", "Rust green — accept it"),
             ("◐", "Rust tried"),
             ("◇", "test program ready"),
@@ -6002,7 +6197,7 @@ mod tests {
         assert!(
             c.body
                 .iter()
-                .any(|b| b.contains("marks the attempt promoted")),
+                .any(|b| b.contains("runs the judge on it once more")),
             "{:?}",
             c.body
         );
@@ -7118,7 +7313,7 @@ mod tests {
     #[test]
     fn help_opens_on_a_short_first_page() {
         let page = help_first_page(100, true);
-        assert!(page.len() < 12, "{} lines", page.len());
+        assert!(page.len() < 13, "{} lines", page.len());
         let words: Vec<String> = page
             .iter()
             .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
@@ -7132,9 +7327,10 @@ mod tests {
                 "Esc     close, or step back",
                 "?       this help",
                 "q       quit",
-                "◇       no Rust yet: no test program, or test program ready",
+                "◇       no test program yet: make it first (◈: it is ready)",
                 "✓       done: in Rust, and the judge's checks pass",
                 "⚠       needs attention: the View says why and what to do",
+                HELP_FILES_WIDTH,
                 "",
                 "↓ more: every key, the mouse, every mark, features, speed, the chat",
             ]
@@ -7260,7 +7456,7 @@ mod tests {
                 "{screen}"
             );
             // The units' rows, and the folder summing up their marks.
-            assert!(screen.contains("◇ u-cache"), "{screen}");
+            assert!(screen.contains("◇ u-c"), "{screen}");
             // (At 80 columns a long count gives way to the name, as on
             // every row.)
             if width == 150 {
@@ -7320,7 +7516,7 @@ mod tests {
         // The judge's words under it, as its last verdict — never beside
         // it as a second state.
         assert!(
-            screen.contains("The judge's last verdict: green, fresh · crate "),
+            screen.contains("The judge's last check: green, up to date · its Rust "),
             "{screen}"
         );
         assert!(!screen.contains("· verdict green"), "{screen}");
@@ -7503,9 +7699,8 @@ mod tests {
         app.mode = Mode::Normal;
         let next = app.next_step().expect("a Next step");
         assert!(
-            next.text.ends_with(
-                "u-cache needs its test program first: open it, then Make the test program"
-            ),
+            next.text
+                .ends_with("of the 11 can move to Rust now — open u-cache: Enter"),
             "{}",
             next.text
         );
@@ -7516,7 +7711,7 @@ mod tests {
         crate::app::asks::tests::give_test_program(&mut app, "u-cache");
         app.select(Selection::Unit("u-cache".into()));
         let screen = text(&render(&mut app, 160, 40));
-        assert!(screen.contains("◇ u-cache test program ready "), "{screen}");
+        assert!(screen.contains("◈ u-cache test program ready "), "{screen}");
         assert!(
             screen.contains("Next: No Rust yet — ask the chat to migrate it"),
             "{screen}"
@@ -7535,10 +7730,8 @@ mod tests {
         assert!(!screen.contains(" │ ~"), "{screen}");
         let next = app.next_step().expect("a Next step");
         assert!(
-            next.text.ends_with(
-                "no Rust yet — migrate the first, u-cache: press Enter and choose Migrate — \
-                 ask in chat"
-            ),
+            next.text
+                .ends_with("of the 11 can move to Rust now — Migrate u-cache: Enter"),
             "{}",
             next.text
         );
@@ -7548,9 +7741,12 @@ mod tests {
         app.select(Selection::Unit("u-lz77".into()));
         let screen = text(&render(&mut app, 160, 40));
         assert!(
-            screen.contains(
-                "Next: It calls other units (u-cache, u-hash), so in this version it stays C"
-            ),
+            screen.contains("Next: It calls u-cache, u-hash, so in this version it stays C"),
+            "{screen}"
+        );
+        // Its own word and mark; out of the tool's count (fix pass, item 2).
+        assert!(
+            screen.contains("· u-lz77 stays C (calls u-cache, u-hash)"),
             "{screen}"
         );
         app.open_menu();
@@ -7558,6 +7754,14 @@ mod tests {
             panic!("a menu")
         };
         assert!(m.reason.is_none());
+        let why = "it calls u-cache, u-hash, so in this version it stays C";
+        for label in [
+            "Make the test program — ask in chat",
+            "Migrate — ask in chat",
+        ] {
+            let it = m.items.iter().find(|i| i.label == label).expect(label);
+            assert_eq!(it.greyed.as_deref(), Some(why), "{label}");
+        }
     }
 
     /// §7: Help's "Mouse on/off" (a key, `m`, and a click on its line);
@@ -9762,7 +9966,7 @@ mod tests {
         app.select(Selection::Unit("u001-katajainen".into()));
         let screen = text(&render(&mut app, 160, 40));
         assert!(
-            screen.contains("verdict green, fresh\u{20}"),
+            screen.contains("the judge says green, up to date\u{20}"),
             "no marker on a verdict that covers today's features: {screen}"
         );
         assert!(!screen.contains("your features:"), "{screen}");
@@ -9955,7 +10159,7 @@ mod tests {
         );
         // The unit's screen: the marker on its verdict line, the features line.
         app.select(Selection::Unit("u001-katajainen".into()));
-        let screen = text(&render(&mut app, 160, 40));
+        let screen = text(&render(&mut app, 220, 40));
         assert!(
             screen.contains("your features: not checked on this unit yet"),
             "{screen}"

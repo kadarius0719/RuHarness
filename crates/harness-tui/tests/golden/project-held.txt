@@ -1,6 +1,6 @@
 ┌ Project ─────────────────────────────┐┌ liblzg · 4 programs found ───────────────────────────────────────────────────┐
-│Programs (4)                          ││Map ✓ · Configure ✓ · Accept ○ · then: scan, plan, and each piece             │
-│✓ t-lzg                          links││Next: Accept t-unlzg — Enter on its row, it asks for the file                 │
+│Programs (4)                          ││Map ✓ · Configure ✓ · Accept program ○ · then: scan, plan, and each piece     │
+│✓ t-lzg                          links││Next: Accept t-lzg — Enter on its row                                         │
 │⚠ t-unlzg             needs a decision││                                                                              │
 │· t-fuzz            fuzzer, not a tool││t-unlzg                                                     ⚠ needs a decision│
 │✗ tools/broken.c       did not compile││tools/unlzg.c · looks like a tool (it is not in a test, example or benchmark  │
@@ -16,10 +16,10 @@
 │                                      ││Asked only if you keep src/decode.c.                                          │
 │                                      ││  1  src/check_a.c                                                            │
 │                                      ││  2  src/check_b.c                                                            │
-│                                      ││No advice yet — ask a model with harness project ask on the command line (the │
-│                                      ││models topic)                                                                 │
+│                                      ││No advice yet — run harness project ask (the models topic), or start the      │
+│                                      ││cockpit without --no-chat                                                     │
 │                                      ││                                                                              │
-│                                      ││                                                                              │
+│                                      ││Enter: Accept t-unlzg — it asks for the file                                  │
 │                                      ││                                                                              │
 │                                      ││                                                                              │
 │                                      ││                                                                              │

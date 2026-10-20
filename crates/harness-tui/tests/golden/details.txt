@@ -5,7 +5,7 @@
 │    Features (none yet)               ││                                                                              │
 │    Speed — not set up                ││2 files scanned                                                               │
 │  ▸ test_case/                    ✓1/1││Units (1): 1 ✓ done                                                           │
-│                                      ││Last: Re-check u-lib — GREEN — all 8 checks passed (41 s)                     │
+│                                      ││                                                                              │
 │                                      ││                                                                              │
 │                                      ││                                                                              │
 │                                      ││                                                                              │

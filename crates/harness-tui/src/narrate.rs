@@ -49,11 +49,24 @@ pub fn not_run_words(not_run: &[(String, String)]) -> String {
     if not_run.is_empty() {
         return String::new();
     }
-    let each: Vec<String> = not_run
+    // A check not configured is "not set up", by its name in words; the
+    // `c` details keep the CLI's sentence (fix pass, item 10).
+    let (unset, other): (Vec<_>, Vec<_>) = not_run
         .iter()
-        .map(|(name, why)| format!("{name}: {why}"))
-        .collect();
-    format!("{} not run ({})", not_run.len(), each.join("; "))
+        .partition(|(_, why)| why.starts_with("not configured"));
+    let mut parts = Vec::new();
+    if !unset.is_empty() {
+        let names: Vec<String> = unset.iter().map(|(n, _)| n.replace('-', " ")).collect();
+        parts.push(format!("{} not set up ({})", unset.len(), names.join(", ")));
+    }
+    if !other.is_empty() {
+        let each: Vec<String> = other
+            .iter()
+            .map(|(name, why)| format!("{name}: {why}"))
+            .collect();
+        parts.push(format!("{} not run ({})", other.len(), each.join("; ")));
+    }
+    parts.join(", ")
 }
 
 /// A turn's result in words.
@@ -377,7 +390,7 @@ impl Narrator {
                     self.perf_rows,
                     if self.perf_rows == 1 { "" } else { "s" }
                 ),
-                _ => "Done".into(),
+                _ => "done".into(),
             },
             Ending::Red => match &self.verdict {
                 Some(v) => v.clone(),
@@ -577,9 +590,7 @@ mod tests {
         run(&mut green, &fixture("verify-green.ndjson"));
         assert_eq!(
             green.last(Some(0), None, Duration::from_secs(41)),
-            "Re-check u-lib — GREEN — 6 checks passed, 1 not run (whole-program: not \
-             configured for this target (add [oracle.whole_program] args = [...] to \
-             harness.toml)) (41 s)"
+            "Re-check u-lib — GREEN — 6 checks passed, 1 not set up (whole program) (41 s)"
         );
         let mut red = Narrator::new("Re-check u-lib", &argv_of("verify"));
         let steps = run(&mut red, &fixture("verify-red.ndjson"));
@@ -590,9 +601,8 @@ mod tests {
         assert_eq!(red.ending(Some(10), None), Ending::Red);
         assert_eq!(
             red.last(Some(10), None, Duration::from_secs(3)),
-            "Re-check u-lib — RED — 1 of 6 checks failed: same outputs as C; 1 not run \
-             (whole-program: not configured for this target (add [oracle.whole_program] \
-             args = [...] to harness.toml)) (3 s)"
+            "Re-check u-lib — RED — 1 of 6 checks failed: same outputs as C; 1 not set up \
+             (whole program) (3 s)"
         );
         let mut plan = Narrator::new("Refresh the plan", &argv_of("plan"));
         let steps = run(&mut plan, &fixture("plan.ndjson"));
@@ -602,7 +612,7 @@ mod tests {
         );
         assert_eq!(
             plan.last(Some(0), None, Duration::ZERO),
-            "Refresh the plan — Done (0 s)"
+            "Refresh the plan — done (0 s)"
         );
         let mut detect = Narrator::new("Find risky patterns", &argv_of("detect"));
         let steps = run(&mut detect, &fixture("detect.ndjson"));
@@ -653,8 +663,7 @@ mod tests {
         });
         assert_eq!(
             n.step(),
-            "Verdict: GREEN — 1 check passed, 1 not run (whole-program: not configured \
-             for this target (add [oracle.whole_program] args = [...] to harness.toml))"
+            "Verdict: GREEN — 1 check passed, 1 not set up (whole program)"
         );
         // A whole-program check that ran is a pass like any other.
         assert_eq!(
@@ -738,6 +747,6 @@ mod tests {
             &argv(&["harness", "--json", "perf", "run"]),
         );
         none.on_event(&parse_line(r#"{"k":"perf-row","side":"program"}"#));
-        assert!(none.last(Some(0), None, Duration::ZERO).contains("— Done"));
+        assert!(none.last(Some(0), None, Duration::ZERO).contains("— done"));
     }
 }

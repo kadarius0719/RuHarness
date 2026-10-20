@@ -138,9 +138,10 @@ impl Role {
     }
 
     /// Words are read in this role (4.5:1 contrast); otherwise it carries
-    /// frames (3:1), or it is a background (the panel).
+    /// frames (3:1), or it is a background (the panel). The backdrop's words
+    /// are not read while the box is open: it keeps the page's shape (3:1).
     pub fn is_text(self) -> bool {
-        !matches!(self, Role::Border | Role::Panel)
+        !matches!(self, Role::Border | Role::Panel | Role::Backdrop)
     }
 
     /// The roles drawn in words on a panel (a dialog, a menu, the help):
@@ -242,15 +243,17 @@ impl Theme {
             (Theme::Dark, R::Notice) => Some(176),
             (Theme::Dark, R::Label) => Some(248),
             (Theme::Dark, R::Good) => Some(114),
-            (Theme::Dark, R::Bad) => Some(203),
+            // 203 was 3.8:1 on the panel (237): 210 (fix pass, item 15).
+            (Theme::Dark, R::Bad) => Some(210),
             (Theme::Dark, R::Attention) => Some(214),
-            // 245 was 4.4:1 on the panel (235): 246.
-            (Theme::Dark, R::Disabled) => Some(246),
+            // 245, then 246, were under 4.5:1 on the panel (237): 249.
+            (Theme::Dark, R::Disabled) => Some(249),
             (Theme::Dark, R::Border) => Some(244),
-            // The label grey (§9.4).
-            (Theme::Dark, R::Backdrop) => Some(248),
-            // One shade off the page.
-            (Theme::Dark, R::Panel) => Some(235),
+            // Darker than every word on the page, so the box stands out
+            // (fix pass, item 15).
+            (Theme::Dark, R::Backdrop) => Some(243),
+            // A visible step from a #1e1e1e page.
+            (Theme::Dark, R::Panel) => Some(237),
             (Theme::Light, R::Muted) => Some(240),
             // 31, the first choice, is 4.1:1 on white: too faint.
             (Theme::Light, R::Accent) => Some(23),
@@ -260,7 +263,9 @@ impl Theme {
             // Darker than the first choices (242, 28, 160, 130, 243), which
             // were under 4.5:1 on the panel (254): words in a dialog are
             // read there (§9.4).
-            (Theme::Light, R::Label) => Some(241),
+            // 238: the dialog's command line, apart from the backdrop's 242
+            // (fix pass, item 15).
+            (Theme::Light, R::Label) => Some(238),
             (Theme::Light, R::Good) => Some(22),
             (Theme::Light, R::Bad) => Some(124),
             (Theme::Light, R::Attention) => Some(94),
@@ -836,11 +841,11 @@ mod tests {
     /// it (4.5:1); the backdrop is the label grey, readable on the page.
     #[test]
     fn words_on_the_panel_and_the_backdrop_are_readable() {
-        assert_eq!(Theme::Dark.bg(Role::Panel), Some(Color::Indexed(235)));
+        assert_eq!(Theme::Dark.bg(Role::Panel), Some(Color::Indexed(237)));
         assert_eq!(Theme::Light.bg(Role::Panel), Some(Color::Indexed(254)));
         assert_eq!(Theme::Terminal.bg(Role::Panel), None);
         assert_eq!(Theme::Mono.bg(Role::Panel), None);
-        assert_eq!(Theme::Dark.colour(Role::Backdrop), Some(248));
+        assert_eq!(Theme::Dark.colour(Role::Backdrop), Some(243));
         assert_eq!(Theme::Light.colour(Role::Backdrop), Some(242));
         assert_eq!(Theme::Terminal.fg(Role::Backdrop), Some(Color::DarkGray));
         assert!(Theme::Mono
@@ -948,6 +953,6 @@ mod tests {
         assert_eq!(Theme::Dark.colour(Role::Status), Some(250));
         assert_eq!(Theme::Dark.colour(Role::Label), Some(248));
         assert_eq!(Theme::Light.colour(Role::Status), Some(240));
-        assert_eq!(Theme::Light.colour(Role::Label), Some(241));
+        assert_eq!(Theme::Light.colour(Role::Label), Some(238));
     }
 }

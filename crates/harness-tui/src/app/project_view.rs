@@ -41,6 +41,89 @@ pub struct ProjectState {
     pub config_newer: bool,
     /// The tool an Accept just made, until it is opened: the Next step.
     pub just_accepted: Option<String>,
+    /// Each accepted tool's progress, read cheaply from its ledger (its plan
+    /// and attempt records) when the project is read (fix pass, item 4).
+    pub progress: BTreeMap<String, ToolProgress>,
+}
+
+/// An accepted tool's progress, as its card and the project's Next say it:
+/// its pieces, how many are done, how many wait for the person.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolProgress {
+    /// It has a plan.
+    pub planned: bool,
+    /// Its pieces (blocked ones left out).
+    pub pieces: usize,
+    /// Of them, done (verified or merged).
+    pub done: usize,
+    /// Of them, with a green try that waits for Accept.
+    pub accept: usize,
+    /// Of them, with a try that waits for an answer.
+    pub answer: usize,
+}
+
+impl ToolProgress {
+    /// Read from `migration/tools/<id>/`: its plan's statuses and its
+    /// attempt records (no hashing: a cheap look, as the card needs).
+    pub fn read(root: &Path, id: &str) -> ToolProgress {
+        let dir = root.join("migration/tools").join(id);
+        let Ok(plan) = harness_core::plan::Plan::load(&dir.join("plan.toml")) else {
+            return ToolProgress::default();
+        };
+        let mut p = ToolProgress {
+            planned: true,
+            ..ToolProgress::default()
+        };
+        for u in plan.units.iter().filter(|u| u.status.as_str() != "blocked") {
+            p.pieces += 1;
+            if matches!(u.status.as_str(), "verified" | "merged") {
+                p.done += 1;
+                continue;
+            }
+            let attempts = dir.join("units").join(&u.id).join("attempts");
+            let Ok(entries) = std::fs::read_dir(&attempts) else {
+                continue;
+            };
+            let records: Vec<harness_core::attempts::AttemptRecord> = entries
+                .flatten()
+                .take(1000)
+                .filter_map(|e| harness_core::attempts::AttemptRecord::load(&e.path()).ok())
+                .collect();
+            if records.iter().any(|r| r.outcome == "in-progress") {
+                p.answer += 1;
+            } else if records.iter().any(|r| r.outcome == "green" && !r.promoted) {
+                p.accept += 1;
+            }
+        }
+        p
+    }
+
+    /// Something waits for the person in it.
+    pub fn waiting(&self) -> bool {
+        self.accept + self.answer > 0
+    }
+
+    /// In words: "3 pieces · 1 done · 1 waits for your Accept".
+    pub fn words(&self) -> String {
+        if !self.planned {
+            return "not scanned and planned yet".into();
+        }
+        let mut parts = vec![format!(
+            "{} piece{}",
+            self.pieces,
+            if self.pieces == 1 { "" } else { "s" }
+        )];
+        if self.done > 0 {
+            parts.push(format!("{} done", self.done));
+        }
+        if self.accept > 0 {
+            parts.push(format!("{} waits for your Accept", self.accept));
+        }
+        if self.answer > 0 {
+            parts.push(format!("{} waits for your answer", self.answer));
+        }
+        parts.join(" · ")
+    }
 }
 
 /// Accept's picker in progress: the held sets answered so far.
@@ -79,10 +162,16 @@ impl ProjectState {
             (Some(config), Some(map)) => config > map,
             _ => false,
         };
+        let tools = harness_core::config::mapped_tools(root);
+        let progress = tools
+            .iter()
+            .map(|id| (id.clone(), ToolProgress::read(root, id)))
+            .collect();
         ProjectState {
+            progress,
             shown: true,
             map,
-            tools: harness_core::config::mapped_tools(root),
+            tools,
             advice,
             chat_wanted: false,
             pick: None,
@@ -198,6 +287,7 @@ impl App {
         let fresh = ProjectState::read(&self.config.target);
         p.map = fresh.map;
         p.tools = fresh.tools;
+        p.progress = fresh.progress;
         p.advice = fresh.advice;
         p.labels = fresh.labels;
         p.config_newer = fresh.config_newer;
@@ -375,6 +465,20 @@ impl App {
                 Some(Action::OpenTool(id.clone())),
             );
         }
+        // Work waiting in a tool comes before a new program (fix pass,
+        // item 4).
+        if let Some((id, pr)) = p.progress.iter().find(|(_, pr)| pr.waiting()) {
+            let what = if pr.accept > 0 {
+                "Rust waits for your Accept"
+            } else {
+                "a try waits for your answer"
+            };
+            return say(
+                format!("Open tool {} — Enter on its row; {what}", safe_line(id)),
+                what,
+                Some(Action::OpenTool(id.clone())),
+            );
+        }
         // A configuration written since the map: the map does not use it
         // until it is made again.
         if p.config_newer {
@@ -409,24 +513,8 @@ impl App {
             );
         }
         let open = |o: &&Offered| o.acceptable() && !p.tools.contains(&o.id);
-        if let Some(o) = m
-            .offered
-            .iter()
-            .filter(open)
-            .find(|o| o.state == State::Held)
-        {
-            return say(
-                format!(
-                    "Accept {} — Enter on its row, it asks for the file",
-                    safe_line(&o.id)
-                ),
-                "it needs a decision",
-                Some(Action::AcceptProgram {
-                    id: o.id.clone(),
-                    run_name: false,
-                }),
-            );
-        }
+        // A program that links, before one that needs a decision (fix
+        // pass, item 4).
         if let Some(o) = m
             .offered
             .iter()
@@ -440,6 +528,24 @@ impl App {
                 } else {
                     "it compiles"
                 },
+                Some(Action::AcceptProgram {
+                    id: o.id.clone(),
+                    run_name: false,
+                }),
+            );
+        }
+        if let Some(o) = m
+            .offered
+            .iter()
+            .filter(open)
+            .find(|o| o.state == State::Held)
+        {
+            return say(
+                format!(
+                    "Accept {} — Enter on its row, it asks for the file",
+                    safe_line(&o.id)
+                ),
+                "it needs a decision",
                 Some(Action::AcceptProgram {
                     id: o.id.clone(),
                     run_name: false,
@@ -518,11 +624,13 @@ impl App {
             Selection::Program(id) => {
                 let m = self.project_map()?;
                 let o = m.get(id)?;
-                if m.unstated() {
-                    return self.project_next();
-                }
+                // An accepted program is its tool: open it, whatever the
+                // map's configuration says now (fix pass, item 17).
                 if self.project_tools().contains(id) {
                     return open(id);
+                }
+                if m.unstated() {
+                    return self.project_next();
                 }
                 let accept = Some(Action::AcceptProgram {
                     id: id.clone(),
@@ -634,8 +742,14 @@ impl App {
                     } else {
                         busy.clone()
                     };
-                    for run_name in [false, true] {
-                        let label = if run_name {
+                    // An accepted one leads with Open tool; accepting it
+                    // again is the second thing (fix pass, item 17).
+                    let accepted = self.project_tools().contains(id);
+                    let kinds: &[bool] = if accepted { &[false] } else { &[false, true] };
+                    for &run_name in kinds {
+                        let label = if accepted {
+                            "Accept again…".to_string()
+                        } else if run_name {
                             "Accept it under a run name of your own…".to_string()
                         } else {
                             format!("Accept this {}", o.noun())

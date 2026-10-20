@@ -2,7 +2,7 @@
 │▾ harness-tui-g000-0000000000  ✓1/1││All 8 steps done ✓                                                               │
 │  ▾ Units (1)                      ││✓ u-lib done                                                                     │
 │    ▸ ✓ u-lib                  done││Next: In Rust and checked — nothing to do                                        │
-│    Features (none yet)            ││Crate from attempt a-13c9 (pipeline) · verdict green, fresh                      │
+│    Features (none yet)            ││Its Rust: from try a-13c9 · the judge says green, up to date                     │
 │    Speed — not set up             ││Internal: get_bits() (compared through the unit's exported functions)            │
 │  ▾ test_case/                 ✓1/1││C  read_scalefactors (lib.c:17)         ⇄ Rust  read_scalefactors (src/ffi.rs:11)│
 │    ▾ include/                     ││17 void read_scalefactors(bs_t *bs, ui› │  11 pub unsafe extern "C" fn read_scal›│

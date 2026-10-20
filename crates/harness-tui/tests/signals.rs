@@ -744,7 +744,7 @@ fn the_keyboard_scans_the_project_end_to_end() {
     press(RIGHT);
     press(b"\r");
     wait_for("the scan to finish", 60, || {
-        saw("Last: Scan the project — Done").then_some(())
+        saw("Last: Scan the project — done").then_some(())
     });
     let after = std::fs::read_to_string(&facts).unwrap();
     assert_ne!(before, after, "the facts are rewritten");
@@ -1126,7 +1126,7 @@ fn the_mouse_scans_the_project_end_to_end() {
     std::thread::sleep(Duration::from_millis(1100));
     send(run.as_bytes());
     wait_for("the scan to finish", 60, || {
-        saw("Last: Scan the project — Done").then_some(())
+        saw("Last: Scan the project — done").then_some(())
     });
     assert_ne!(
         std::fs::read_to_string(&facts).unwrap(),
@@ -1263,7 +1263,7 @@ fn the_keyboard_maps_the_features_end_to_end() {
     press(RIGHT);
     press(b"\r");
     wait_for("the map to finish", 120, || {
-        saw("Last: Map the features — Done").then_some(())
+        saw("Last: Map the features — done").then_some(())
     });
     let map = std::fs::read_to_string(features.join("map.json")).expect("the map is written");
     assert!(map.contains("ZopfliZlibCompress"), "{map}");

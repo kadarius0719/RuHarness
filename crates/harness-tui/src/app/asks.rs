@@ -696,6 +696,12 @@ impl App {
             .get(i)
             .map(|x| x.state.clone())
             .unwrap_or_else(|| crate::files::unit_state(u));
+        if let UnitState::StaysC(deps) = &state {
+            return Err(format!(
+                "{unit} calls {}, so in this version it stays C — the judge tests each unit alone",
+                deps.join(", ")
+            ));
+        }
         if !(state.before_rust() || state == UnitState::Failing) {
             return Err(format!(
                 "unit {unit} is {} — Migrate is for a unit with no Rust accepted yet, or failing",
@@ -761,6 +767,12 @@ impl App {
             .get(i)
             .map(|x| x.state.clone())
             .unwrap_or_else(|| crate::files::unit_state(u));
+        if let UnitState::StaysC(deps) = &state {
+            return Err(format!(
+                "{unit} calls {}, so in this version it stays C — the judge tests each unit alone",
+                deps.join(", ")
+            ));
+        }
         if u.driver == crate::model::DriverState::Validated {
             return Err(format!(
                 "{unit} has its test program already — ask for Migrate {unit}"
@@ -1923,7 +1935,10 @@ impl App {
         }
         let text = match &self.selection {
             Selection::Unit(id) => format!("Migrate {id}"),
-            _ => "Migrate the next unit with no Rust yet".to_string(),
+            _ => match self.model_step_unit(false) {
+                Some(id) => format!("Migrate {id}"),
+                None => "Migrate the next unit with no Rust yet".to_string(),
+            },
         };
         self.chat.input.insert(&text);
         self.move_focus(Focus::Chat);

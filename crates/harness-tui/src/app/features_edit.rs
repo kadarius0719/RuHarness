@@ -299,8 +299,9 @@ pub fn build_config_words(editor: &str, new: bool) -> Vec<String> {
         } else {
             format!("{editor} opens {CONFIG_FILE} as it is now.")
         },
-        "In flags, put the -I and -D flags your build passes, each in quotes, like \
-         [\"-Isrc/include\"]; flags = [] says it needs none."
+        "In flags, put the include folders and defines your build uses (the -I and -D \
+         parts of your compile line), each in quotes, like [\"-Isrc/include\"]; flags = [] \
+         says it needs none."
             .into(),
         editor_instructions(editor),
         format!(

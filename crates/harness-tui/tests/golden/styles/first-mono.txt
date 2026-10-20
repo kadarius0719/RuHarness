@@ -3,52 +3,51 @@
   @1-7 fg - BOLD | REVERSED "Files"
   @8-23 fg - BOLD "───────────────┐"
   @25-78 fg - BOLD "harness-tui-theme-first-0000000000 · 0 of 13 C files"
-│▾ harn…000 ✓0/13 (+1 …││Step 6 of 8: Test program 1/11                        │
+│▾ harn…000 ✓0/13 (+1 …││Step 6 of 8: Test program 1/4                         │
   @0-0 fg - BOLD "│"
   @1-22 fg - BOLD | REVERSED "▾ harn…000 ✓0/13 (+1 …"
   @23-23 fg - BOLD "│"
-  @38-54 fg - BOLD | UNDERLINED "Test program 1/11"
-│  ▾ Units (11)        ││Next: 3 units have no Rust yet — u-cache needs its    │
+  @38-53 fg - BOLD | UNDERLINED "Test program 1/4"
+│  ▾ Units (11)        ││Next: 3 of the 11 can move to Rust now — open u-cache:│
   @0-0 fg - BOLD "│"
   @5-14 fg - BOLD "Units (11)"
   @23-23 fg - BOLD "│"
   @25-29 fg - BOLD | UNDERLINED "Next:"
-  @30-74 fg - BOLD "3 units have no Rust yet — u-cache needs its"
-│    ▸ ✓? u001-k…jainen││test program first: open it, then Make the test       │
+  @30-78 fg - BOLD "3 of the 11 can move to Rust now — open u-cache:"
+│    ▸ ✓ u001…inen done││Enter                                                 │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-  @25-71 fg - BOLD "test program first: open it, then Make the test"
-│    ▸ ◇ u-cache       ││program                                               │
+  @25-29 fg - BOLD "Enter"
+│    ▸ ◇ u-c…he no test││                                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-  @25-31 fg - BOLD "program"
-│    ▸ ◇ u-hash        ││                                                      │
+│    ▸ ◇ u-hash no test││26 files scanned                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│    ▸ ◇ u-lz77        ││26 files scanned                                      │
-  @0-0 fg - BOLD "│"
-  @23-23 fg - BOLD "│"
-│    ▸ ◇ u-tree        ││Units (11): 1 ✓? verified, origin not recorded · 10 ◇ │
+│    ▸ · u-lz77 stays C││Units (11): 1 ✓ done · 3 ◇ no test program · 7 · stays│
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
   @25-35 fg - BOLD "Units (11):"
-│    ▸ ◇ u-block…queeze││no test program                                       │
+│    ▸ · u-tree stays C││C                                                     │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│    ▸ ◇ u-gzip_…tainer││                                                      │
+│    ▸ · u-b…ze stays C││                                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│    ▸ ◇ u-util        ││Features: 7 — 5 hold so far, 2 still all C            │
+│    ▸ · u-g…er stays C││Features: 7 — 5 hold so far, 2 still all C            │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
   @25-33 fg - BOLD "Features:"
-│    ▸ ◇ u-zlib_…tainer││                                                      │
+│    ▸ ◇ u-util no test││                                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│    ▸ ◇ u-zopfli_lib  ││                                                      │
+│    ▸ · u-z…er stays C││                                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│    ▸ ◇ u-zopfli_bin  ││                                                      │
+│    ▸ · u-z…ib stays C││                                                      │
+  @0-0 fg - BOLD "│"
+  @23-23 fg - BOLD "│"
+│    ▸ · u-z…in stays C││                                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
 │  ▾ Features (7)      ││                                                      │

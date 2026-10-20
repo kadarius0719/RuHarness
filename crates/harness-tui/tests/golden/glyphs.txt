@@ -1,15 +1,15 @@
 ┌ Files ───────────────────────────────┐┌ src/zopfli · 1 failing · 1 needs attention · 1 changed since the scan · 1 not┐
-│▾ harness-tui-gglyph-0000000000       ││Step 4 of 8: Scan                                                             │
+│▾ harness-tui-gglyph-0000000000       ││Map ✓ · Configure ✓ · Accept program ✓ · Scan ○ · Plan                        │
 │  ▾ Units (11)                        ││1 failing · 1 needs attention · 1 changed since the scan · 1 not scanned yet ·│
 │    ▸ ⊘ u001-katajainen        blocked││1 missing · 2 of 14 C files in Rust · 3 more verified, origin not recorded    │
-│    ▸ ⚠ u-cache        needs attention││✓? blocksplitter.c  verified, origin not recorded                             │
+│    ▸ ⚠ u-cache        needs attention││✓  blocksplitter.c  done                                                      │
 │    ▸ ✗ u-hash                 failing││·  blocksplitter.h  header                                                    │
 │    ▸ ✓ u-lz77                    done││⚠  cache.c  needs attention                                                   │
 │    ▸ ✓ u-tree          done (steered)││·  cache.h  header                                                            │
-│    ▸ ✓? u-blocksplitte…eflate-squeeze││✓? deflate.c  verified, origin not recorded                                   │
-│    ▸ ✓? u-gzip_container             ││·  deflate.h  header                                                          │
+│    ▸ ✓ u-blocksplit…late-squeeze done││✓  deflate.c  done                                                            │
+│    ▸ ✓? u-g…er Rust green — accept it││·  deflate.h  header                                                          │
 │    ▸ ◐ u-util              Rust tried││!  edited.c  changed since scan                                               │
-│    ▸ ◇ u-zli…ainer test program ready││+  fresh.c  not scanned yet                                                   │
+│    ▸ ◈ u-zli…ainer test program ready││+  fresh.c  not scanned yet                                                   │
 │    ▸ ◇ u-zopfli_lib   no test program││?  gone.c  missing                                                            │
 │    ▸ u-zopfli_bin         in progress││✓? gzip_container.c  Rust green — accept it                                   │
 │  ▾ Features (7)                      ││·  gzip_container.h  header                                                   │
@@ -20,19 +20,19 @@
 │      ◉ Compress quickly              ││○  loose.c  not in the plan                                                   │
 │      ◌ Show the help      still all C││✓  lz77.c  done                                                               │
 │      ◌ Report a …ing file still all C││·  lz77.h  header                                                             │
-│    Speed — not set up                ││✓? squeeze.c  verified, origin not recorded                                   │
+│    Speed — not set up                ││✓  squeeze.c  done                                                            │
 │  ▾ src/  ✗1 ⚠1 !1 +1 ?1 ✓2/14 (+3 ✓?)││·  squeeze.h  header                                                          │
 │    ▾ zopfli/ ✗1 ⚠1 !1 +1 ?1 ✓2/14 (+…││–  statics.c  no exported functions                                           │
-│      ▸ ✓? blocksplitter.c            ││·  symbols.h  header                                                          │
+│      ▸ ✓ blocksplitter.c         done││·  symbols.h  header                                                          │
 │        · blocksplitter.h       header││✓  tree.c  done (steered)                                                     │
 │      ▸ ⚠ cache.c      needs attention││·  tree.h  header                                                             │
 │        · cache.h               header││◐  util.c  Rust tried                                                         │
-│      ▸ ✓? deflate.c                  ││·  util.h  header                                                             │
-│        · deflate.h             header││◇  zlib_container.c  test program ready                                       │
+│      ▸ ✓ deflate.c               done││·  util.h  header                                                             │
+│        · deflate.h             header││◈  zlib_container.c  test program ready                                       │
 │      ▸ ! edited.c  changed since scan││·  zlib_container.h  header                                                   │
 │      ▸ + fresh.c      not scanned yet││·  zopfli.h  header                                                           │
 │      ▸ ? gone.c               missing││   zopfli_bin.c  in progress                                                  │
-│      ▸ ✓? gzip_container.c           ││◇  zopfli_lib.c  no test program                                              │
+│      ▸ ✓? gzip_container.c    accept?││◇  zopfli_lib.c  no test program                                              │
 │        · gzip_container.h      header││                                                                              │
 │      ▸ ✗ hash.c               failing││                                                                              │
 │        · hash.h                header││                                                                              │
@@ -41,7 +41,7 @@
 │      ▸ ○ loose.c      not in the plan││                                                                              │
 │      ▸ ✓ lz77.c                  done││                                                                              │
 │        · lz77.h                header││                                                                              │
-│      ▸ ✓? squeeze.c                  ││                                                                              │
+│      ▸ ✓ squeeze.c               done││                                                                              │
 │        · squeeze.h             header││                                                                              │
 │      ▸ – statics.c                   ││                                                                              │
 └──────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────┘

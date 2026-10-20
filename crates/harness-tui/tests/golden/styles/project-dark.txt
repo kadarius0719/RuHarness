@@ -5,13 +5,13 @@
   @30-30 fg 244 NONE "┌"
   @31-55 fg 75 BOLD "liblzg · not mapped yet"
   @56-119 fg 244 NONE "───────────────────────────────────────────────────────────────┐"
-│Map the project             ││Map ○ · Configure · Accept · then: scan, plan, and each piece                           │
+│Map the project             ││Map ○ · Configure · Accept program · then: scan, plan, and each piece                   │
   @0-0 fg 75 BOLD "│"
   @1-15 fg 75 BOLD | REVERSED "Map the project"
   @29-29 fg 75 BOLD "│"
   @30-30 fg 244 NONE "│"
   @31-35 fg 81 BOLD "Map ○"
-  @36-91 fg 248 NONE "· Configure · Accept · then: scan, plan, and each piece"
+  @36-99 fg 248 NONE "· Configure · Accept program · then: scan, plan, and each piece"
   @119-119 fg 244 NONE "│"
 │                            ││Next: Map the project — Enter                                                           │
   @0-0 fg 75 BOLD "│"

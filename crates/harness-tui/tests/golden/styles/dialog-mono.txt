@@ -14,11 +14,11 @@
   @0-11 fg - DIM "│  ▸ test_ca"
   @12-87 fg - BOLD "┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐"
   @88-99 fg - DIM "│"
-│           │Builds u-lib's Rust and runs it against the C in the sandbox.             │sh         │
+│           │Builds u-lib's Rust and runs it against the C in the sandbox.             │ate        │
   @0-11 fg - DIM "│"
   @12-12 fg - BOLD "│"
   @87-87 fg - BOLD "│"
-  @88-99 fg - DIM "sh         │"
+  @88-99 fg - DIM "ate        │"
 │           │Writes units/u-lib/oracle-latest.json and .md (and oracle-last-green.json │ tree)     │
   @0-11 fg - DIM "│"
   @12-12 fg - BOLD "│"
@@ -63,7 +63,6 @@
   @0-11 fg - DIM "│"
   @12-12 fg - BOLD "│"
   @14-28 fg - BOLD | REVERSED "[ Cancel  Esc ]"
-  @30-39 fg - UNDERLINED | REVERSED "[ Run  y ]"
   @87-87 fg - BOLD "│"
   @88-99 fg - DIM "│"
 │           └──────────────────────────────────────────────────────────────────────────┘           │

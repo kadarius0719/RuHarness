@@ -1,5 +1,5 @@
 ┌ Project ───────────────────┐┌ liblzg · not mapped yet ───────────────────────────────────────────────────────────────┐
-│Map the project             ││Map ○ · Configure · Accept · then: scan, plan, and each piece                           │
+│Map the project             ││Map ○ · Configure · Accept program · then: scan, plan, and each piece                   │
 │                            ││Next: Map the project — Enter                                                           │
 │                            ││                                                                                        │
 │                            ││Nothing is mapped yet.                                                                  │

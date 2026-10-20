@@ -12,51 +12,52 @@
   @5-14 fg - BOLD "Units (11)"
   @23-23 fg - BOLD "│"
   @27-34 fg - BOLD "u-cache"
-│    ▸ ✓? u001-k…jainen││Next: Make the test program — Enter, then ask in chat │
+│    ▸ ✓ u001…inen done││Next: Make the test program — run harness gen-driver  │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
   @25-29 fg - BOLD | UNDERLINED "Next:"
-  @30-77 fg - BOLD "Make the test program — Enter, then ask in chat"
-│    ▸ ◇ u-…e no test …││                                                      │
+  @30-76 fg - BOLD "Make the test program — run harness gen-driver"
+│    ▸ ◇ u-c…he no test││u-cache (the chat is off)                             │
   @0-0 fg - BOLD "│"
-  @1-22 fg - BOLD | REVERSED "▸ ◇ u-…e no test …"
+  @1-22 fg - BOLD | REVERSED "▸ ◇ u-c…he no test"
   @23-23 fg - BOLD "│"
-│    ▸ ◇ u-hash        ││5 exported functions: ZopfliCacheToSublen (22 lines), │
-  @0-0 fg - BOLD "│"
-  @23-23 fg - BOLD "│"
-│    ▸ ◇ u-lz77        ││ZopfliCleanCache (5 lines), ZopfliInitCache (19       │
+  @25-49 fg - BOLD "u-cache (the chat is off)"
+│    ▸ ◇ u-hash no test││                                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│    ▸ ◇ u-tree        ││lines), ZopfliMaxCachedSublen (11 lines),             │
+│    ▸ · u-lz77 stays C││5 exported functions: ZopfliCacheToSublen (22 lines), │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│    ▸ ◇ u-block…queeze││ZopfliSublenToCache (32 lines)                        │
+│    ▸ · u-tree stays C││ZopfliCleanCache (5 lines), ZopfliInitCache (19       │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│    ▸ ◇ u-gzip_…tainer││Its C: 1 file — src/zopfli/cache.c                    │
+│    ▸ · u-b…ze stays C││lines), ZopfliMaxCachedSublen (11 lines),             │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│    ▸ ◇ u-util        ││No Rust yet                                           │
+│    ▸ · u-g…er stays C││ZopfliSublenToCache (32 lines)                        │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│    ▸ ◇ u-zlib_…tainer││5 of your features run it · still C — see Features    │
+│    ▸ ◇ u-util no test││Its C: 1 file — src/zopfli/cache.c                    │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│    ▸ ◇ u-zopfli_lib  ││Attempts: none yet                                    │
+│    ▸ · u-z…er stays C││No Rust yet                                           │
+  @0-0 fg - BOLD "│"
+  @23-23 fg - BOLD "│"
+│    ▸ · u-z…ib stays C││5 of your features run it · still C — see Features    │
+  @0-0 fg - BOLD "│"
+  @23-23 fg - BOLD "│"
+│    ▸ · u-z…in stays C││Attempts: none yet                                    │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
   @25-33 fg - BOLD "Attempts:"
-│    ▸ ◇ u-zopfli_bin  ││                                                      │
-  @0-0 fg - BOLD "│"
-  @23-23 fg - BOLD "│"
-│  ▾ Features (7)      ││▸ C source (Tab to the View, then Enter)              │
+│  ▾ Features (7)      ││                                                      │
   @0-0 fg - BOLD "│"
   @5-16 fg - BOLD "Features (7)"
   @23-23 fg - BOLD "│"
-  @25-64 fg - BOLD "▸ C source (Tab to the View, then Enter)"
-│      ◉ Compres…o gzip││                                                      │
+│      ◉ Compres…o gzip││▸ C source (Tab to the View, then Enter)              │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
+  @25-64 fg - BOLD "▸ C source (Tab to the View, then Enter)"
 │      ◉ Compres…o zlib││                                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"

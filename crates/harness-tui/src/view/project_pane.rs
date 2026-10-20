@@ -155,6 +155,7 @@ fn card(app: &App, width: usize, lines: &mut Vec<Line<'static>>) {
         (Selection::Tool(id), _) => {
             head(id, "✓", "accepted", width, lines);
             lines.extend(wrapped(&build_file(id), width, Style::default()));
+            progress_line(app, id, width, lines);
         }
         (_, Err(why)) => {
             lines.extend(wrapped(
@@ -192,6 +193,28 @@ fn card(app: &App, width: usize, lines: &mut Vec<Line<'static>>) {
         if failed {
             lines.extend(wrapped(FAILED_GLOSS, width, label_role()));
         }
+    }
+}
+
+/// An accepted tool's progress, from its ledger: "3 pieces · 1 waits for
+/// your Accept" (fix pass, item 4).
+fn progress_line(app: &App, id: &str, width: usize, lines: &mut Vec<Line<'static>>) {
+    if let Some(pr) = app.project.as_ref().and_then(|p| p.progress.get(id)) {
+        let style = if pr.waiting() {
+            attention()
+        } else {
+            Style::default()
+        };
+        let words = pr.words();
+        lines.extend(wrapped(
+            &if pr.waiting() {
+                format!("⚑ {words}")
+            } else {
+                words
+            },
+            width,
+            style,
+        ));
     }
 }
 
@@ -241,6 +264,7 @@ fn program_card(app: &App, o: &Offered, width: usize, lines: &mut Vec<Line<'stat
     }
     if accepted {
         lines.extend(wrapped(&build_file(&o.id), width, Style::default()));
+        progress_line(app, &o.id, width, lines);
         return;
     }
     if !o.problem.is_empty() {
@@ -313,13 +337,18 @@ fn decision_lines(
             // What gets advice, from where the person is.
             let how = if app.project_map().is_some_and(|m| m.unstated()) {
                 "Advice comes once the build configuration is written and the project mapped again"
+                    .to_string()
             } else if app.chat_on {
-                "No advice yet — Enter, then Ask for advice (the chat answers)"
+                "No advice yet — Enter, then Ask for advice (the chat answers)".to_string()
             } else {
-                "No advice yet — ask a model with harness project ask on the command line (the \
-                 models topic)"
+                // The command spelled for this project (fix pass, item 1).
+                format!(
+                    "No advice yet — run {} (the models topic), or start the cockpit without \
+                     --no-chat",
+                    harness_core::runtime_view::command_line("project ask", None)
+                )
             };
-            lines.extend(wrapped(how, width, label_role()));
+            lines.extend(wrapped(&how, width, label_role()));
         }
         Some(a) => {
             lines.extend(wrapped(&a.why_line(), width, Style::default()));

@@ -662,32 +662,55 @@ impl App {
                 .is_some_and(|i| i.state.needs_test_program()),
             _ => false,
         };
-        let chat_off = self.chat_unavailable();
+        // A piece that calls others stays C: both items greyed, saying so
+        // (fix pass, item 2).
+        let stays_c = match sel {
+            Selection::Unit(_) => {
+                owner
+                    .and_then(|u| self.files.units.get(u))
+                    .and_then(|i| match &i.state {
+                        UnitState::StaysC(deps) => Some(format!(
+                            "it calls {}, so in this version it stays C",
+                            deps.join(", ")
+                        )),
+                        _ => None,
+                    })
+            }
+            _ => None,
+        };
+        // With the chat off, the reason names the command line's way.
+        let chat_off = |gen_driver: bool| {
+            self.chat_off_way(gen_driver)
+                .or_else(|| self.chat_unavailable())
+        };
         let draft = || {
             (!self.chat.input.is_empty())
                 .then(|| "the chat has a draft — send or clear it first".to_string())
         };
         self.check_chat_item(&mut items);
-        if needs_driver {
+        if needs_driver || stays_c.is_some() {
             let mut it = item(
                 "Make the test program — ask in chat",
                 Action::GenDriver,
                 None,
             );
             it.model = true;
-            it.greyed = chat_off.clone().or_else(draft);
+            it.greyed = stays_c.clone().or_else(|| chat_off(true)).or_else(draft);
             items.push(it);
         }
-        if offer_migrate {
+        if offer_migrate || stays_c.is_some() {
             let mut it = item("Migrate — ask in chat", Action::Migrate, None);
             it.model = true;
-            it.greyed = if needs_driver {
+            it.greyed = if let Some(why) = &stays_c {
+                Some(why.clone())
+            } else if needs_driver {
                 Some("it has no test program yet — Make the test program first".to_string())
             } else {
-                chat_off.clone().or_else(draft)
+                chat_off(false).or_else(draft)
             };
             items.push(it);
         }
+        let chat_off = self.chat_unavailable();
         if self.chat_on {
             let mut it = item("Ask in chat…", Action::AskChat, None);
             it.model = true;

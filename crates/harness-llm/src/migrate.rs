@@ -969,6 +969,14 @@ fn preconditions<'u>(
     let id = &unit.id;
     let make = format!("`harness gen-driver {id}`, or Make the test program in the cockpit");
     let refuse = |what: String| Error::InvalidPlan(what);
+    // A unit that calls other units cannot be tested alone: no test
+    // program would link (fix pass, item 2).
+    if unit.oracle_kind().is_none() && !unit.depends_on.is_empty() {
+        return Err(refuse(format!(
+            "{id} calls {}, so in this version it stays C: the judge tests each unit alone",
+            unit.depends_on.join(", ")
+        )));
+    }
     if unit.oracle_kind() != Some(ORACLE_KIND) {
         return Err(refuse(match unit.oracle_kind() {
             Some(kind) => format!(
@@ -5510,6 +5518,41 @@ int add(int a, int b) { return a + b; }\n";
             assert!(!message.contains("later milestone"), "{message}");
             assert!(seen.borrow().is_empty());
         }
+        // A unit that calls others: it stays C, said so, never "make one".
+        let plan = plan_with_oracle("");
+        let mut caller = plan.units[0].clone();
+        caller.depends_on = vec!["u-other".into()];
+        let (provider, _) = scripted("anthropic", false, vec![good()]);
+        let params = MigrateParams {
+            requester: None,
+            answer_key: None,
+            provider: &provider,
+            model: "m",
+            max_tokens: 4096,
+            max_repairs: 0,
+            traces_dir: &fx.traces,
+            retry: false,
+            attempt: None,
+            steer: None,
+        };
+        let err = run_migration(
+            &params,
+            &oracle(vec![]),
+            &fx.target,
+            &fx.facts,
+            &plan,
+            &caller,
+            &[],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.ends_with(&format!(
+                "{} calls u-other, so in this version it stays C: the judge tests each unit alone",
+                caller.id
+            )),
+            "{err}"
+        );
         assert!(!fx.attempts_dir().exists());
     }
 

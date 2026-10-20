@@ -188,11 +188,72 @@ impl App {
         );
     }
 
+    /// The command line's way to a unit's model step while the chat is off
+    /// (fix pass, item 1): the command spelled for this tool and target.
+    pub(crate) fn command_line_way(&self, act: &str, unit: &str) -> String {
+        harness_core::runtime_view::command_line_for(
+            &format!("{act} {unit}"),
+            &self.snapshot.ledger_rel(),
+        )
+    }
+
+    /// The unit a Migrate or Make the test program on the selection is for:
+    /// the selected one, else (the tool's row) the first piece that can
+    /// move, as the Next step picks it.
+    pub(crate) fn model_step_unit(&self, gen_driver: bool) -> Option<String> {
+        if let Some(u) = self.owning_unit(&self.selection) {
+            return self.snapshot.units.get(u).map(|u| u.unit.id.clone());
+        }
+        self.snapshot
+            .units
+            .iter()
+            .zip(&self.files.units)
+            .find(|(_, i)| i.state.before_rust() && i.state.needs_test_program() == gen_driver)
+            .map(|(u, _)| u.unit.id.clone())
+    }
+
+    /// A model item's way when the chat is off (`--no-chat`): the command
+    /// line's, or the chat on (fix pass, item 1).
+    pub(crate) fn chat_off_way(&self, gen_driver: bool) -> Option<String> {
+        if self.chat_on {
+            return None;
+        }
+        let unit = self.model_step_unit(gen_driver)?;
+        let act = if gen_driver { "gen-driver" } else { "migrate" };
+        Some(format!(
+            "the chat is off — run {}, or start the cockpit without --no-chat",
+            self.command_line_way(act, &unit)
+        ))
+    }
+
     /// A Next step that recommends a chat item while the chat is
-    /// unavailable says why instead, and leads to the walk-through.
+    /// unavailable says why instead, and leads to the walk-through; with the
+    /// chat off it names the command line's way (fix pass, item 1).
     pub(crate) fn unless_chat_down(&self, a: Advice) -> Advice {
-        // `--no-chat` is the person's own choice: its items stay greyed
-        // with it, and the Next step's words are unchanged.
+        if !self.chat_on {
+            let gen_driver = match a.action {
+                Some(Action::GenDriver) => Some(true),
+                Some(Action::Migrate) => Some(false),
+                _ => None,
+            };
+            if let Some(unit) = gen_driver.and_then(|g| self.model_step_unit(g).map(|u| (g, u))) {
+                let (g, unit) = unit;
+                let (verb, act) = if g {
+                    ("Make the test program", "gen-driver")
+                } else {
+                    ("Migrate", "migrate")
+                };
+                return Advice {
+                    text: format!(
+                        "{verb} — run {} (the chat is off)",
+                        self.command_line_way(act, &unit)
+                    ),
+                    action: None,
+                    reason: None,
+                };
+            }
+            return a;
+        }
         let chat_item = self.chat_on
             && matches!(
                 a.action,

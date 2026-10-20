@@ -119,6 +119,44 @@ impl App {
                  migrate it again",
                 Some(Action::Migrate),
             ),
+            UnitState::StaysC(deps) => advice(
+                format!(
+                    "it calls {}, so in this version it stays C — the judge tests each unit alone",
+                    deps.join(", ")
+                ),
+                None,
+            ),
+            UnitState::Waiting => {
+                // An attempt of this session's: Resume; one the command line
+                // left: its answer file and the command again.
+                if let Some(aw) = self.awaiting.iter().find(|aw| {
+                    unit.attempts
+                        .iter()
+                        .any(|a| aw.attempt.as_ref() == Some(&a.record.id))
+                }) {
+                    advice(
+                        crate::app::waiting_words(
+                            &crate::app::short_file(&aw.path),
+                            "open its attempt and choose Resume",
+                        ),
+                        aw.attempt.clone().map(Action::ChooseAttempt),
+                    )
+                } else {
+                    match self.pending_answer(unit) {
+                        Some(path) => advice(
+                            crate::app::waiting_words(
+                                &crate::app::short_file(&path),
+                                "run the same migrate command again",
+                            ),
+                            None,
+                        ),
+                        None => advice(
+                            "an attempt has not finished — it may still be running elsewhere",
+                            None,
+                        ),
+                    }
+                }
+            }
             UnitState::RustGreen
             | UnitState::RustTried
             | UnitState::TestProgramReady
@@ -233,6 +271,35 @@ impl App {
             }
             UnitState::Other(_) => return None,
         })
+    }
+
+    /// The answer file a unit's attempt waits on, when a run of the command
+    /// line left one: the newest request under its traces with no
+    /// response yet (its `.response.json`, not yet written).
+    pub fn pending_answer(&self, unit: &crate::model::UnitView) -> Option<std::path::PathBuf> {
+        let dir = self.snapshot.ledger().unit_dir(&unit.unit.id);
+        let mut found: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
+        for sub in ["traces", "traces/chat"] {
+            let Ok(entries) = std::fs::read_dir(dir.join(sub)) else {
+                continue;
+            };
+            for e in entries.flatten().take(10_000) {
+                let name = e.file_name().to_string_lossy().into_owned();
+                let Some(key) = name.strip_suffix(".request.json") else {
+                    continue;
+                };
+                let response = dir.join(sub).join(format!("{key}.response.json"));
+                if response.exists() {
+                    continue;
+                }
+                let when = e
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::UNIX_EPOCH);
+                found.push((when, response));
+            }
+        }
+        found.into_iter().max().map(|(_, p)| p)
     }
 
     /// An attempt's Next step.

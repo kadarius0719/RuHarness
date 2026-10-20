@@ -614,11 +614,9 @@ fn the_build_configuration_is_written_from_the_cockpit() {
     std::thread::sleep(std::time::Duration::from_millis(5));
     write_map(&root, &map_text("stated", false));
     app.reload_project();
+    // A program that links comes before one that needs a decision.
     let next = app.project_next().unwrap();
-    assert_eq!(
-        next.text,
-        "Accept t-unlzg — Enter on its row, it asks for the file"
-    );
+    assert_eq!(next.text, "Accept t-lzg — Enter on its row");
 }
 
 /// The example the map suggests, left as it is where there was no file,
@@ -682,7 +680,7 @@ fn the_project_view_after_a_map_with_a_held_choice() {
         "needs a decision",
         "✗ tools/broken.c",
         "Libraries (2)",
-        "│Next: Accept t-unlzg — Enter on its row, it asks for the file ",
+        "│Next: Accept t-lzg — Enter on its row ",
         // The card: what it is, its decisions, the advice, what Enter does.
         "│tools/unlzg.c · looks like a tool (it is not in a test, example or benchmark folder)",
         "│Decision: two files define the same functions. Keep which? ",
@@ -691,9 +689,9 @@ fn the_project_view_after_a_map_with_a_held_choice() {
         "│Why (claude-x): they are two implementations of the same thing. ",
         "│This is advice; you pick the file when you accept. ",
         "│Asked only if you keep src/decode.c. ",
-        // The chat is off here: the command line's way.
-        "│No advice yet — ask a model with harness project ask on the command line (the models \
-         topic) ",
+        // The chat is off here: the command line's way, spelled.
+        "│No advice yet — run harness project ask (the models topic), or start the cockpit \
+         without --no-chat ",
     ] {
         assert!(screen.contains(words), "{words}\n{screen}");
     }
@@ -706,8 +704,6 @@ fn the_project_view_after_a_map_with_a_held_choice() {
         "t-lzg — tools/lzg.c",
         "held on a choice",
         "C project with no",
-        // What Enter does is the Next step here: not said twice.
-        "Enter: Accept t-unlzg",
         "Last:",
     ] {
         assert!(!screen.contains(gone), "{gone}\n{screen}");
@@ -963,17 +959,17 @@ fn the_card_of_each_selection() {
         lines[2].starts_with("t-lzg  ") && lines[2].ends_with("  ✓ links"),
         "{lines:#?}"
     );
+    // The Next step says what Enter does on it: no Enter line again.
     assert_eq!(
-        [&lines[..2], &lines[3..6]].concat(),
+        [&lines[..2], &lines[3..4]].concat(),
         [
-            "Next: Accept t-unlzg — Enter on its row, it asks for the file",
+            "Next: Accept t-lzg — Enter on its row",
             "",
             "tools/lzg.c · looks like a tool (it is not in a test, example or benchmark folder)",
-            "",
-            "Enter: Accept t-lzg",
         ],
         "{lines:#?}"
     );
+    assert!(!lines.iter().any(|l| l.starts_with("Enter:")), "{lines:#?}");
     let lines = card(&mut app, Selection::Program("l-checksum".into()));
     assert_eq!(
         lines[3],
@@ -1051,7 +1047,7 @@ fn the_next_step_is_one_line_for_each_rule() {
             "Write the build configuration — Enter, it is the first item".into(),
             "Write the build configuration — Enter, or Ask for a proposal in the chat".into(),
             "Write the build configuration — Enter (or harness project map --adopt)".into(),
-            "Accept t-unlzg — Enter on its row, it asks for the file".into(),
+            "Accept t-lzg — Enter on its row".into(),
             "Accept t-lzg — Enter on its row".into(),
             "Open tool l-checksum — Enter on its row".into(),
             "Open tool t-lzg — Enter on its row".into(),
@@ -1138,7 +1134,7 @@ fn the_tool_just_accepted_is_the_next_step_only_until_the_selection_moves() {
     app.select(Selection::Program("t-lzg".into()));
     assert_eq!(
         app.project_next().unwrap().text,
-        "Accept t-unlzg — Enter on its row, it asks for the file"
+        "Accept l-checksum — Enter on its row"
     );
 }
 
@@ -1354,8 +1350,7 @@ fn the_project_view_after_an_accept() {
         menu_labels(&app),
         [
             "Open tool t-lzg".to_string(),
-            "Accept this program".into(),
-            "Accept it under a run name of your own…".into(),
+            "Accept again…".into(),
             write_item(&app),
             "Map the project again".into(),
             "Ask for advice — ask in chat".into()
@@ -1432,4 +1427,56 @@ fn a_tools_screen_comes_back_to_the_project_view() {
         menu(&app).items[0].greyed.as_deref(),
         Some("a command is running (one at a time)")
     );
+}
+
+/// Fix pass, item 4: an accepted tool's card gives its progress, read from
+/// its ledger, and a tool with Rust waiting for Accept is the project's
+/// Next before any program to accept.
+#[test]
+fn a_tool_with_work_waiting_comes_first_and_its_card_says_so() {
+    let (_tmp, root) = project("tool-progress");
+    write_map(&root, &map_text("stated", false));
+    let dir = harness_core::config::tool_dir(&root, "t-lzg");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("harness.toml"), "schema_version = 2\n").unwrap();
+    // Its ledger: the tractor case's plan (one piece, pending) and a green
+    // try not yet accepted.
+    let case = crate::testutil::repo().join(crate::testutil::READ_SCALEFACTORS);
+    let plan = std::fs::read_to_string(case.join("migration/plan.toml"))
+        .unwrap()
+        .replace("status = \"verified\"", "status = \"pending\"");
+    std::fs::write(dir.join("plan.toml"), plan).unwrap();
+    let from = case.join(format!(
+        "migration/units/u-lib/attempts/{}",
+        crate::app::tests::PROVENANCE
+    ));
+    let to = dir.join(format!(
+        "units/u-lib/attempts/{}",
+        crate::app::tests::PROVENANCE
+    ));
+    std::fs::create_dir_all(&to).unwrap();
+    let record = std::fs::read_to_string(from.join("attempt.json"))
+        .unwrap()
+        .replace("\"promoted\": true", "\"promoted\": false");
+    std::fs::write(to.join("attempt.json"), record).unwrap();
+    let mut app = cockpit(&root);
+    let pr = app.project.as_ref().unwrap().progress.get("t-lzg").cloned();
+    assert_eq!(
+        pr.as_ref().map(|p| p.words()),
+        Some("1 piece · 1 waits for your Accept".to_string())
+    );
+    assert_eq!(
+        app.project_next().unwrap().text,
+        "Open tool t-lzg — Enter on its row; Rust waits for your Accept"
+    );
+    app.select(Selection::Program("t-lzg".into()));
+    let screen = text(&render(&mut app, 160, 40));
+    assert!(
+        screen.contains("⚑ 1 piece · 1 waits for your Accept"),
+        "{screen}"
+    );
+    // The selected program's own next, when it differs, shows too.
+    app.select(Selection::Program("t-unlzg".into()));
+    let screen = text(&render(&mut app, 160, 40));
+    assert!(screen.contains("Enter: Accept t-unlzg"), "{screen}");
 }

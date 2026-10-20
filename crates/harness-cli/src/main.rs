@@ -2018,6 +2018,9 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
     let provider_name = provider_flag
         .or_else(|| stage.and_then(|m| m.provider.clone()))
         .unwrap_or_else(|| llm.provider.clone());
+    // The person's own `--model`, repeated in a command the refusal
+    // suggests (fix pass, item 9).
+    let model_given = model_flag.clone();
     let model = model_flag
         .or_else(|| stage.and_then(|m| m.model.clone()))
         .unwrap_or_else(|| llm.model.clone());
@@ -2097,10 +2100,16 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
     // The refusal names `harness gen-driver <unit>`: spelled for this
     // target and tool, so the command it gives runs as typed.
     .map_err(|e| match e {
-        Error::InvalidPlan(m) => Error::InvalidPlan(m.replace(
-            &format!("`harness gen-driver {unit_id}`"),
-            &format!("`{}`", hint(&ctx, &format!("gen-driver {unit_id}"))),
-        )),
+        Error::InvalidPlan(m) => {
+            let mut cmd = hint(&ctx, &format!("gen-driver {unit_id}"));
+            if let Some(m) = &model_given {
+                cmd.push_str(&format!(" --model {}", report::shell_quote(m)));
+            }
+            Error::InvalidPlan(m.replace(
+                &format!("`harness gen-driver {unit_id}`"),
+                &format!("`{cmd}`"),
+            ))
+        }
         e => e,
     });
     // An answer the run never asked for is refused after the fact — the
@@ -2158,6 +2167,13 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
                 });
             }
             return Err(e.into());
+        }
+        // A unit's missing stage is no fault of the plan: its sentence
+        // alone, without "invalid plan:" (fix pass, item 9).
+        Err(Error::InvalidPlan(m))
+            if m.starts_with(&format!("{unit_id} ")) || m.starts_with(&format!("{unit_id}'s ")) =>
+        {
+            return Err(anyhow::anyhow!(m))
         }
         Err(e) => return Err(e.into()),
     };

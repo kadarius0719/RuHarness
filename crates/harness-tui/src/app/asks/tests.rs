@@ -1876,8 +1876,7 @@ fn an_outcome_line_counts_a_check_that_did_not_run_apart() {
     }
     assert_eq!(
         checks_count_words(&c),
-        ", 1 of 3 checks passed, 1 not run (whole-program: not configured for this target \
-         (add [oracle.whole_program] args = [...] to harness.toml))"
+        ", 1 of 3 checks passed, 1 not set up (whole program)"
     );
 }
 

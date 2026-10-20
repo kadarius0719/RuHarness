@@ -269,14 +269,22 @@ pub enum UnitState {
     Failing,
     /// 9 `✓ done`: verified or merged, green, fresh, attributed.
     Migrated(Origin),
-    /// 10 `✓? verified, origin not recorded`.
+    /// 10 `✓ done`, verified with no attempt known to have produced it (the
+    /// card says "origin not recorded").
     OriginUnknown,
+    /// `⚑ waiting for your answer`: pending, an attempt in progress that
+    /// stopped at a hand-off (a run of the command line's, or the
+    /// cockpit's).
+    Waiting,
+    /// `· stays C (calls u-x)`: pending, it calls other units, and the judge
+    /// tests each unit alone — it cannot move in this version.
+    StaysC(Vec<String>),
     /// 11 `✓? Rust green — accept it`: pending, with a green attempt bound
     /// to today's inputs that waits for Accept (§9.4).
     RustGreen,
     /// 12 `◐ Rust tried`: pending, with an attempt, none green.
     RustTried,
-    /// 13 `◇ test program ready`: pending, no attempt, its driver ready.
+    /// 13 `◈ test program ready`: pending, no attempt, its driver ready.
     TestProgramReady,
     /// 14 `◇ test program out of date`: pending, no attempt, its generated
     /// driver's validation no longer holds — made again before Migrate.
@@ -294,12 +302,13 @@ impl UnitState {
             UnitState::Blocked => "⊘",
             UnitState::Attention(_) => "⚠",
             UnitState::Failing => "✗",
-            UnitState::Migrated(_) => "✓",
-            UnitState::OriginUnknown | UnitState::RustGreen => "✓?",
+            UnitState::Migrated(_) | UnitState::OriginUnknown => "✓",
+            UnitState::RustGreen => "✓?",
             UnitState::RustTried => "◐",
-            UnitState::TestProgramReady
-            | UnitState::TestProgramStale
-            | UnitState::NoTestProgram => "◇",
+            UnitState::Waiting => "⚑",
+            UnitState::StaysC(_) => "·",
+            UnitState::TestProgramReady => "◈",
+            UnitState::TestProgramStale | UnitState::NoTestProgram => "◇",
             // The fallback has no glyph (§2.3): only its word.
             UnitState::Other(_) => "",
         }
@@ -315,13 +324,32 @@ impl UnitState {
             UnitState::Migrated(Origin::Steered) => "done (steered)".into(),
             UnitState::Migrated(Origin::Chat) => "done (asked in chat)".into(),
             UnitState::Migrated(Origin::Human) => "done (by hand)".into(),
-            UnitState::OriginUnknown => "verified, origin not recorded".into(),
+            UnitState::OriginUnknown => "done".into(),
+            UnitState::Waiting => "waiting for your answer".into(),
+            UnitState::StaysC(deps) => format!("stays C (calls {})", deps.join(", ")),
             UnitState::RustGreen => "Rust green — accept it".into(),
             UnitState::RustTried => "Rust tried".into(),
             UnitState::TestProgramReady => "test program ready".into(),
             UnitState::TestProgramStale => "test program out of date".into(),
             UnitState::NoTestProgram => "no test program".into(),
             UnitState::Other(status) => status.replace('-', " "),
+        }
+    }
+
+    /// Its word in a narrow pane (under about 36 columns), when the whole
+    /// word does not fit.
+    pub fn short_word(&self) -> String {
+        match self {
+            UnitState::Attention(_) => "attention".into(),
+            UnitState::Migrated(_) | UnitState::OriginUnknown => "done".into(),
+            UnitState::Waiting => "waiting".into(),
+            UnitState::StaysC(_) => "stays C".into(),
+            UnitState::RustGreen => "accept?".into(),
+            UnitState::RustTried => "tried".into(),
+            UnitState::TestProgramReady => "ready".into(),
+            UnitState::TestProgramStale => "outdated".into(),
+            UnitState::NoTestProgram => "no test".into(),
+            _ => self.word(),
         }
     }
 
@@ -622,6 +650,19 @@ pub fn unit_state(unit: &UnitView) -> UnitState {
         };
     }
     if status == "pending" {
+        // An attempt stopped at a hand-off waits for its answer, not a new
+        // attempt (fix pass, item 3).
+        if unit
+            .attempts
+            .iter()
+            .any(|a| a.record.outcome == "in-progress")
+        {
+            return UnitState::Waiting;
+        }
+        // The judge tests each unit alone: one that calls others stays C.
+        if !unit.unit.depends_on.is_empty() && acceptable(unit).is_none() {
+            return UnitState::StaysC(unit.unit.depends_on.clone());
+        }
         return if acceptable(unit).is_some() {
             UnitState::RustGreen
         } else if !unit.attempts.is_empty() {
@@ -1061,7 +1102,14 @@ mod tests {
             .iter()
             .filter(|u| u.state == UnitState::NoTestProgram)
             .count();
-        assert_eq!(planned, 10);
+        assert_eq!(planned, 3);
+        // The pieces that call others stay C (fix pass, item 2).
+        let stays = files
+            .units
+            .iter()
+            .filter(|u| matches!(u.state, UnitState::StaysC(_)))
+            .count();
+        assert_eq!(stays, 7);
         let three = snap
             .units
             .iter()
