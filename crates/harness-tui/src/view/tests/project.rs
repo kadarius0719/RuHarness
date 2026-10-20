@@ -837,6 +837,42 @@ fn the_why_goes_from_the_reply_to_the_card() {
     assert!(app.project.as_ref().unwrap().advice.is_empty());
 }
 
+/// The focused pane's frame is drawn in the section colour, bold, in every
+/// theme; the other pane's in the border role. Tab moves it.
+#[test]
+fn the_focused_pane_has_the_section_coloured_frame() {
+    let (_tmp, root) = project("frame");
+    let mut app = cockpit(&root);
+    for theme in crate::theme::Theme::ALL {
+        app.palette = crate::theme::Palette::of(theme);
+        let palette = app.palette;
+        let buffer = render(&mut app, 120, 30);
+        let (left, right) = (&buffer[(0, 1)], &buffer[(36, 1)]);
+        assert_eq!(left.symbol(), "│");
+        assert_eq!(right.symbol(), "│");
+        let section = palette.style(crate::theme::Role::Section);
+        let border = palette.style(crate::theme::Role::Border);
+        assert_eq!(
+            left.fg,
+            section.fg.unwrap_or(Color::Reset),
+            "{}",
+            theme.name()
+        );
+        assert!(left.modifier.contains(Modifier::BOLD), "{}", theme.name());
+        assert_eq!(
+            right.fg,
+            border.fg.unwrap_or(Color::Reset),
+            "{}",
+            theme.name()
+        );
+        assert!(!right.modifier.contains(Modifier::BOLD), "{}", theme.name());
+    }
+    code(&mut app, KeyCode::Tab);
+    let buffer = render(&mut app, 120, 30);
+    assert!(buffer[(36, 1)].modifier.contains(Modifier::BOLD));
+    assert!(!buffer[(0, 1)].modifier.contains(Modifier::BOLD));
+}
+
 /// A run name of the person's, typed after the picks; a name the command
 /// line would refuse is said so, and typing goes on.
 #[test]

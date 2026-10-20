@@ -647,30 +647,47 @@ mod tests {
         }
     }
 
-    /// The View keeps 80 columns beside the chat's column.
+    /// The View keeps 80 columns beside the chat's column. With the focus
+    /// the chat takes half of what the left pane leaves (cockpit design
+    /// §9.3); without it, at most its usual width.
     #[test]
     fn the_view_keeps_eighty_columns() {
         let tmp = TmpDir::new("chat-width");
         let mut a = chat_app("chat-width", &tmp);
-        a.focus = crate::app::Focus::Chat;
         a.chat_column = true;
+        let pane = |a: &App, f: crate::app::Focus| {
+            a.hits
+                .iter()
+                .find(|(_, h)| *h == Hit::Pane(f))
+                .map(|(r, _)| *r)
+                .unwrap()
+        };
         for w in [156u16, 170, 200, 250] {
+            a.focus = crate::app::Focus::Chat;
             render(&mut a, w, 24);
-            let view = a
-                .hits
-                .iter()
-                .find(|(_, h)| *h == Hit::Pane(crate::app::Focus::View))
-                .map(|(r, _)| *r)
-                .unwrap();
-            let chat = a
-                .hits
-                .iter()
-                .find(|(_, h)| *h == Hit::Pane(crate::app::Focus::Chat))
-                .map(|(r, _)| *r)
-                .unwrap();
+            let (files, view, chat) = (
+                pane(&a, crate::app::Focus::Files),
+                pane(&a, crate::app::Focus::View),
+                pane(&a, crate::app::Focus::Chat),
+            );
             assert!(view.width >= VIEW_KEEPS, "{w}: {view:?}");
+            let left = w - files.width;
+            assert_eq!(
+                chat.width,
+                (left / 2).max(CHAT_COLUMN_MAX).min(left - VIEW_KEEPS),
+                "{w}: {chat:?}"
+            );
+            a.focus = crate::app::Focus::Files;
+            render(&mut a, w, 24);
+            let chat = pane(&a, crate::app::Focus::Chat);
             assert!(chat.width <= CHAT_COLUMN_MAX, "{w}: {chat:?}");
+            assert!(pane(&a, crate::app::Focus::View).width >= VIEW_KEEPS);
         }
+        // On the person's 200 columns: the chat with the focus is wider
+        // than its usual 64.
+        a.focus = crate::app::Focus::Chat;
+        render(&mut a, 200, 24);
+        assert!(pane(&a, crate::app::Focus::Chat).width > CHAT_COLUMN_MAX);
     }
 
     /// A request settling is shown greyed; a waiting Continue shows its

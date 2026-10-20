@@ -1,24 +1,24 @@
-┌ Files ───────────────────────┐┌ harness-tui-chat-goldens-0000000000 · 1 of 1 C file in Rust ─────────────────────────────────────────┐┌ Chat — waiting for you · haiku-4-5 ─────────────[New]─[?]─[×]┐
-│▾ harness-tui-chat-golde… ✓1/1││Next step: Every unit is in Rust and checked — measure its speed: choose Speed, under Features in the ││› Please migrate u-lib.                                       │
-│  ▾ Units (1)                 ││tree                                                                                                  ││                                                              │
-│    ▸ ✓ u-lib         migrated││                                                                                                      ││I will ask to migrate u-lib.                                  │
-│    Features (none yet)       ││2 files scanned                                                                                       ││                                                              │
-│    Speed — not set up        ││Units (1): 1 ✓ migrated                                                                               ││  · read the project's status — done                          │
-│  ▸ test_case/            ✓1/1││                                                                                                      ││                                                              │
-│                              ││                                                                                                      ││                                                              │
-│                              ││                                                                                                      ││                                                              │
-│                              ││                                                                                                      ││                                                              │
-│                              ││                                                                                                      ││                                                              │
-│                              ││                                                                                                      ││                                                              │
-│                              ││                                                                                                      ││                                                              │
-│                              ││                                                                                                      ││                                                              │
-│                              ││                                                                                                      ││                                                              │
-│                              ││                                                                                                      ││                                                              │
-│                              ││                                                                                                      ││Asks: Migrate u-lib — a model call, answered here in chat     │
-│                              ││                                                                                                      ││[Review Enter]  [Decline Esc]                                 │
-│                              ││                                                                                                      ││About: the project                                            │
-│                              ││                                                                                                      ││› Enter reviews the request — or type                         │
-└──────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────┘
+┌ Files ───────────────────────┐┌ harness-tui-chat-goldens-0000000000 · 1 of 1 C file in Rust ─────────────────────┐┌ Chat — waiting for you · haiku-4-5 ─────────────────────────────────[New]─[?]─[×]┐
+│▾ harness-tui-chat-golde… ✓1/1││Next step: Every unit is in Rust and checked — measure its speed: choose Speed,   ││› Please migrate u-lib.                                                           │
+│  ▾ Units (1)                 ││under Features in the tree                                                        ││                                                                                  │
+│    ▸ ✓ u-lib         migrated││                                                                                  ││I will ask to migrate u-lib.                                                      │
+│    Features (none yet)       ││2 files scanned                                                                   ││                                                                                  │
+│    Speed — not set up        ││Units (1): 1 ✓ migrated                                                           ││  · read the project's status — done                                              │
+│  ▸ test_case/            ✓1/1││                                                                                  ││                                                                                  │
+│                              ││                                                                                  ││                                                                                  │
+│                              ││                                                                                  ││                                                                                  │
+│                              ││                                                                                  ││                                                                                  │
+│                              ││                                                                                  ││                                                                                  │
+│                              ││                                                                                  ││                                                                                  │
+│                              ││                                                                                  ││                                                                                  │
+│                              ││                                                                                  ││                                                                                  │
+│                              ││                                                                                  ││                                                                                  │
+│                              ││                                                                                  ││                                                                                  │
+│                              ││                                                                                  ││Asks: Migrate u-lib — a model call, answered here in chat                         │
+│                              ││                                                                                  ││[Review Enter]  [Decline Esc]                                                     │
+│                              ││                                                                                  ││About: the project                                                                │
+│                              ││                                                                                  ││› Enter reviews the request — or type                                             │
+└──────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────┘
  Ready.
 
  Enter review   Esc decline   Ctrl-J new line   ↑↓ scroll   Tab pane   F1 help   Ctrl-C quit

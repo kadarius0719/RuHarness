@@ -891,11 +891,18 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
     Line::from(spans)
 }
 
+/// A pane's frame: the focused pane's in the section colour, bold, in every
+/// theme (bold alone did not show where the frame is the terminal's own
+/// colour); the others in the border role.
+pub(crate) fn focused_border() -> Style {
+    section_role().add_modifier(Modifier::BOLD)
+}
+
 fn pane_block(title: String, focused: bool) -> Block<'static> {
     let mut block = Block::default().borders(Borders::ALL);
     if focused {
         block = block
-            .border_style(bold())
+            .border_style(focused_border())
             .title(Span::styled(title, section_role().patch(selected_row())));
     } else {
         block = block
@@ -4622,7 +4629,16 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         };
         let column = chat && app.chat_column && area.width >= CHAT_COLUMN_FROM;
         if column {
-            let chat_w = CHAT_COLUMN_MAX.min(area.width - files_w - VIEW_KEEPS);
+            // With the focus, the chat takes half of what the left pane
+            // leaves (cockpit design §9.3); without it, at most its
+            // usual width. The View keeps its columns either way.
+            let left = area.width - files_w;
+            let want = if app.focus == Focus::Chat {
+                (left / 2).max(CHAT_COLUMN_MAX)
+            } else {
+                CHAT_COLUMN_MAX
+            };
+            let chat_w = want.min(left - VIEW_KEEPS);
             let [files, view, chat_area] = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
@@ -4932,7 +4948,12 @@ mod tests {
                         text_of(buffer)
                     )
                 };
-                if Some(r.fg) == own(Role::Section) {
+                // The focused pane's frame is drawn in the section colour
+                // (§9.3): a run of frame alone is not a heading.
+                let frame = text
+                    .chars()
+                    .all(|c| matches!(c, '│' | '┌' | '┐' | '└' | '┘' | '─'));
+                if Some(r.fg) == own(Role::Section) && !frame {
                     assert!(
                         starts_line(x) && !next_step,
                         "{}",
