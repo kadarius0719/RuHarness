@@ -775,6 +775,17 @@ pub fn argv(
 /// whole, at the dialog's end (its "Command:" line).
 pub fn dialog(act: Act, map: Option<&MapView>, argv: &[String]) -> Vec<String> {
     let build = argv.iter().any(|a| a == "--build");
+    // Accept's id: the word after `accept`.
+    let accept_id = argv
+        .iter()
+        .position(|a| a == "accept")
+        .and_then(|i| argv.get(i + 1))
+        .map_or("the program", String::as_str);
+    let accept_writes = format!(
+        "the tool's build configuration, migration/tools/{}/harness.toml (a tool accepted before \
+         keeps its results and what you added to that file)",
+        safe_line(accept_id)
+    );
     let (what, long, writes): (String, String, &str) = match act {
         Act::Map => (
             "Map the project: find its programs and libraries, the files each one needs, what \
@@ -817,14 +828,15 @@ pub fn dialog(act: Act, map: Option<&MapView>, argv: &[String]) -> Vec<String> {
             )
         }
         Act::Accept => (
-            "Accept a program: check the map still matches the project, apply your picks, link \
-             the program once more and write it as a tool you can scan, plan and migrate."
-                .to_string(),
+            format!(
+                "Accept {}: check the map still matches the project, apply your picks, link it \
+                 once more, and make it a tool you can open, scan, plan and migrate.",
+                safe_line(accept_id)
+            ),
             "about as long as the map (it maps and link-checks the project again to check the map \
              still says what it finds), then one more link"
                 .into(),
-            "migration/tools/<id>/harness.toml only (an id accepted before keeps its ledger and \
-             what you added to that file)",
+            &accept_writes,
         ),
     };
     vec![
@@ -1013,9 +1025,9 @@ pub(crate) mod tests {
         );
         let words = dialog(Act::Accept, Some(&map), &accept).join("\n");
         for w in [
-            "Accept a program: check the map still matches the project",
-            "It writes: migration/tools/<id>/harness.toml only (an id accepted before keeps its \
-             ledger and what you added to that file).",
+            "Accept t-unlzg: check the map still matches the project",
+            "It writes: the tool's build configuration, migration/tools/t-unlzg/harness.toml (a \
+             tool accepted before keeps its results and what you added to that file).",
         ] {
             assert!(words.contains(w), "{w}\n{words}");
         }

@@ -52,8 +52,14 @@ fn choose(app: &mut App, label: &str) -> Command {
         .iter()
         .position(|l| l == label)
         .unwrap_or_else(|| panic!("no item {label:?} in {:?}", menu_labels(app)));
-    for _ in 0..at {
+    // From where the highlight starts (Accept's picker starts on the
+    // advised file).
+    let from = menu(app).focus;
+    for _ in from..at {
         code(app, KeyCode::Down);
+    }
+    for _ in at..from {
+        code(app, KeyCode::Up);
     }
     code(app, KeyCode::Enter)
 }
@@ -735,6 +741,8 @@ fn the_project_view_after_a_map_with_a_held_choice() {
         ]
     );
     assert!(m.reason.is_none(), "nothing is recommended in the picker");
+    // The highlight starts on the advised file: two Enters keep it.
+    assert_eq!(m.focus, 1);
     let buffer = render(&mut app, 120, 34);
     golden("project-picker.txt", &app, &buffer);
     // d1.1 kept: d2, reached only under it, is asked next.
@@ -758,14 +766,32 @@ fn the_project_view_after_a_map_with_a_held_choice() {
     );
     let Mode::Dialog(c) = &app.mode else { panic!() };
     assert_eq!(c.title, "Accept t-unlzg?");
-    assert!(c.body[0].starts_with("Accept a program: check the map still matches the project"));
-    assert!(c.body[2].starts_with("It writes: migration/tools/<id>/harness.toml only"));
+    assert!(c.body[0].starts_with("Accept t-unlzg: check the map still matches the project"));
+    // The decisions in words, before the command's --keep flags.
+    assert_eq!(
+        c.body[1..3],
+        [
+            "Keeps src/decode.c for the functions both files define (the model advised \
+             src/mini.c instead).",
+            "Keeps src/check_b.c for the functions both files define.",
+        ]
+    );
+    assert_eq!(
+        c.body[4],
+        "It writes: the tool's build configuration, migration/tools/t-unlzg/harness.toml (a tool \
+         accepted before keeps its results and what you added to that file)."
+    );
     // d1.2 kept: d2 is not reached, the dialog follows at once.
     app.mode = Mode::Normal;
     code(&mut app, KeyCode::Enter);
     choose(&mut app, "Accept this program");
     choose(&mut app, "2  src/mini.c  ← the model advises this one");
     assert!(dialog_argv(&app).ends_with(&["--keep".to_string(), "d1=d1.2".to_string()]));
+    let Mode::Dialog(c) = &app.mode else { panic!() };
+    assert_eq!(
+        c.body[1],
+        "Keeps src/mini.c for the functions both files define (the model advised this file)."
+    );
 }
 
 /// The why's round trip: a reply's why (as `ask` and the chat record it)

@@ -827,7 +827,7 @@ about the harness. **One line.** The Next step is one short line: a verb phrase 
   set and definer ids stay in the ledger, the reply file and `harness project accept`'s flags,
   which the dialog's argv still shows. Accept's picker is titled `Accept t-benchmark` and asks
   `Keep which file for the functions both define?`, the advised item marked `← the model advises
-  this one`, none recommended. The reason tag becomes words only where the why is missing (an
+  this one`, none recommended; the highlight starts on the advised file (fix pass, 2026-10-19: nothing is picked until Enter, and a second Enter must not take the other file), and the Accept dialog says each decision in words before its command ("Keeps src/lib/decode.c for the functions both files define (the model advised this file)"). The reason tag becomes words only where the why is missing (an
   older reply): `platform` → "they are the same code for different platforms",
   `alternative-implementation` → "they are two implementations of the same thing", `cannot-tell`
   → "the model could not tell them apart".

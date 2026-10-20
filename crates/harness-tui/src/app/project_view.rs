@@ -779,9 +779,14 @@ impl App {
                     )
                 })
                 .collect();
+            // The highlight starts on the advised file: nothing is picked
+            // until Enter, so a second Enter never takes the other one.
+            let focus = advice
+                .and_then(|a| h.definers.iter().position(|(i, _)| *i == a.keep))
+                .unwrap_or(0);
             self.mode = Mode::Menu(Menu {
                 items,
-                focus: 0,
+                focus,
                 footer: None,
                 reason: None,
                 title: Some(format!("Accept {}", o.id)),
@@ -881,7 +886,58 @@ impl App {
                 safe_line(p.unit.as_deref().unwrap_or("the program"))
             ),
         };
-        (title, project::dialog(act, map, &words))
+        let mut body = project::dialog(act, map, &words);
+        if act == project::Act::Accept {
+            // Each decision in words, before the command's --keep flags.
+            let picks = self.keep_words(p.unit.as_deref().unwrap_or_default(), &words);
+            body.splice(1..1, picks);
+        }
+        (title, body)
+    }
+
+    /// Accept's decisions in words, one line each, from the command's
+    /// `--keep <set>=<definer>` flags: "Keeps src/lib/decode.c for the
+    /// functions both files define (the model advised this file)".
+    fn keep_words(&self, id: &str, words: &[String]) -> Vec<String> {
+        let Some(o) = self.project_offered(id) else {
+            return Vec::new();
+        };
+        let advice = self.project.as_ref().map(|p| &p.advice);
+        let mut out = Vec::new();
+        for pair in words.windows(2).filter(|w| w[0] == "--keep") {
+            let Some((set, keep)) = pair[1].split_once('=') else {
+                continue;
+            };
+            let Some(h) = o.held.iter().find(|h| h.set == set) else {
+                continue;
+            };
+            let path_of = |index: &str| {
+                h.definers
+                    .iter()
+                    .find(|(i, _)| i == index)
+                    .map(|(_, path)| safe_line(path))
+            };
+            let Some(path) = path_of(keep) else {
+                continue;
+            };
+            let files = if h.definers.len() == 2 {
+                "both files".to_string()
+            } else {
+                format!("these {} files", h.definers.len())
+            };
+            let mut line = format!("Keeps {path} for the functions {files} define");
+            match advice.and_then(|a| a.get(set)) {
+                Some(a) if a.keep == keep => line.push_str(" (the model advised this file)"),
+                Some(a) => {
+                    if let Some(other) = path_of(&a.keep) {
+                        line.push_str(&format!(" (the model advised {other} instead)"));
+                    }
+                }
+                None => {}
+            }
+            out.push(format!("{line}."));
+        }
+        out
     }
 
     /// Open the accepted tool `id` over what `read` found: the tool's
