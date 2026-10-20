@@ -695,6 +695,7 @@ impl App {
             let only = only.clone();
             return self.choose(&only);
         }
+        items.push(crate::menu::explain_item());
         self.mode = Mode::Menu(Menu {
             items,
             focus: 0,

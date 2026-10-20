@@ -47,4 +47,4 @@
 └──────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────┘
  src/zopfli/: a folder of 31 files; 12 of them hold the C of a piece.
 
- ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit
+ ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   i what is this?   ? help   q quit

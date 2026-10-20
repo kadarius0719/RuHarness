@@ -37,4 +37,4 @@
 └───────────────────────────────────┘└─────────────────────────────────────────────────────────────────────────────────┘
  lib.c is the C of the piece u-lib; its Rust is done and passed the judge's check.
 
- ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit
+ ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   i what is this?   ? help   q quit

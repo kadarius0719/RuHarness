@@ -15,10 +15,10 @@
 │                 │  Refresh the plan — 1 file changed or new since the scan — scan first            │                 │
 │                 │  Find risky patterns in the C — 1 file changed or new since the scan — scan first│                 │
 │                 │  Re-read the project                                                            g│                 │
+│                 │  What is this?                                                                  i│                 │
 │                 │                                                                                  │                 │
 │                 │Why not: 1 file changed or new since the scan — scan first                        │                 │
 │                 └ Enter choose · Esc close ────────────────────────────────────────────────────────┘                 │
-│                                  ││                                                                                  │
 │                                  ││                                                                                  │
 │                                  ││                                                                                  │
 │                                  ││                                                                                  │

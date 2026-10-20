@@ -89,12 +89,13 @@
   @0-29 fg LightBlue BOLD "└────────────────────────────┘"
  Ready — ↑↓ to choose a row, Enter for what you can do
 
- ↑↓ move   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit
+ ↑↓ move   Enter actions   Tab pane   Esc back   c details   i what is this?   g re-read   ? help   q quit
   @0-2 fg - BOLD "↑↓"
   @10-15 fg - BOLD "Enter"
   @26-29 fg - BOLD "Tab"
   @37-40 fg - BOLD "Esc"
   @48-49 fg - BOLD "c"
-  @60-61 fg - BOLD "g"
-  @72-73 fg - BOLD "?"
-  @81-82 fg - BOLD "q"
+  @60-61 fg - BOLD "i"
+  @78-79 fg - BOLD "g"
+  @90-91 fg - BOLD "?"
+  @99-100 fg - BOLD "q"

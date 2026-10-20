@@ -539,6 +539,18 @@ pub enum Mode {
     },
     /// `Enter`: the action menu.
     Menu(Menu),
+    /// `i`, or What is this?: the card of the selected row — or, from a
+    /// dialog, of its act (docs/COCKPIT-WRAPPER-DESIGN.md §9.5).
+    Explain {
+        /// The row's (or the act's) name.
+        title: String,
+        /// Its lines.
+        lines: Vec<String>,
+        /// First row shown.
+        scroll: usize,
+        /// The dialog it was opened from: Esc or `i` goes back to it.
+        back: Option<Box<Mode>>,
+    },
     /// An armed confirmation.
     Dialog(Box<Confirm>),
     /// `c`: the activity details (today's run panel).
@@ -3381,6 +3393,7 @@ impl App {
         let mut items = self.menu_items();
         let advice = self.advice(&self.selection);
         let reason = menu::recommend(&mut items, advice.as_ref());
+        items.push(menu::explain_item());
         self.mode = Mode::Menu(Menu {
             items,
             focus: 0,
@@ -3611,7 +3624,56 @@ impl App {
                 self.ask_adopt();
                 Command::None
             }
+            Action::Explain => {
+                self.open_explain(None);
+                Command::None
+            }
         }
+    }
+
+    /// `i`: the card of the selected row (§9.5); Esc or `i` goes back to
+    /// `back`, else to the panes.
+    pub fn open_explain(&mut self, back: Option<Box<Mode>>) {
+        let e = crate::explain::explain(self, &self.selection);
+        self.mode = Mode::Explain {
+            title: e.title,
+            lines: e.card,
+            scroll: 0,
+            back,
+        };
+    }
+
+    /// `i` in a dialog: the card of its act — what it does at length, what
+    /// it reads and writes, how long it takes.
+    pub fn act_card(&self, c: &Confirm) -> (String, Vec<String>) {
+        match &c.purpose {
+            Purpose::Act(p) => self.act_explained(p),
+            _ => (c.title.clone(), c.body.clone()),
+        }
+    }
+
+    /// An act's card: the dialog's words in full.
+    pub fn act_explained(&self, p: &Pending) -> (String, Vec<String>) {
+        let (title, body) = self.dialog_words(p);
+        (title, body)
+    }
+
+    /// Close the card: back to the dialog it was opened from — its latch
+    /// starting again, so nothing typed at the card presses a button — or
+    /// to the panes.
+    pub fn close_explain(&mut self, back: Option<Box<Mode>>) {
+        self.mode = match back.map(|b| *b) {
+            Some(Mode::Dialog(mut c)) => {
+                let mut fresh = Dialog::new(c.dialog.kind, self.now);
+                fresh.buttons = std::mem::take(&mut c.dialog.buttons);
+                fresh.chat_rules = c.dialog.chat_rules;
+                fresh.scroll = c.dialog.scroll;
+                c.dialog = fresh;
+                Mode::Dialog(c)
+            }
+            Some(other) => other,
+            None => Mode::Normal,
+        };
     }
 
     /// The accelerator `key`: the selection's menu item bound to it.
@@ -4187,6 +4249,17 @@ impl App {
                     Command::None
                 }
             },
+            // The card: its keys answer; a click outside closes it, back to
+            // the dialog it came from.
+            Mode::Explain { back, .. } => match found {
+                Some((rect, hit @ Hit::Hint(_))) => hold(self, rect, hit, true),
+                Some((_, Hit::Overlay)) => Command::None,
+                _ => {
+                    let back = back.take();
+                    self.close_explain(back);
+                    Command::None
+                }
+            },
             // Read-only overlays: their keys answer; a click outside closes
             // them.
             Mode::Help { .. } | Mode::Verdict { .. } | Mode::Diff { .. } => match found {
@@ -4401,16 +4474,18 @@ impl App {
                     Mode::Dialog(_) if k == "←→" => {
                         "←→ are keys: they move between the buttons — or click one"
                     }
-                    Mode::Dialog(_) | Mode::Help { .. } | Mode::Diff { .. } => {
-                        "turn the wheel to scroll; ↑↓ are keys"
-                    }
+                    Mode::Dialog(_)
+                    | Mode::Help { .. }
+                    | Mode::Diff { .. }
+                    | Mode::Explain { .. } => "turn the wheel to scroll; ↑↓ are keys",
                     Mode::Verdict { .. } => "turn the wheel for the next check; ↑↓ are keys",
                     _ => "click a row, or turn the wheel; ↑↓ ←→ are keys",
                 });
                 return Command::None;
             }
             "Enter" => &[KeyCode::Enter],
-            "Esc" | "c/Esc" | "any other key" => &[KeyCode::Esc],
+            "Esc" | "c/Esc" | "any other key" | "i/Esc" => &[KeyCode::Esc],
+            "i" => &[KeyCode::Char('i')],
             "Tab" => &[KeyCode::Tab],
             "PgDn" => &[KeyCode::PageDown],
             "]f" => &[KeyCode::Char(']'), KeyCode::Char('f')],
@@ -4458,7 +4533,11 @@ impl App {
                 return Command::None;
             }
             Mode::Verdict { .. } => 1,
-            Mode::Dialog(_) | Mode::Help { .. } | Mode::Diff { .. } | Mode::Details { .. } => 3,
+            Mode::Dialog(_)
+            | Mode::Help { .. }
+            | Mode::Diff { .. }
+            | Mode::Details { .. }
+            | Mode::Explain { .. } => 3,
         };
         let mut command = Command::None;
         for _ in 0..repeat {
@@ -4518,6 +4597,42 @@ impl App {
             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
         match std::mem::replace(&mut self.mode, Mode::Normal) {
             Mode::Normal => {}
+            // `i`: the act's card; Esc or `i` comes back (§9.5).
+            Mode::Dialog(confirm) if key.code == KeyCode::Char('i') && plain => {
+                let (title, lines) = self.act_card(&confirm);
+                self.mode = Mode::Explain {
+                    title,
+                    lines,
+                    scroll: 0,
+                    back: Some(Box::new(Mode::Dialog(confirm))),
+                };
+                return Command::None;
+            }
+            Mode::Explain {
+                title,
+                lines,
+                scroll,
+                back,
+            } => {
+                let scroll = match key.code {
+                    KeyCode::Up | KeyCode::Char('k') => scroll.saturating_sub(1),
+                    KeyCode::Down | KeyCode::Char('j') => scroll.saturating_add(1),
+                    KeyCode::PageUp => scroll.saturating_sub(10),
+                    KeyCode::PageDown | KeyCode::Char(' ') => scroll.saturating_add(10),
+                    // Any other key closes it.
+                    _ => {
+                        self.close_explain(back);
+                        return Command::None;
+                    }
+                };
+                self.mode = Mode::Explain {
+                    title,
+                    lines,
+                    scroll,
+                    back,
+                };
+                return Command::None;
+            }
             Mode::Dialog(mut confirm) => {
                 return match confirm.dialog.on_key_in(key, now, self.asks.burst) {
                     Outcome::Stay => {
@@ -4904,6 +5019,7 @@ impl App {
         match key.code {
             KeyCode::Char('q') | KeyCode::Char('Q') => return self.quit(),
             KeyCode::Char('?') | KeyCode::F(1) => self.mode = Mode::Help { scroll: 0 },
+            KeyCode::Char('i') => self.open_explain(None),
             KeyCode::Char('c') => {
                 self.mode = Mode::Details {
                     scroll: usize::MAX / 2,
@@ -5755,6 +5871,74 @@ pub(crate) mod tests {
         f(&mut rec);
         rec.store(&dir).unwrap();
         assert!(app.reload(true));
+    }
+
+    /// §9.5: `i` opens the selected row's card, in the tree, the View and a
+    /// menu (its last item, What is this?); Esc or `i` closes it. In a
+    /// dialog `i` opens the act's card, and closing it goes back to the
+    /// dialog with its latch starting again — nothing typed at the card
+    /// presses a button.
+    #[test]
+    fn i_explains_the_row_and_the_act() {
+        let mut app = app("explain-keys");
+        app.select(Selection::Unit("u-lib".into()));
+        let want = crate::explain::explain(&app, &app.selection);
+        for focus in [Focus::Files, Focus::View] {
+            app.focus = focus;
+            key(&mut app, 'i');
+            let Mode::Explain {
+                title, lines, back, ..
+            } = &app.mode
+            else {
+                panic!("no card: {:?}", app.mode)
+            };
+            assert_eq!(title, "u-lib");
+            assert_eq!(lines, &want.card);
+            assert!(back.is_none());
+            let closer = if focus == Focus::Files { 'i' } else { 'x' };
+            key(&mut app, closer);
+            assert_eq!(app.mode, Mode::Normal);
+        }
+        app.focus = Focus::Files;
+        // The menu's last item, on the tool's screen; its accelerator is i.
+        app.open_menu();
+        let Mode::Menu(m) = &app.mode else { panic!() };
+        let last = m.items.last().unwrap();
+        assert_eq!(
+            (last.label.as_str(), last.accel),
+            ("What is this?", Some("i"))
+        );
+        code(&mut app, KeyCode::End);
+        code(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Explain { .. }), "{:?}", app.mode);
+        code(&mut app, KeyCode::Esc);
+        app.open_menu();
+        key(&mut app, 'i');
+        assert!(matches!(app.mode, Mode::Explain { .. }), "{:?}", app.mode);
+        code(&mut app, KeyCode::Esc);
+        // In a dialog: the act's card, then back to the dialog, unarmed.
+        attempt(&mut app, PROVENANCE);
+        key(&mut app, 'a');
+        arm(&mut app);
+        let Mode::Dialog(c) = &app.mode else {
+            panic!("no dialog: {:?}", app.mode)
+        };
+        let dialog_title = c.title.clone();
+        key(&mut app, 'i');
+        let Mode::Explain { title, back, .. } = &app.mode else {
+            panic!("no card: {:?}", app.mode)
+        };
+        assert_eq!(title, &dialog_title);
+        assert!(matches!(back.as_deref(), Some(Mode::Dialog(_))));
+        key(&mut app, 'i');
+        let Mode::Dialog(c) = &app.mode else {
+            panic!("not back in the dialog: {:?}", app.mode)
+        };
+        assert_eq!(c.title, dialog_title);
+        assert!(!c.dialog.armed && c.dialog.focus == 0);
+        // Unarmed again: `y` is dropped.
+        assert_eq!(key(&mut app, 'y'), Command::None);
+        assert!(matches!(app.mode, Mode::Dialog(_)));
     }
 
     /// §4, §5: an act shows its exact argv in an armed dialog; Run spawns

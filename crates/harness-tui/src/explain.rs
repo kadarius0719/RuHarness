@@ -138,7 +138,12 @@ fn next_words(app: &App, sel: &Selection) -> Option<String> {
             return Some(format!("Enter, then {}", it.label));
         }
     }
-    let text = advice.text.trim().to_string();
+    let line = advice.line();
+    let text = line
+        .strip_prefix("Next: ")
+        .unwrap_or(&line)
+        .trim()
+        .to_string();
     (!text.is_empty()).then_some(text)
 }
 

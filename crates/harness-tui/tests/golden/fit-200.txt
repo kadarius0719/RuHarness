@@ -27,4 +27,4 @@
 └────────────────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
  u-cache is one piece of the program: 5 functions in src/zopfli/cache.c that move to Rust together; it has no test program yet.
 
- ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit
+ ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   i what is this?   g re-read   ? help   q quit

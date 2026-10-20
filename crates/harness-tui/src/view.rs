@@ -3630,6 +3630,17 @@ fn overlay_hints(app: &App) -> Option<Vec<(&'static str, &'static str)>> {
         ],
         Mode::Verdict { .. } => vec![("↑↓", "check"), ("PgDn", "detail"), ("Esc", "close")],
         Mode::Diff { .. } => vec![("↑↓", "scroll"), ("Esc", "close")],
+        Mode::Explain { back, .. } => vec![
+            ("↑↓", "scroll"),
+            (
+                "i/Esc",
+                if back.is_some() {
+                    "back to the dialog"
+                } else {
+                    "close"
+                },
+            ),
+        ],
     })
 }
 
@@ -3676,6 +3687,7 @@ fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
         h.push(("]f", "next pair"));
     }
     h.push(("c", "details"));
+    h.push(("i", "what is this?"));
     h.push(("g", "re-read"));
     h
 }
@@ -3846,6 +3858,7 @@ const HELP_KEYS: &[(&str, &str)] = &[
     ("Backspace", "back along your jumps"),
     ("Tab", "the other pane (below 80 columns: Files ⇄ View)"),
     ("PgUp PgDn Home End", "page, or go to the ends"),
+    ("i", "what the selected row is, on a card (in a dialog: what the act does); also What is this? in every menu"),
     ("c", "the activity details: the command, every event, its exit"),
     ("g", "re-read the project"),
     ("t", "try again, after a refusal"),
@@ -4069,6 +4082,7 @@ pub const HELP_FIRST_KEYS: &[(&str, &str)] = &[
     ),
     ("Tab", "the next pane: Files, View, Chat"),
     ("Esc", "close, or step back"),
+    ("i", "what the selected row is"),
     ("?", "this help"),
     ("q", "quit"),
 ];
@@ -4101,6 +4115,7 @@ fn help_project_page(width: usize, chat: bool) -> Vec<Line<'static>> {
         ),
         ("Tab", tab),
         ("Esc", "close, or step back"),
+        ("i", "what the selected row is"),
         ("?", "this help"),
         ("q", "quit"),
     ] {
@@ -4729,6 +4744,42 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
             );
             app.hits.push((rect, Hit::Overlay));
         }
+        Mode::Explain {
+            title,
+            lines,
+            scroll,
+            back,
+        } => {
+            // Drawn like a dialog (its panel, its frame), without buttons.
+            let width = DIALOG_COLUMNS.min(area.width.saturating_sub(2));
+            let inner_w = width.saturating_sub(2) as usize;
+            let mut rows: Vec<Line<'static>> = Vec::new();
+            for l in &lines {
+                rows.extend(wrapped(l, inner_w, Style::default()));
+            }
+            let height = (rows.len() as u16 + 2)
+                .min(area.height.saturating_sub(2))
+                .max(5);
+            let rect = centered(area, width, height);
+            let close = if back.is_some() {
+                "Esc or i: back to the dialog"
+            } else {
+                "Esc or i closes"
+            };
+            let shown = overlay(
+                frame,
+                rect,
+                &format!(" {} ", display::line(&title)),
+                &rows,
+                scroll,
+                Some(close),
+                Some("↓"),
+            );
+            if let Mode::Explain { scroll, .. } = &mut app.mode {
+                *scroll = shown;
+            }
+            app.hits.push((rect, Hit::Overlay));
+        }
         Mode::Help { scroll } => {
             let rect = centered(
                 area,
@@ -5049,7 +5100,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // key bar (which names the box's own keys) in the backdrop (§9.4).
     if matches!(
         app.mode,
-        Mode::Dialog(_) | Mode::Menu(_) | Mode::Help { .. }
+        Mode::Dialog(_) | Mode::Menu(_) | Mode::Help { .. } | Mode::Explain { .. }
     ) {
         backdrop(
             frame,
@@ -6154,7 +6205,7 @@ mod tests {
             for (k, v) in hints(&app) {
                 let entry = format!("{k} {v}");
                 assert!(
-                    bar.contains(&entry) || !bar.contains(&format!("{k} ")) || k == "Enter",
+                    bar.contains(&entry) || !bar.contains(&format!(" {k} ")) || k == "Enter",
                     "{width}: {bar}"
                 );
             }
@@ -7352,13 +7403,13 @@ mod tests {
         assert_ne!(said(&app).as_deref(), Some(DRAG_HINT));
     }
 
-    /// Pass 1 of the 2026-10-18 critique: Help opens on a first page of six
-    /// keys and three marks, under twelve lines; ↓ opens the rest, ↑ at its
-    /// top goes back.
+    /// Pass 1 of the 2026-10-18 critique: Help opens on a first page of
+    /// seven keys (`i` since §9.5) and three marks, under fourteen lines; ↓
+    /// opens the rest, ↑ at its top goes back.
     #[test]
     fn help_opens_on_a_short_first_page() {
         let page = help_first_page(100, true);
-        assert!(page.len() < 13, "{} lines", page.len());
+        assert!(page.len() < 14, "{} lines", page.len());
         let words: Vec<String> = page
             .iter()
             .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
@@ -7370,6 +7421,7 @@ mod tests {
                 "Enter   what you can do with it — the first item is the next step",
                 "Tab     the next pane: Files, View, Chat",
                 "Esc     close, or step back",
+                "i       what the selected row is",
                 "?       this help",
                 "q       quit",
                 "◇       no test program yet: make it first (◈: it is ready)",
@@ -7628,6 +7680,21 @@ mod tests {
         let screen = text(&render(&mut app, 160, 30));
         assert_eq!(row_with(&screen, &said).trim(), said, "{screen}");
         assert!(!screen.contains(READY_FIRST), "{screen}");
+        // The card of a unit's Rust, drawn like a dialog without buttons.
+        app.select(Selection::Crate("u-lib".into()));
+        crate::app::tests::key(&mut app, 'i');
+        let buffer = render(&mut app, 120, 30);
+        golden("explain-card.txt", &app, &buffer);
+        assert!(text(&buffer).contains(" u-lib's Rust "));
+        crate::app::tests::key(&mut app, 'i');
+        app.select(Selection::Project);
+        let screen = text(&render(&mut app, 160, 30));
+        // The key bar and the help name `i`.
+        assert!(screen.contains(" i what is this? "), "{screen}");
+        app.mode = Mode::Help { scroll: 0 };
+        let help = text(&render(&mut app, 160, 40));
+        assert!(help.contains("i       what the selected row is"), "{help}");
+        app.mode = Mode::Normal;
         // A narrow line takes a shorter form of the sentence, whole.
         app.select(Selection::Unit("u-lib".into()));
         let short = crate::explain::hint_in(&app, &app.selection, 79);

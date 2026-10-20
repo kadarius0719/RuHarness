@@ -27,4 +27,4 @@
 └─────────────────────────────────┘└───────────────────────────────────────────────────────────────────────────────────┘
  The project's other programs and their decisions.
 
- ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit
+ ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   i what is this?   ? help   q quit

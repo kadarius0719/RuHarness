@@ -364,6 +364,7 @@ fn a_guessed_configuration_asks_for_the_build() {
             "Map the project again".into(),
             "Ask for a proposal — ask in chat".into(),
             "Ask in chat…".into(),
+            "What is this?".into(),
         ]
     );
     assert!(write_item(&app).starts_with("Write the build configuration (in "));
@@ -717,6 +718,7 @@ fn the_project_view_after_a_map_with_a_held_choice() {
             write_item(&app),
             "Map the project again".into(),
             "Ask for advice — ask in chat".into(),
+            "What is this?".into(),
         ]
     );
     assert_eq!(menu(&app).reason.as_deref(), Some("it needs a decision"));
@@ -1230,6 +1232,28 @@ fn after_an_accept_the_next_step_is_the_new_tool() {
     }
 }
 
+/// §9.5: every Project view menu ends with What is this?, which opens the
+/// row's card; a menu that would hold only the Next step's item is still
+/// skipped (Enter does it).
+#[test]
+fn project_menus_end_with_what_is_this() {
+    let (_tmp, root) = project("explain-menu");
+    write_map(&root, &map_text("stated", false));
+    let mut app = cockpit(&root);
+    app.select(Selection::Program("t-unlzg".into()));
+    code(&mut app, KeyCode::Enter);
+    assert_eq!(menu_labels(&app).last().unwrap(), "What is this?");
+    choose(&mut app, "What is this?");
+    let Mode::Explain { title, lines, .. } = &app.mode else {
+        panic!("no card: {:?}", app.mode)
+    };
+    assert_eq!(title, "t-unlzg");
+    assert!(lines[0].starts_with("tools/unlzg.c · "), "{lines:?}");
+    let screen = text(&render(&mut app, 120, 34));
+    assert!(screen.contains(" t-unlzg "), "{screen}");
+    assert!(screen.contains("Esc or i closes"), "{screen}");
+}
+
 /// A conversation in the chat never blocks the move between the Project
 /// view and a tool (the person's loop, 2026-10-19): Open tool asks — the
 /// conversation ends and a new chat starts for the tool — and `y` opens it;
@@ -1353,7 +1377,8 @@ fn the_project_view_after_an_accept() {
             "Accept again…".into(),
             write_item(&app),
             "Map the project again".into(),
-            "Ask for advice — ask in chat".into()
+            "Ask for advice — ask in chat".into(),
+            "What is this?".into(),
         ]
     );
     assert_eq!(

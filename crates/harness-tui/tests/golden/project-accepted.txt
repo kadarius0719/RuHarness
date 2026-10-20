@@ -31,4 +31,4 @@
 └──────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────┘
  Ready — ↑↓ to choose a row, Enter for what you can do
 
- ↑↓ move   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit
+ ↑↓ move   Enter actions   Tab pane   Esc back   c details   i what is this?   g re-read   ? help   q quit
