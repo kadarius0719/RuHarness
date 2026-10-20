@@ -192,7 +192,12 @@ impl App {
     /// (fix pass, item 1): the command spelled for this tool and target.
     pub(crate) fn command_line_way(&self, act: &str, unit: &str) -> String {
         harness_core::runtime_view::command_line_for(
-            &format!("{act} {unit}"),
+            // Migrate leaves the Accept to the person, as in the cockpit.
+            &if act == "migrate" {
+                format!("{act} {unit} --no-promote")
+            } else {
+                format!("{act} {unit}")
+            },
             &self.snapshot.ledger_rel(),
         )
     }

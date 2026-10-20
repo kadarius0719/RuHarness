@@ -227,7 +227,7 @@ The **cockpit** (the program `harness-tui`) is a full-screen view of the project
 
 You work left to right: pick something in **Files**, read about it in the **View**, and ask the **Chat** for model work. Each area is a **pane**; the one your keys go to has the **focus** and a highlighted border, and `Tab` moves it. A row with `▸` is folded and `▾` is open. The symbol beside each row is its state (section 16 lists them). Files lists `Units`, `Features` and `Speed` first, so all three are on screen even on a small window; the project's C files come last, in their folder, folded once the project has units (the folder's row sums up their marks, such as `⚠1 ✓0/13`, and `→` opens it). A unit is listed once, under `Units`. Its View says first, in words, what it is: its state and next step, its functions and how long each is, its files, its Rust, which features run it, its attempts. Its code comes last, under `▸ C source (Tab to the View, then Enter)`: `Tab` gives the View the keys (the heading then reads `▸ C source (Enter to open)`) and `Enter` opens it, the C beside its Rust once the unit has Rust, else the C alone. On a window narrower than 156 **columns** (the window's width, counted in letters) the chat shares the right side, and a `View │ Chat` tab on its border switches.
 
-**Every action waits in a dialog.** Every View starts with a line of the eight steps a program goes through (`Map ✓ · Configure ✓ · Accept ✓ · Scan ✓ · Plan ✓ · Test program ○ · Rust · Accept`: where you are), then a **Next step** line: what to do now, in one sentence. A unit with no test program leads to it: **Make the test program — ask in chat** comes first in its menu, and Migrate waits until it is made. Select a row and press `Enter`: a short menu lists what you can do with it now, the Next step's item first and highlighted, with a `↳ recommended: …` line saying why (an item that cannot run is greyed, and says why). Every item that changes something opens a dialog that says in words what it will write, then the exact command. It starts on the safe button, must be scrolled to its end, and only after a moment whole on screen says "ready: → then Enter". Keys typed or pasted before that, and a held-down `Enter`, never confirm anything. Only one command runs at a time.
+**Every action waits in a dialog.** Every View starts with a line of the eight steps a program goes through (`Map ✓ · Configure ✓ · Accept program ✓ · Scan ✓ · Plan ✓ · Test program ○ · Rust · Accept Rust`: where you are), then a **Next step** line: what to do now, in one sentence. A unit with no test program leads to it: **Make the test program — ask in chat** comes first in its menu, and Migrate waits until it is made. Select a row and press `Enter`: a short menu lists what you can do with it now, the Next step's item first and highlighted, with a `↳ recommended: …` line saying why (an item that cannot run is greyed, and says why). Every item that changes something opens a dialog that says in words what it will write, then the exact command. It starts on the safe button, must be scrolled to its end, and only after a moment whole on screen says "ready: → then Enter". Keys typed or pasted before that, and a held-down `Enter`, never confirm anything. Only one command runs at a time.
 
 **The chat** is an AI assistant (your own Claude Code) that can look up the project's state (its units, verdicts, attempts and pending questions) and ask the cockpit to do model work for you, but never runs anything itself. The cockpit starts Claude Code when you send your first message, with the line "starting Claude Code (signed in with …)"; it uses your own sign-in, never a key of the cockpit's. Every model item of the cockpit goes through the chat: **Migrate — ask in chat** on a unit, and on the Project view **Ask for advice — ask in chat** and **Ask for a proposal — ask in chat** (section 13), each typing its request into the chat for you to send.
 
@@ -431,7 +431,7 @@ Common options of `migrate`: `--model <name>` names who answers; `--provider <na
 | `10` | the judge said RED |
 | `130` | stopped with Ctrl-C; the harness stopped everything it had started |
 
-**The cockpit's keys.** The help's first page (`?`) shows the six you need to start — `↑ ↓` choose a row, `Enter` what you can do with it, `Tab` the next pane, `Esc` close or step back, `?` the help, `q` quit — and the three marks you meet first (`◇` no Rust yet, `✓` done, `⚠` needs attention); `↓` then lists them all:
+**The cockpit's keys.** The help's first page (`?`) shows the six you need to start — `↑ ↓` choose a row, `Enter` what you can do with it, `Tab` the next pane, `Esc` close or step back, `?` the help, `q` quit — and the three marks you meet first (`◇` no test program yet, `✓` done, `⚠` needs attention); `↓` then lists them all:
 
 | Key | What it does |
 |---|---|
@@ -458,18 +458,20 @@ In the chat, letters are text. `Enter` sends (or, on an empty input, reviews a w
 
 | Symbol | Meaning |
 |---|---|
-| `✗` | failing: the current verdict is red |
+| `✗` | failing: the judge's last check failed |
 | `⚠` | needs attention: a cause you can fix, named in the View |
-| `✓` | done: its Rust is accepted and checked (steered / by hand when a note or an edit made it) |
-| `✓?` | Rust green — accept it: an attempt passed every check and waits for you; on a done unit, verified with no attempt known to have produced it |
-| `◐` | Rust tried: attempts exist, none green |
-| `◇` | no test program / test program ready: no Rust yet — make its test program, then its Rust |
+| `✓` | done: its Rust is accepted and checked (steered / by hand when a note or an edit made it; the card says when the cockpit does not know which try made it) |
+| `✓?` | Rust green — accept it: a try passed every check and waits for you |
+| `◐` | Rust tried: tries exist, none green |
+| `⚑` | waiting for your answer: a try stopped at a question for a model |
+| `◈` | test program ready: its Rust is next |
+| `◇` | no test program (or out of date): make its test program first |
+| `·` | stays C: a piece that calls other pieces cannot be tested alone in this version; also a header |
 | `⊘` | blocked |
 | `!` | changed since the scan |
 | `+` | not scanned yet |
 | `?` | missing: the scan recorded it, the tree no longer has it |
-| `·` | a header |
-| `–` | no exported functions (never planned) |
+| `–` | nothing to move (no functions of its own) |
 | `○` | not in the plan |
 | `⊖` | not part of this tool: a project file the open tool does not list |
 | `✓0/13` | on a folder: 0 of its 13 C files are in Rust (`⚠1`: one needs attention); the View's title says it in words |

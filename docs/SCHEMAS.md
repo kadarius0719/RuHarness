@@ -974,11 +974,14 @@ runner}` + `heldout/tools/…` (never inside a target root), `scores.json`.
   `attempt` event (`promotion` "promoted: the unit's test program" when the driver was
   promoted, "not promoted: not green" when red), and a red run's last message names the failed
   checks: "gen-driver: the test program did not pass: <check>, …".
-- `harness migrate` on a unit with no usable `[unit.oracle]` is refused (`invalid-plan`, before
-  any model call) in words naming the missing stage: "<unit> has no test program yet: make one
-  first (`harness gen-driver <unit> [--tool …]`, or Make the test program in the cockpit)"; a
-  kind other than `c-abi-differential`, a table with no `driver` and one with no `rust_crate`
-  each say what is missing the same way (§9.4).
+- `harness migrate` on a unit with no usable `[unit.oracle]` is refused (before any model call,
+  exit 1) in words naming the missing stage, without an "invalid plan:" prefix (the plan is
+  fine; fix pass 2026-10-20): "error: <unit> has no test program yet: make one first (`harness
+  gen-driver <unit> [--tool …] [--target …] [--model <the run's --model>]`, or Make the test
+  program in the cockpit)"; a unit that calls others: "error: <unit> calls <units>, so in this
+  version it stays C: the judge tests each unit alone"; a kind other than `c-abi-differential`,
+  a table with no `driver` and one with no `rust_crate` each say what is missing the same way
+  (§9.4). The `--json` error's kind for these is `harness`.
 - `harness bench vendor --suite DIR --from CHECKOUT` — checkout's detached HEAD must
   equal the pin; never overwrites a vendored file with different bytes.
 - `harness bench verify-corpus | status | init [--check] --suite DIR` (`status`, `init`,
@@ -2146,13 +2149,19 @@ there). A project with exactly one tool and no
 map opens that tool, with the same first row. harness-mcp never runs these acts.
 
 **The guided path** (2026-10-20, docs/COCKPIT-WRAPPER-DESIGN.md §9.4). Every View's first line
-is the journey line of the eight stages — Map, Configure, Accept (the project's), Scan, Plan
-(the tool's), Test program, Rust, Accept (each unit's): on a unit's screen its own last three,
-on the tool's whole screen the units past each ("Test program 2/4 ○ · Rust 1/4 · Accept 1/4"),
-folded to "Step N of 8: <stage>" under 100 columns or where it does not fit. A unit's state word
-says its stage: "◇ no test program", "◇ test program out of date", "◇ test program ready", "◐ Rust
-tried", "✓? Rust green — accept it", "✓ done" (with "(steered)", "(asked in chat)", "(by hand)"),
-besides "✗ failing", "⚠ needs attention", "⊘ blocked" and "✓? verified, origin not recorded". The
+is the journey line of the eight stages — Map, Configure, Accept program (the project's), Scan,
+Plan (the tool's), Test program, Rust, Accept Rust (each unit's): on a unit's screen its own last
+three, on the tool's whole screen the pieces that can move past each ("Test program 2/2 · Rust
+1/2 ○ · Accept Rust 1/2"; none before a plan, "Scan ○" or "Plan ○" alone), the `○` on the stage
+the Next line's act belongs to (fix pass 2026-10-20), "Map again" while the build configuration is
+newer than the map, folded to "Step N of 8: <stage>" under 100 columns or where it does not fit.
+A unit's state word says its stage: "◇ no test program", "◇ test program out of date", "◈ test
+program ready", "◐ Rust tried", "⚑ waiting for your answer" (a try in progress), "✓? Rust green —
+accept it", "✓ done" (with "(steered)", "(asked in chat)", "(by hand)"; a verified one no try is
+known to have made is "✓ done" too, its card saying "origin not recorded"), "· stays C (calls
+<units>)" (it has `depends_on`), besides "✗ failing", "⚠ needs attention" and "⊘ blocked"; under
+about 36 columns the short forms "no test", "outdated", "ready", "tried", "waiting", "accept?",
+"done", "stays C". The
 read model's `UnitView.driver` is `None | Validated | Stale` (from the plan's `[unit.oracle]` —
 kind, driver, rust_crate — and `driver-validation.json`; a driver with neither a validation nor
 driver attempts is one written by hand: Validated), and harness-mcp's `harness_unit` and
@@ -2166,11 +2175,17 @@ judge does and what is written, then `harness --json gen-driver <unit> --target=
 Continue re-runs that shape with `--answer=-`. Its outcome line: "✓ <unit>'s test program is
 ready — next, its Rust", or "✗ <unit>'s test program did not pass the judge's checks — it did
 not pass: <checks> — ask the chat to make it again". While a dialog, a menu or the help is open
-every cell behind it is drawn in the role `backdrop` (248 dark, 242 light, the terminal's bright
+every cell behind it is drawn in the role `backdrop` (243 dark, 242 light, the terminal's bright
 black, dim in mono; no bold, no state colours, no reverse), and the box's cells sit on the role
-`panel`'s background (235 dark, 254 light, none in terminal and mono): its frame and title in the
-section role, bold, its `Command:` line in the label role, the safe button plain reversed, the
-armed one in the accent reversed. Both roles may be set in `cockpit.toml`'s `[colors]`.
+`panel`'s background (237 dark, 254 light, none in terminal and mono): its frame and title in the
+section role, bold, its `Command:` line in the label role, only the focused button reversed (the
+safe one plain, the armed one in the accent). Both roles may be set in `cockpit.toml`'s `[colors]`.
+With the chat off (`--no-chat`) the Next line and the greyed model items name the command line's
+step, spelled for the tool (`harness gen-driver <unit> --tool <id>`, `harness migrate <unit>
+--no-promote --tool <id>`). The Project view prefers a tool with work waiting (Rust to accept, an
+answer to give), then a program that links, then one that needs a decision; an accepted tool's
+card gives its progress from its ledger ("4 pieces · 1 done · 2 stay C").
+
 
 ## `harness project ask` (docs/PROJECT-MAP-DESIGN.md §3.4, §3.8, §5 step d)
 

@@ -60,6 +60,8 @@ pub struct ToolProgress {
     pub accept: usize,
     /// Of them, with a try that waits for an answer.
     pub answer: usize,
+    /// Of them, calling other pieces: they stay C in this version.
+    pub stay_c: usize,
 }
 
 impl ToolProgress {
@@ -78,6 +80,10 @@ impl ToolProgress {
             p.pieces += 1;
             if matches!(u.status.as_str(), "verified" | "merged") {
                 p.done += 1;
+                continue;
+            }
+            if !u.depends_on.is_empty() {
+                p.stay_c += 1;
                 continue;
             }
             let attempts = dir.join("units").join(&u.id).join("attempts");
@@ -121,6 +127,9 @@ impl ToolProgress {
         }
         if self.answer > 0 {
             parts.push(format!("{} waits for your answer", self.answer));
+        }
+        if self.stay_c > 0 {
+            parts.push(format!("{} stay C", self.stay_c));
         }
         parts.join(" · ")
     }

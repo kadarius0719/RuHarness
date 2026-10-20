@@ -3686,3 +3686,63 @@ followed moved `acceptable` into `files.rs`.
 
 **Not done here; the person's to run once:** the live chat tests (the brief and the tool list
 changed); a real Make the test program through the chat on liblzg.
+
+**Fix pass after the newcomer check** (an Opus checker walked the build on liblzg, the whole
+journey, at four sizes and in four themes, the same day). Changed:
+- **The chat off is a way, not a wall.** With `--no-chat`, the Next line and the greyed model
+  items name the command-line step spelled for the tool (`Make the test program — run harness
+  gen-driver u-version --tool t-lzg (the chat is off)`; `harness migrate u-version --no-promote
+  --tool t-lzg`, so the Accept stays the person's); the Project card's no-advice line spells
+  `harness project ask` with its target.
+- **Pieces that call others stay C, said so.** `· stays C (calls u-checksum)`: out of the tool's
+  counts and the journey, Make the test program and Migrate greyed "it calls u-checksum, so in this
+  version it stays C", and migrate's refusal says that instead of "make one first". The guide's
+  Step 7.1 quotes it.
+- **A waiting try is a state.** `⚑ waiting for your answer` when a try is in progress; its Next
+  names the answer file (a command-line run) or Resume (the cockpit's), never a new try; the tool's
+  Next opens it first.
+- **The project's Next and the tool's card.** A tool with Rust waiting for Accept (or an answer)
+  comes first, then a program that links, then one that needs a decision; an accepted tool's card
+  says its progress, read cheaply from its plan and try records (`4 pieces · 1 done · 2 stay C`),
+  and the card's `Enter:` line shows whenever the program's own next differs. Its menu leads with
+  Open tool, then `Accept again…`.
+- **The journey.** Its `○` sits on the stage the Next line's act belongs to (a test walks every
+  row of two targets); `Accept program` and `Accept Rust`; no counts before a plan (`Scan ○` or
+  `Plan ○` alone); `Map again ○` with Configure kept done after a new build configuration.
+- **Words.** The tool's Next is one line (`2 of the 4 can move to Rust now — Migrate u-checksum:
+  Enter`); the plan notice and the Refresh dialog name `git diff` only in a git checkout; Scan,
+  Refresh the plan and Accept dialogs in plain words, Accept's button `Accept`; `1 not set up
+  (whole program)`; `Its Rust: from try a-49ed · the judge says green, up to date`; `green, but
+  the C changed since — re-check`; tries' rows `in use`, `of older C`; `Try a-49ed · waiting for
+  your answer`; the build configuration dialog's include folders and defines; the legend; a
+  verified unit no try is known to have made is plain `✓ done` (the card says "origin not
+  recorded"). migrate's refusal drops `invalid plan:` and repeats the person's `--model`. No
+  in-pane `Last:` line on the tool's screen; `done` lower case.
+- **Narrow panes.** `◈ test program ready` has its own mark; a unit row drops its word's padding
+  first, then uses a short word (`no test`, `ready`, `tried`, `waiting`, `accept?`, `done`,
+  `stays C`), then cuts the name, never under six letters; the help names `files_width`.
+- **Dialogs.** Dark backdrop 243 and panel 237; only the focused button reversed; light label 238
+  (the dialog's command line, apart from the 242 backdrop); menus widen to their longest reason
+  (the screen less 4) and wrap the rest onto indented lines.
+- **Docs.** FIRST-HOUR §3 says the cockpit runs the same steps and that the command line accepts
+  green Rust itself; the cockpit topic's states, marks, journey, chat-off way, sample
+  `files_width = 40`, the backdrop fix for Solarized Dark; TUTORIAL's legend; drivers.md quotes
+  the refusal as it prints; a guide section 12D, "The journey in the cockpit" (Steps 12.29–12.35,
+  seen with cockpit.py), and Part 12's checkpoint.
+
+Decided:
+- The mark of a piece that stays C is `·` (the header's mark: neither moves); its short word
+  `stays C`. The ready mark is `◈`; the waiting mark `⚑` (the attention colour).
+- A Re-check names stage 8, `Accept Rust ○` (a verdict made here is what Accept means), not
+  Rust: the Rust exists, it is its check that is due.
+- The backdrop is not "text" for the contrast test any more (3:1, like a frame): it is not read
+  while the box is open, and 243 is 3.7:1 on #1e1e1e. At the 237 panel the dark theme's bad (203)
+  and disabled (246) were under 4.5:1 and became 210 and 249.
+- The tool's counts leave out pieces that stay C; its total is "the N" of `M of the N can move`
+  (blocked ones left out).
+- The chat-off Migrate command carries `--no-promote`, so the person's Accept stays in the
+  cockpit, matching the guide's 12D.
+- At 100 columns the 30-column floor still wins over the View's 80; with the six-letter rule and
+  the short words, rows keep a state word there (the 100-column golden shows it).
+- `harness migrate`'s stage refusals now leave as the CLI's plain error (`kind: harness`
+  under `--json`), not `invalid-plan`; the plan's real structural errors keep `invalid plan:`.

@@ -35,7 +35,7 @@ Normally a model writes the driver. The question goes through a **hand-off** (qu
 
 If it asks again instead, your answer was not usable: the record of that try says why (`format` for the layout, `build` for compiling, `check` or `oracle` for a broken rule or a weak test).
 
-In the cockpit you need none of this: a unit with no test program offers **Make the test program — ask in chat** (cockpit topic). The chat answers the same question; the cockpit runs `harness gen-driver <unit> --requester=chat`, whose questions wait under the unit's `driver-traces/chat/` and whose answers the chat gives through the cockpit. `migrate` on a unit with no test program says so: `u-x has no test program yet: make one first (…)`.
+In the cockpit you need none of this: a unit with no test program offers **Make the test program — ask in chat** (cockpit topic). The chat answers the same question; the cockpit runs `harness gen-driver <unit> --requester=chat`, whose questions wait under the unit's `driver-traces/chat/` and whose answers the chat gives through the cockpit. `migrate` on a unit with no test program says so: `error: u-checksum has no test program yet: make one first (`harness gen-driver u-checksum --target targets/lzg`, or Make the test program in the cockpit)` (with your own `--model` repeated when you gave one).
 
 ## Try it
 

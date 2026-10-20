@@ -143,10 +143,13 @@ impl App {
                     )
                 } else {
                     match self.pending_answer(unit) {
+                        // The command line's try: its answer is the
+                        // person's (the chat answers only its own tries).
                         Some(path) => advice(
-                            crate::app::waiting_words(
-                                &crate::app::short_file(&path),
-                                "run the same migrate command again",
+                            format!(
+                                "waiting for your answer: {} — write the reply there, then run \
+                                 the same migrate command again",
+                                crate::app::short_file(&path)
                             ),
                             None,
                         ),
@@ -165,8 +168,8 @@ impl App {
                 if let Some(a) = acceptable(unit) {
                     advice(
                         format!(
-                            "attempt {} is GREEN and waits for you — open it, look over its \
-                             code, then Accept it",
+                            "try {} passed every check — open it, look over its code, then \
+                             Accept it",
                             crate::app::short_id(a)
                         ),
                         Some(Action::ChooseAttempt(id.to_string())),

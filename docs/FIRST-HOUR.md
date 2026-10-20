@@ -62,6 +62,7 @@ harness project map && harness project accept t-lzg
 ## 3. Move one piece to Rust, writing the answers yourself (about 2 minutes on an M3 Mac)
 
 Every box below starts by going into the copy, so a new window or a break does no harm.
+The same steps run in the cockpit (`harness-tui` in `~/lzg-map`), which shows the step you are at on every screen; with Claude Code signed in, its chat makes the test program and the Rust for you (docs/topics/cockpit.md).
 Read its C and cut it into pieces, then ask for a test program for the smallest piece, `u-version`; it stops here on purpose: it is waiting for your answer, so the last line is `error: awaiting response: …`.
 ```bash
 cd ~/lzg-map && harness scan --tool t-lzg && harness plan --tool t-lzg && harness gen-driver u-version --tool t-lzg --model guide-written
@@ -116,7 +117,7 @@ pub unsafe extern "C" fn LZG_VersionString() -> *const u8 { crate::logic::versio
 RUHARNESS_END_OF_OUTPUT
 EOF
 ````
-Put it in the answer file and ask again; look for `u-version promoted and verified — status set to verified`.
+Put it in the answer file and ask again; look for `u-version promoted and verified — status set to verified`. On the command line a green Rust is accepted for you ("promoted" means accepted); the cockpit asks you first.
 ```bash
 cd ~/lzg-map && REQ=$(ls -t migration/tools/t-lzg/units/u-version/traces/*.request.json | head -n 1) &&
 RESP="${REQ%.request.json}.response.json" &&

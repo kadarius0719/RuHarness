@@ -2639,7 +2639,7 @@ harness-tui --target targets/lzg
 **You should see** a full-screen view:
 
 - the **Files** pane on the left, with the project row `lzg`, then `Units (5)` with its five units under it, then `Features (none yet)`, `Speed — not set up`, and last the folder `src/`, folded (`▸`), its marks summed up at its right edge;
-- the **View** on the right, starting with a line that says where you are among the eight steps a program goes through: on a wide window `Map ✓ · Configure ✓ · Accept ✓ · Scan ✓ · Plan ✓ · Test program 1/5 ○ · Rust 0/5 · Accept 0/5` (one unit of five has its test program, from Part 3), on a narrower one `Step 6 of 8: Test program 1/5`; then a line `Next: 2 units have no Rust yet — migrate the first, u-checksum: press Enter and choose Migrate — ask in chat`, then a summary such as `7 files scanned`, `Units (5): 1 ◇ test program ready · 4 ◇ no test program` and `Features: none yet — see Features`; its title says in words how many of the C files are in Rust (`0 of … C files in Rust`);
+- the **View** on the right, starting with a line that says where you are among the eight steps a program goes through: on a wide window `Map ✓ · Configure ✓ · Accept program ✓ · Scan ✓ · Plan ✓ · Test program 1/2 · Rust 0/2 ○ · Accept Rust 0/2` (two of the five pieces can move to Rust; one has its test program, from Part 3; the `○` sits on the step the Next line names), on a narrower one `Step 7 of 8: Rust 0/2`; then a line `Next: 2 of the 5 can move to Rust now — Migrate u-checksum: Enter`, then a summary such as `7 files scanned`, `Units (5): 1 ◈ test program ready · 3 · stays C · 1 ◇ no test program` and `Features: none yet — see Features`; its title says in words how many of the C files are in Rust (`0 of … C files in Rust`);
 - the line `Ready — ↑↓ to choose a row, Enter for what you can do` under the panes (it says only `Ready.` while a menu, a dialog, the View or the chat has the keys);
 - a key bar at the bottom, like `↑↓ move   ←→ fold/open   Enter actions   Tab pane   …   q quit`.
 
@@ -2668,8 +2668,8 @@ The cockpit acts on whatever is selected, so you select the unit first.
 
 **You should see** in the View, in words first:
 
-- the step line, now `u-checksum`'s own: `… Test program ✓ · Rust ○ · Accept` (on a narrower window `Step 7 of 8: Rust`);
-- `◇ u-checksum test program ready`;
+- the step line, now `u-checksum`'s own: `… Test program ✓ · Rust ○ · Accept Rust` (on a narrower window `Step 7 of 8: Rust`);
+- `◈ u-checksum test program ready`;
 - `Next: No Rust yet — ask the chat to migrate it (a model writes the Rust, the judge checks it, you accept it)`;
 - `1 exported function: _LZG_CalcChecksum (… lines)` and `Its C: 1 file — …checksum.c`;
 - `No Rust yet` and `Attempts: none yet`;
@@ -2809,7 +2809,7 @@ Accepting is your decision, so look first.
 
 **You should see** in the View:
 
-- `Attempt a-<12hex> · green · provider external · model <model> · asked in chat`;
+- `Try a-<4hex> · green · model <model> · asked in chat`;
 - the turns, for example `Turns: 1 translate → green`;
 - the C of `_LZG_CalcChecksum` next to its Rust;
 - the checks at the bottom.
@@ -2863,7 +2863,7 @@ Accepting is your decision, so look first.
 Ready. Last: Accept a-<4hex> into u-checksum — GREEN — all 8 checks passed (<time>)
 ```
 
-In Files, `u-checksum` now shows `✓` (so does `checksum.c`, inside the folded `src/` folder). The View's line under the step line reads `✓ u-checksum done (asked in chat)`, and the step line has every step ticked (`All 8 steps done ✓` on a narrower window). The attempt row reads `✓ a-<4hex> green *c asked in chat` (`*c` marks the attempt the unit's crate came from).
+In Files, `u-checksum` now shows `✓` (so does `checksum.c`, inside the folded `src/` folder). The View's line under the step line reads `✓ u-checksum done (asked in chat)`, and the step line has every step ticked (`All 8 steps done ✓` on a narrower window). The attempt row reads `✓ a-<4hex> green in use asked in chat` (`in use` marks the try the unit's Rust came from).
 
 **What it means.** The cockpit ran `harness --json promote u-checksum a-<12hex> --target=…`. That created the crate `migration/units/u-checksum/u_checksum_rs/`, ran every check again in that final place, wrote the verdict files (`oracle-latest.json`, `oracle-latest.md`, `oracle-last-green.json`) and set `status = "verified"` in `plan.toml`. This answers the part's question: yes.
 
@@ -3925,7 +3925,7 @@ Press one key at a time, and check the screen after each:
 
 1. Press `Tab` to leave the chat. **You should see** the focus go to the Files list.
 2. Press `↑` or `↓` until `u-version` is highlighted, then press `→` to open it. **You should see** its `crate` row and a new attempt row `a-<4hex>` marked `✓` under it.
-3. Press `↓` until the attempt row is highlighted. **You should see** a line in the View start `Attempt a-<12hex> · green`, and the checks at the bottom all with `✓`. You do not need to judge the Rust: the checks did that.
+3. Press `↓` until the attempt row is highlighted. **You should see** a line in the View start `Try a-<4hex> · green`, and the checks at the bottom all with `✓`. You do not need to judge the Rust: the checks did that.
 4. Press `Enter`. **You should see** a menu with `Accept a-<4hex> into u-version`.
 5. Press `↓` until that item is highlighted, then press `Enter`. **You should see** the dialog `Accept a-<12hex> into u-version?`, as in Step 4.11.
 6. When the dialog says `ready`, press `→` and then `Enter`. **You should see** the activity line say `Running the judge…`.
@@ -4108,7 +4108,7 @@ In plain words: **the judge builds each unit's test program with only that unit'
 
 ### Step 7.1 — See the harness refuse (optional)
 
-This step is **meant to stop with the word `error`**. The harness refuses before any model call, and nothing that git tracks changes. The words `invalid plan` do not mean you broke the plan: they mean the plan has no way to test this unit.
+This step is **meant to stop with the word `error`**. The harness refuses before any model call, and nothing that git tracks changes. The message does not mean you broke anything: it says why this unit cannot move.
 
 **Run.**
 
@@ -4119,7 +4119,7 @@ harness migrate u-encode --target targets/lzg
 **You should see.**
 
 ```text
-error: invalid plan: u-encode has no test program yet: make one first (`harness gen-driver u-encode --target targets/lzg`, or Make the test program in the cockpit)
+error: u-encode calls u-checksum, so in this version it stays C: the judge tests each unit alone
 ```
 
 **Run.**
@@ -4130,7 +4130,7 @@ echo "exit=$?"
 
 **You should see** `exit=1`: the harness refused.
 
-**What it means.** `u-encode` has no test program (no tested driver), so the harness will not translate it. The message names the step that was skipped and how to take it, as Part 3 did for `u-checksum`. For this unit, though, even `gen-driver` would fail, because its driver cannot be linked without `checksum.c`.
+**What it means.** `u-encode` calls `checksum.c`'s function, so no test program of its own could be built, and the harness says so before anything runs. The cockpit shows such a unit as `· stays C (calls u-checksum)`, greys Make the test program and Migrate on it, and leaves it out of the step line's counts.
 
 **If you do not see that.** Anything that starts `awaiting response:` means the harness is about to ask a model: that should not happen for `u-encode`. Run `git status --short`; if it lists files, run `git restore targets/lzg` and ask for help.
 
@@ -4688,7 +4688,7 @@ harness-tui --target targets/lzg
 - `✓ u-checksum done (asked in chat)`;
 - a `Next:` line, such as `Next: In Rust and checked — nothing to do`;
 - `1 exported function: _LZG_CalcChecksum (… lines)` and `Its C: 1 file — …checksum.c`;
-- a line about the crate that ends `verdict green, fresh`;
+- a line about its Rust that ends `the judge says green, up to date`;
 - a cyan line saying how many of your features run this unit (the colour depends on your Terminal's theme);
 - `Attempts: …`, how many and how they came out;
 - a row of checks similar to `✓ same exports ✓ allowed calls only ✓ driver shape ✓ same outputs as C ✓ whole program ×3 ✓ sanitizers ✓ scenarios ×3 (1 run this unit)`;
@@ -4696,7 +4696,7 @@ harness-tui --target targets/lzg
 
 **What it means.** This is the same verdict `harness verify` printed in Part 5, in short form.
 
-**If you do not see that.** `verdict green, STALE` means something changed since the last verify: Step 9.6's re-check refreshes it. If you cannot find `Units (5)`, press `↑` until `lzg` is highlighted: `Units (5)` is the row under it.
+**If you do not see that.** `green, but … — re-check` means something changed since the last verify: Step 9.6's re-check refreshes it. If you cannot find `Units (5)`, press `↑` until `lzg` is highlighted: `Units (5)` is the row under it.
 
 ### Step 9.5 — Show the checks, then close them
 
@@ -4754,7 +4754,7 @@ Ready. Last: Re-check u-checksum — GREEN — all 11 checks passed (<time>)
 
 **Do.** Press `↑` to highlight `u-decode`.
 
-**You should see** `◇ no test program`, and the View says something like `None of your features runs this unit's functions, so their checks pass whatever its Rust does.`
+**You should see** `· stays C (calls u-checksum)`, and the View says something like `None of your features runs this unit's functions, so their checks pass whatever its Rust does.`
 
 **What it means.** The cockpit warns you before you migrate a unit your features would not test (Part 8 found this).
 
@@ -4809,7 +4809,7 @@ Does the cockpit show the same truth as the command line? Yes: its re-check in S
 
 ### Checkpoint — the cockpit is working if…
 
-- [ ] The Files list showed `u-checksum` and `u-version` as `✓ done`, and the other three units as `◇ no test program`.
+- [ ] The Files list showed `u-checksum` and `u-version` as `✓ done`, and the other three units as `· stays C`.
 - [ ] Step 9.6 ended `Ready. Last: Re-check u-checksum — GREEN — all 11 checks passed`.
 - [ ] The `Features (3)` group listed `compress`, `version` and `no-file`.
 - [ ] Step 9.11 printed `0`.
@@ -6526,7 +6526,7 @@ harness-tui --target ~/lzg-cockpit
 
 ```text
 lzg-cockpit · not mapped yet
-Map ○ · Configure · Accept · then: scan, plan, and each piece
+Map ○ · Configure · Accept program · then: scan, plan, and each piece
 Next: Map the project — Enter
 
 Nothing is mapped yet.
@@ -6565,7 +6565,7 @@ Programs (3)
 and the right pane, for the selected row (`t-benchmark`):
 
 ```text
-Map ✓ · Configure ○ · Accept · then: scan, plan, and each piece
+Map ✓ · Configure ○ · Accept program · then: scan, plan, and each piece
 Next: Write the build configuration — Enter, or Ask for a proposal in the chat
 
 t-benchmark                                                     ⚠ needs a decision
@@ -6653,8 +6653,8 @@ Advice comes once the build configuration is written and the project mapped agai
 **You should see** the right pane now begin:
 
 ```text
-Map ✓ · Configure ✓ · Accept ○ · then: scan, plan, and each piece
-Next: Accept t-benchmark — Enter on its row, it asks for the file
+Map ✓ · Configure ✓ · Accept program ○ · then: scan, plan, and each piece
+Next: Accept t-lzg — Enter on its row
 ```
 
 and the card's last line says how advice comes: `No advice yet — Enter, then Ask for advice (the chat answers)` (with `--no-chat`: `ask a model with harness project ask on the command line`).
@@ -6700,7 +6700,7 @@ and the card's last line says how advice comes: `No advice yet — Enter, then A
    ✓ t-unlzg                 accepted
    ```
 
-   with `t-unlzg` still selected: an accepted program's row is its tool's row. The right pane begins `Map ✓ · Configure ✓ · Accept ✓ · then: scan, plan, and each piece` and `Next: Open tool t-unlzg — Enter on its row` (the tool you just accepted comes first, until you move to another row), and the card says `Its build configuration: migration/tools/t-unlzg/harness.toml`.
+   with `t-unlzg` still selected: an accepted program's row is its tool's row. The right pane begins `Map ✓ · Configure ✓ · Accept program ✓ · then: scan, plan, and each piece` and `Next: Open tool t-unlzg — Enter on its row` (the tool you just accepted comes first, until you move to another row), and the card says `Its build configuration: migration/tools/t-unlzg/harness.toml`.
 
 6. Press `Enter`. **You should see** a menu whose first item is `Open tool t-unlzg`, with `↳ recommended: it is accepted`.
 7. Press `Enter`. **You should see** the tool's screen: `Next: Nothing is scanned yet — press Enter and choose Scan the project`, and in Files, first, the row `◂ Back to the project view`. Under it come the tool, `Features` and `Speed`, then the project's folders and files, open (the tool has no units yet: once it has, the folders start folded and `Units` comes first). The project's files that are not part of the tool are greyed out and marked `⊖`.
@@ -6718,6 +6718,143 @@ and the card's last line says how advice comes: `No advice yet — Enter, then A
 
 If I edit the C, does the harness notice? Yes: the map named `t-lzg` as changed (Step 12.16) and the status showed the stale verdict (Step 12.17). What do I do? Accept again, scan, plan and verify (Steps 12.18–12.21), which ended GREEN. And the cockpit does the same from its Project view, through the same dialogs as everywhere else (Steps 12.23–12.28).
 
+### 12D — The journey in the cockpit
+
+The cockpit walks a program through every step: scan, plan, the test program, the Rust, and your Accept. With the chat off (`--no-chat`) it names the command for each step a model would do, and you answer that step by hand in a second Terminal window, as in 12B. This uses `~/lzg-cockpit` from 12C and your two answer files from 12B (`~/lzg-practice/version-driver.c` and `~/lzg-practice/version-answer.txt`). The screens below were seen on a 200-column window; on a narrower one the step line is shorter (`Step 6 of 8: Test program`) and long lines wrap.
+
+#### Step 12.29 — Open the cockpit with the chat off and accept the compressor
+
+**Run.**
+
+```bash
+harness-tui --target ~/lzg-cockpit --no-chat
+```
+
+**Do.** One key at a time: press `↓` until `t-lzg` (`links`) is highlighted, press `Enter`, then `Enter` again on `Accept this program`, wait for `ready: → then Enter, or y`, and press `y`.
+
+**You should see** `Ready. Last: Accept t-lzg — done (1 s); c for details`, and the right pane:
+
+```text
+Map ✓ · Configure ✓ · Accept program ✓ · then: scan, plan, and each piece
+Next: Open tool t-lzg — Enter on its row
+```
+
+with the card saying `not scanned and planned yet` under `Its build configuration: migration/tools/t-lzg/harness.toml`.
+
+**What it means.** The first three steps, the project's, are done for `t-lzg`. The card's last line is the tool's progress, read from its ledger; it fills in as you go.
+
+**If you do not see that.** If the menu's first item was `Open tool t-lzg`, the program was already a tool: go on to the next step.
+
+#### Step 12.30 — Open the tool, scan and plan
+
+**Do.** One key at a time: press `Enter` twice (the menu, then `Open tool t-lzg`). Then press `Enter`, choose `Scan the project`, wait for `ready`, press `y`. Then press `Enter`, choose `Refresh the plan`, wait for `ready`, press `y`.
+
+**You should see** first `Map ✓ · Configure ✓ · Accept program ✓ · Scan ○ · Plan`, then after the scan `… · Scan ✓ · Plan ○`, and after the plan:
+
+```text
+Map ✓ · Configure ✓ · Accept program ✓ · Scan ✓ · Plan ✓ · Test program 0/2 ○ · Rust 0/2 · Accept Rust 0/2
+Next: 2 of the 4 can move to Rust now — open u-checksum: Enter
+```
+
+and under `Units (4)`: `◇ u-checksum no test program`, `· u-encode stays C (calls u-checksum)`, `◇ u-version no test program`, `· u-lzg stays C (calls u-encode, u-version)`.
+
+**What it means.** The tool is cut into four pieces; two can move to Rust (the counts are of those two), and the two that call other pieces stay C, as Part 7 explained. The `○` sits on the step the `Next:` line names.
+
+**If you do not see that.** `Refresh the plan — nothing is scanned yet` greyed: the scan did not finish; look at `c` for its words and scan again.
+
+#### Step 12.31 — See the test program's step
+
+**Do.** Press `↓` until `u-version` is highlighted.
+
+**You should see** in the View:
+
+```text
+Map ✓ · Configure ✓ · Accept program ✓ · Scan ✓ · Plan ✓ · Test program ○ · Rust · Accept Rust
+◇ u-version no test program
+Next: Make the test program — run harness gen-driver u-version --tool t-lzg --target /Users/<you>/lzg-cockpit (the chat is off)
+```
+
+**What it means.** The chat is off, so the cockpit names the command that makes the test program. With the chat on, `Enter` would offer `Make the test program — ask in chat` instead, and the chat would write it.
+
+**If you do not see that.** A line ending `then ask in chat` means the cockpit was started without `--no-chat`: quit (`q`) and start it again as in Step 12.29.
+
+#### Step 12.32 — Make the test program in a second window
+
+**Do.** Open a second Terminal window (Cmd and `N`), leaving the cockpit open in the first.
+
+**Run** in the second window. It stops on purpose (`error: awaiting response: …`), then your answer from 12B is put where it waits, and the same command runs again.
+
+````bash
+cd ~/lzg-cockpit && harness gen-driver u-version --tool t-lzg --model guide-written;
+REQ=$(ls -t migration/tools/t-lzg/units/u-version/driver-traces/*.request.json | head -n 1) &&
+RESP="${REQ%.request.json}.response.json" &&
+jq -n --rawfile d ~/lzg-practice/version-driver.c '{text: ("driver.c\n```c\n" + $d + "```\nRUHARNESS_END_OF_OUTPUT\n"), input_tokens: 0, output_tokens: 0, stop_reason: "end_turn"}' > "$RESP" &&
+harness gen-driver u-version --tool t-lzg --model guide-written
+````
+
+**You should see** last `gen-driver: promoted migration/tools/t-lzg/units/u-version/driver.c and recorded …driver-validation.json`.
+
+**Do.** Back in the cockpit's window, press `g`.
+
+**You should see** `◈ u-version test program ready`, the step line `… Test program ✓ · Rust ○ · Accept Rust`, and `Next: Migrate — run harness migrate u-version --no-promote --tool t-lzg --target /Users/<you>/lzg-cockpit (the chat is off)`.
+
+**What it means.** The judge checked your test program against the C and kept it. `◈` marks a piece whose Rust is next.
+
+**If you do not see that.** `ls: … No such file or directory`: the first command did not stop at `awaiting response`; read its last line and look in [Troubleshooting](#troubleshooting).
+
+#### Step 12.33 — Make the Rust in the second window
+
+**Run** in the second window. `--no-promote` leaves the Accept to you in the cockpit.
+
+```bash
+cd ~/lzg-cockpit && harness migrate u-version --no-promote --tool t-lzg --model guide-written
+```
+
+**You should see** `error: awaiting response: …/units/u-version/traces/<key>.response.json`.
+
+**Do.** In the cockpit, press `g`.
+
+**You should see** `⚑ u-version waiting for your answer`, and a `Next:` line starting `Waiting for your answer: …/u-version/traces/<key>.response.json — write the reply there, then run the same migrate command again`.
+
+**Run** in the second window: your Rust from 12B, then the same command again.
+
+```bash
+cd ~/lzg-cockpit && REQ=$(ls -t migration/tools/t-lzg/units/u-version/traces/*.request.json | head -n 1) &&
+RESP="${REQ%.request.json}.response.json" &&
+jq -Rs '{text: ., input_tokens: 0, output_tokens: 0, stop_reason: "end_turn"}' ~/lzg-practice/version-answer.txt > "$RESP" &&
+harness migrate u-version --no-promote --tool t-lzg --model guide-written
+```
+
+**You should see** last `migrate: green attempt recorded; not promoted (--no-promote)`.
+
+**What it means.** A try that waits for an answer is its own state, so the cockpit never suggests starting a new try over it. The Rust passed every check, and waits for you.
+
+**If you do not see that.** `-> RED`: the answer file is not the one from Step 12.13; compare it with that step.
+
+#### Step 12.34 — Accept the Rust in the cockpit
+
+**Do.** In the cockpit, press `g`, then `Enter`, then `Enter` on `Accept a-<4hex> into u-version (opens it first)`, then `a`. Wait for `ready: → then Enter, or y`, and press `y`.
+
+**You should see** before `y` the dialog `Accept a-<12hex> into u-version?` saying `Makes this try u-version's Rust and runs the judge on it once more …`, with the buttons `[ Cancel  Esc ] [ Accept  y ]`; and after it `Ready. Last: Accept a-<4hex> into u-version — GREEN — 5 checks passed, 1 not set up (whole program)`, the step line `… Test program ✓ · Rust ✓ · Accept Rust ✓`, and `✓ u-version done`.
+
+**What it means.** Every step of `u-version`'s journey is done. `1 not set up (whole program)` is the whole-program check this copy has not been given (Step 12.14 shows how).
+
+**If you do not see that.** No `Accept a-…` item: press `g` once more; the cockpit reads the ledger again.
+
+#### Step 12.35 — See the project's view of it
+
+**Do.** Press `↑` until `◂ Back to the project view` is highlighted, then `Enter`. Press `↓` until `t-lzg` is highlighted.
+
+**You should see** the card end with `4 pieces · 1 done · 2 stay C`, and `Enter: Open tool t-lzg`. Press `q` to leave the cockpit.
+
+**What it means.** The project view keeps each tool's progress one row away; a tool with Rust waiting for your Accept, or a try waiting for an answer, would be the project's `Next:` before any program to accept.
+
+**If you do not see that.** The card shows only `✓ accepted`: press `g` to read the project again.
+
+#### Answer to 12D
+
+Can the cockpit take a program from map to accepted Rust? Yes: scan, plan and Accept are its dialogs, and with the chat off it names the exact command for the test program and the Rust (Steps 12.29–12.35); with the chat on, the chat does those two.
+
 ### Checkpoint — Part 12
 
 - [ ] Step 12.2 printed `programs: 3` and held `d1`; after Step 12.3 the screen said `configuration: make, from make (stated in config.toml)`.
@@ -6725,8 +6862,11 @@ If I edit the C, does the harness notice? Yes: the map named `t-lzg` as changed 
 - [ ] Step 12.14 showed `[SKIP] whole-program` first, and eight checks after you added `[oracle.whole_program]`.
 - [ ] After changing `version.c`, the map named `t-lzg` as changed, and `state status` began with the note (Steps 12.16–12.17).
 - [ ] Step 12.21 ended `verify: u-version GREEN — status set to verified`.
-- [ ] Step 12.26 wrote `migration/map/config.toml` from the cockpit, and after Step 12.27's map the Next step said `Next: Accept t-benchmark — Enter on its row, it asks for the file`.
+- [ ] Step 12.26 wrote `migration/map/config.toml` from the cockpit, and after Step 12.27's map the Next step said `Next: Accept t-lzg — Enter on its row` (a program that links comes before one that needs a decision).
 - [ ] Step 12.28's dialog showed `harness project accept t-unlzg --target … --keep d1=d1.2`.
+- [ ] Step 12.30's step line showed `Test program 0/2 ○` with two pieces `stays C`.
+- [ ] Step 12.33 showed `⚑ u-version waiting for your answer` before the answer.
+- [ ] Step 12.34 ended `✓ u-version done` with every step ticked.
 
 ### If you need to start this part again
 

@@ -116,7 +116,10 @@ cockpit.toml). The light theme's label, good, bad, attention and disabled colour
 theme's disabled colour were darkened for the panel's contrast. Open from it: **rebuild harness-mcp
 beside the cockpit** (its tool list changed); the live chat tests once (the brief changed); the
 person's own Make the test program through the chat on liblzg, and a look at the new dialogs in
-their terminal. The tool's-screen pass named above is still the next cockpit design.
+their terminal. The tool's-screen pass named above is still the next cockpit design. A fix pass after an Opus newcomer check followed the same day (DECISIONS 2026-10-20, "Fix pass after
+the newcomer check"): pieces that stay C, a waiting try as a state, the chat-off way spelled as
+commands, the project's Next preferring a tool with work waiting, plainer words, a guide section
+12D walking the journey in the cockpit.
 
 ## The work, in order
 
