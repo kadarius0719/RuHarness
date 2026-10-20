@@ -49,6 +49,40 @@ pub fn title(app: &App) -> String {
     format!(" {} ", display::line(&format!("{} · {state}", folder(app))))
 }
 
+/// What each state word means, one plain line each: the help's (`?`, on
+/// the Project view), not the pane's — except a failed program's, the last
+/// line of its card.
+pub const STATE_GLOSSES: &[(&str, &str)] = &[
+    (
+        "✓ links",
+        "its files compile and link into one program; Accept makes it a tool.",
+    ),
+    (
+        "⚠ needs a decision",
+        "two files define the same functions; Accept asks which one to keep.",
+    ),
+    (
+        "✗ did not compile, ✗ did not link",
+        "the build likely needs flags its build configuration does not give yet.",
+    ),
+    (
+        "✓ compiles",
+        "a library's files compile; a library is never linked.",
+    ),
+    (
+        "✓ accepted",
+        "it is a tool: open it to scan, plan and migrate it.",
+    ),
+    (
+        "· fuzzer, not a tool",
+        "it is linked only with the project's fuzzing driver, never accepted.",
+    ),
+    (
+        "· incomplete",
+        "the map could not tell every file it needs; map the project again after a change.",
+    ),
+];
+
 /// The gloss of a program that did not compile or link.
 const FAILED_GLOSS: &str =
     "The build likely needs flags its build configuration does not give yet.";

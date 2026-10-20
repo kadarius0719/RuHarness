@@ -836,8 +836,8 @@ pub fn dialog(act: Act, map: Option<&MapView>, argv: &[String]) -> Vec<String> {
 
 /// Why Accept waits, before any picker, while the configuration is not
 /// stated.
-pub const ACCEPT_NEEDS_STATED: &str = "Accept needs a stated configuration, and this map's is a \
-     guess (or came with the project): choose Write the build configuration (or Ask for a \
+pub const ACCEPT_NEEDS_STATED: &str = "Accept waits for your build configuration: this map's is \
+     a guess (or came with the project) — choose Write the build configuration (or Ask for a \
      proposal — ask in chat), then Map the project again";
 
 /// Accept's picker: its question for a decision between `files` files.

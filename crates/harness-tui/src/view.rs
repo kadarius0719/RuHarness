@@ -3823,10 +3823,13 @@ fn help_first_page(width: usize, chat: bool) -> Vec<Line<'static>> {
 /// Help's rows, and which of them are the mouse on/off line (a click there
 /// is `m`).
 /// `chat`: the chat pane exists — `Some(why)` when it cannot be used.
+/// `project`: the Project view is shown — what mapping does and what the
+/// states mean, the words that left its pane (§9.3).
 fn help_rows(
     width: usize,
     mouse: bool,
     chat: Option<Option<&str>>,
+    project: bool,
 ) -> (Vec<Line<'static>>, std::ops::Range<usize>) {
     let mut rows = Vec::new();
     for l in HELP_INTRO {
@@ -3850,6 +3853,27 @@ fn help_rows(
     let toggle = start..rows.len();
     for l in HELP_MOUSE {
         rows.extend(wrapped(l, width, Style::default()));
+    }
+    if project {
+        rows.push(Line::from(""));
+        rows.push(Line::from(Span::styled("The project", section_role())));
+        rows.extend(wrapped(
+            project_pane::MAPPING_WORDS,
+            width,
+            Style::default(),
+        ));
+        rows.push(Line::from(""));
+        rows.push(Line::from(Span::styled(
+            "What the states mean",
+            section_role(),
+        )));
+        for (state, gloss) in project_pane::STATE_GLOSSES {
+            rows.extend(wrapped(
+                &format!("{state}: {gloss}"),
+                width,
+                Style::default(),
+            ));
+        }
     }
     rows.push(Line::from(""));
     rows.push(Line::from(Span::styled("Keys", section_role())));
@@ -4360,6 +4384,7 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
                 app.mouse,
                 app.chat_on
                     .then(|| app.chat.bins.as_ref().err().map(String::as_str)),
+                app.in_project_view(),
             );
             let shown = overlay(
                 frame,
@@ -8515,7 +8540,7 @@ mod tests {
             "{screen}"
         );
         // The help says what perf compares.
-        let (rows, _) = help_rows(1000, true, None);
+        let (rows, _) = help_rows(1000, true, None, false);
         let help: String = rows
             .iter()
             .map(|l| {
@@ -8967,7 +8992,7 @@ mod tests {
     /// with its own next step (more runs only where they can settle it).
     #[test]
     fn the_glossary_names_each_kind_of_cant_tell() {
-        let (rows, _) = help_rows(1000, true, None);
+        let (rows, _) = help_rows(1000, true, None, false);
         let help: String = rows
             .iter()
             .map(|l| {
@@ -9448,7 +9473,7 @@ mod tests {
         ));
         let screen = text(&render(&mut app, 160, 40));
         assert!(!screen.contains("Run by none"), "{screen}");
-        let (help, _) = help_rows(160, false, None);
+        let (help, _) = help_rows(160, false, None, false);
         // Wrapped lines, read as one text.
         let help: String = help
             .iter()

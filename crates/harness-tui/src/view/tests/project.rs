@@ -873,6 +873,31 @@ fn the_focused_pane_has_the_section_coloured_frame() {
     assert!(!buffer[(0, 1)].modifier.contains(Modifier::BOLD));
 }
 
+/// The help on the Project view says what mapping does and what each
+/// state means: the words that left the pane, moved, not lost (§9.3).
+#[test]
+fn the_help_says_what_the_states_mean() {
+    let (_tmp, root) = project("help");
+    write_map(&root, &map_text("stated", false));
+    let mut app = cockpit(&root);
+    app.mode = Mode::Help { scroll: 1 };
+    let screen = text(&render(&mut app, 120, 120));
+    for words in [
+        "The project",
+        "Mapping finds its programs and libraries",
+        "What the states mean",
+        "⚠ needs a decision: two files define the same functions; Accept asks which one to",
+        "✓ links: its files compile and link into one program",
+        "✗ did not compile, ✗ did not link: the build likely needs flags",
+    ] {
+        assert!(screen.contains(words), "{words}\n{screen}");
+    }
+    // Not on a tool's screen.
+    let (rows, _) = super::super::help_rows(1000, true, None, false);
+    let help: String = rows.iter().map(|l| l.to_string() + "\n").collect();
+    assert!(!help.contains("What the states mean"), "{help}");
+}
+
 /// A run name of the person's, typed after the picks; a name the command
 /// line would refuse is said so, and typing goes on.
 #[test]
