@@ -1050,6 +1050,87 @@ unit; the refusal's words; the backdrop and panel styles per theme and the contr
 pane widths at the four sizes and with `files_width`. The chat's brief changes, so the live chat
 tests are the person's to run once.
 
+### 9.5 Explain anything: the hint line and the explanation card; dialogs in one breath; the chat as a conversation (2026-10-20)
+
+The person, after their first piece moved through the cockpit (u-checksum done, asked in chat;
+u-lzgmini's test program being made): "it would be nice to get to tooltips quickly, from a user
+perspective, on what something means — like how that new file for checksum was created, why a
+duplicate is created". And: easy, fun, intuitive. A terminal has no hover, so a tooltip is two
+things: a line that is always there for the selected row, and a card one key away.
+
+**The hint line.** The status line under the panes (today `Ready — ↑↓ to choose a row, Enter for
+what you can do`, then `Ready.`) says, whenever nothing is running and no notice or `Last:` stands,
+what the selected row *is*, in one sentence that fits the width: the row's meaning, not its state
+word again. Examples, each the whole sentence:
+
+- a unit, `◇ u-lzgmini no test program`: "u-lzgmini is one piece of the program: 2 functions in
+  src/extra/lzgmini.c that move to Rust together; it has no test program yet."
+- its `crate` row: "The Rust for u-checksum, written by try a-fbbe (asked in chat); the C stays
+  beside it so the judge can compare the two."
+- a try row, `✓ a-fbbe green in use`: "A try: the Rust a model wrote for u-checksum; green means
+  every check passed; in use means it is the unit's Rust now."
+- `· u-encode stays C`: "u-encode calls u-checksum; in this version the judge tests each piece
+  alone, so a piece that calls other pieces stays C."
+- `⊖ decode.c not part of this tool`: "decode.c is in the project, but t-benchmark never calls
+  into it: the map followed what benchmark.c links and this file is not reached."
+- `· lzg.h header`: "A header: declarations only; nothing to move."
+- `Features (none yet)`: "Your own checks of what the program must keep doing; none written yet."
+- `Speed — not set up`: "How fast the program runs with its Rust against the C, on workloads you
+  name; none named yet."
+- the tool row `lzg-map · tool t-benchmark ✓1/4`: "t-benchmark is one program of lzg-map, built
+  from the files below; 1 of its 4 pieces is in Rust."
+- `◂ Back to the project view`: "The project's other programs and their decisions."
+- a folder row: "src/lib/: 2 of its files are pieces of this program; the rest are not part of it."
+- a check row under a unit: the check's words (`same outputs as C`) and one clause on what it
+  proves.
+- on the Project view, a program row: "t-unlzg: a program the map found (src/tools/unlzg.c has a
+  main); it needs a decision before it can be accepted."
+
+The first screen keeps `Ready — ↑↓ to choose a row, Enter for what you can do` until the first
+move. The `Last:` line and notices keep precedence as today; a menu's focused greyed item puts its
+reason there (below). One module, `explain.rs`, holds one function per row kind; a test walks every
+row of the zopfli and tractor fixtures and the Project view's rows and asserts each has a sentence,
+under 160 characters, with none of the internal names §9.3 banned.
+
+**The explanation card.** `i` (and **What is this?**, the last item of every Enter menu) opens a
+card titled with the row's name — three to eight short lines: what it is; where it came from
+(which act or try made it, asked by whom); why it is there, when that is the natural question
+(why the C file stays when its Rust exists; why a try is a separate folder; why a file is not part
+of this tool); what can be done with it next (the menu's recommended item); and where its files
+live (`Details: c` when a command made it). Esc or `i` closes it. It is drawn like a dialog
+(panel, section frame), without buttons. The same module writes it, from the same facts, so the
+line and the card never disagree; a test asserts every row kind has a card and no card holds a
+banned name. In a dialog, `i` opens the act's own card (what the act does at length, what it
+reads and writes, how long it takes) — which is where the dialog's prose goes:
+
+**Dialogs in one breath.** An act's dialog body is at most three lines of prose before the
+command: what happens, in one sentence ("Scans t-benchmark's C files and notes what changed");
+what it writes, in one line; and, only when it applies, one line on cost ("Uses a model; can take
+minutes") or on the chat ("Asked in chat by claude-fable-5-1; it answers the model's turns here,
+up to 4"). Everything else — today's "Nothing is accepted without you", the sandbox note, the
+ledger paths — moves to the act's card (`i`). The command stays, whole, last, in the label
+colour: it is the one thing a careful person checks. The buttons' row is unchanged.
+
+**The chat as a conversation.** The chat pane keeps its tool-call lines (the clearest text on the
+screen) and loses the narration around them: consecutive reads fold into one line (`· read the
+project's status and unit u-lzgmini — done`); the three lines around an act (`asks: …`, `you ran
+it: …`, `… — awaiting the chat's answer to turn 1`) become two (`asks: Make u-lzgmini's test
+program` and `running — the chat answers turn 1`, the second updated in place through the turns
+and ending `done` or the outcome in words); the cost line stays. The chat's brief asks it to say
+what it will do in one line, not a paragraph, and to answer in at most four short lines unless the
+person asks for more — the tool lines already show the work.
+
+**Menus stay narrow.** A greyed item shows its label only; its reason goes to the hint line while
+it is focused (and to the notice after choosing it, as today). The recommended line stays. A
+menu's width is then its longest label, which fits at 100 columns.
+
+**Tests.** The hint line for every row kind (the walk above); the card for every row kind; the
+dialog bodies of every act at most three prose lines before `Command:`; the folded chat lines; a
+greyed item's reason on the hint line; the `i` key in every mode where a row is selected; the help
+and the key bar name `i`. Docs: the cockpit topic (the hint line, `i`, the shorter dialogs),
+TUTORIAL's keys table, the guide's quoted screens where the Ready line or a dialog body changed
+(the gate stays green), SCHEMAS's mirror.
+
 ## 10. The chat pane
 
 Built 2026-09-28 in its own design: docs/CHAT-PANE-DESIGN.md, which governs the chat's place on
