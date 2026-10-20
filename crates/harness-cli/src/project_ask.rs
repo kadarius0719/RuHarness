@@ -407,11 +407,17 @@ fn show_answer(item: &Item, answer: &Answer, model: &str, provider: &str) {
                 keep: None,
                 keep_path: None,
                 reason: None,
+                why: None,
                 linked_in: Vec::new(),
                 not_linked_in: Vec::new(),
             });
         }
-        (Item::Set(s), Answer::Set { keep, reason }) => {
+        (Item::Set(s), Answer::Set { keep, reason, why }) => {
+            // The model's why, in its words, after the advice.
+            let why_words = why
+                .as_deref()
+                .map(|w| format!("; why: {}", safe_line(w)))
+                .unwrap_or_default();
             let symbols = s
                 .symbols
                 .iter()
@@ -451,11 +457,13 @@ fn show_answer(item: &Item, answer: &Answer, model: &str, provider: &str) {
                             not_tried.join(", ")
                         ));
                     }
+                    line.push_str(&why_words);
                     out(line);
                 }
                 None => out(format!(
                     "{} ({symbols}; held by {holders}): the model could not decide (undecided, \
-                     reason {reason}) ({model_shown}): the choice goes to you — keep one of {}",
+                     reason {reason}) ({model_shown}): the choice goes to you — keep one of \
+                     {}{why_words}",
                     s.index,
                     s.definers
                         .iter()
@@ -477,6 +485,7 @@ fn show_answer(item: &Item, answer: &Answer, model: &str, provider: &str) {
                 keep: Some(keep),
                 keep_path,
                 reason: Some(reason),
+                why: why.as_deref(),
                 linked_in,
                 not_linked_in,
             });
@@ -532,6 +541,8 @@ struct AnswerEvent<'a> {
     keep_path: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    why: Option<&'a str>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     linked_in: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]

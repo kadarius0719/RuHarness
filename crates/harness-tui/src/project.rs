@@ -49,6 +49,8 @@ const KIND_GUESSES: &[&str] = &["tool", "test", "example", "benchmark"];
 /// A model's label name and purpose, at most (harness-llm's limits).
 const LABEL_NAME_MAX: usize = 40;
 const LABEL_LINE_MAX: usize = 200;
+/// A set's why, at most (harness-llm's `WHY_MAX_CHARS`).
+const WHY_MAX: usize = 300;
 /// The longest run name the cockpit passes to `--run-name`.
 pub const MAX_RUN_NAME: usize = 64;
 
@@ -547,6 +549,8 @@ pub struct Advice {
     pub keep: String,
     /// One of the reasons.
     pub reason: String,
+    /// Why, in the model's plain words (none in an older reply).
+    pub why: Option<String>,
     /// The model that gave it.
     pub model: String,
 }
@@ -565,7 +569,10 @@ impl Advice {
     /// Why, in the model's words, labelled as the model's: "Why
     /// (claude-x): …"; the reason in words when the reply gave no why.
     pub fn why_line(&self) -> String {
-        let why = reason_words(&self.reason);
+        let why = match &self.why {
+            Some(w) => safe_line(w).trim_end_matches('.').to_string(),
+            None => reason_words(&self.reason).to_string(),
+        };
         let model = safe_line(&self.model);
         if self.keep == "undecided" {
             format!("The model ({model}) could not decide: {why}.")
@@ -618,15 +625,25 @@ pub fn read_advice(root: &Path, map: &MapView) -> BTreeMap<String, Advice> {
                 continue;
             };
             let known = keep == "undecided" || h.definers.iter().any(|(i, _)| i == keep);
+            // A why that is not one showable line within its limit drops
+            // the answer, as `ask` would refuse it.
+            let why = item["why"].as_str();
+            let why_ok = item["why"].is_null()
+                || why.is_some_and(|w| {
+                    !w.trim().is_empty()
+                        && w.chars().count() <= WHY_MAX
+                        && !w.chars().any(harness_core::text::unsafe_to_show)
+                });
             let showable = !model.is_empty()
                 && model.chars().count() <= 200
                 && !model.chars().any(harness_core::text::unsafe_to_show);
-            if known && SET_REASONS.contains(&reason) && showable {
+            if known && SET_REASONS.contains(&reason) && showable && why_ok {
                 out.insert(
                     h.set.clone(),
                     Advice {
                         keep: keep.to_string(),
                         reason: reason.to_string(),
+                        why: why.map(String::from),
                         model: model.to_string(),
                     },
                 );

@@ -344,6 +344,14 @@ pub(crate) mod tests {
                 reply.display()
             );
         }
+        // A why over its limit: refused with the limit named.
+        let long = format!(
+            r#"[{{"item": "d1", "keep": "d1.2", "reason": "platform", "why": "{}"}}]"#,
+            "x".repeat(301)
+        );
+        let why = answer(&root, "claude-opus-5-5", 1, &long).unwrap_err();
+        assert!(why.contains("`why` is over 300 characters"), "{why}");
+        assert!(!reply.exists());
         assert!(answer(&root, "not a model!", 1, "[]")
             .unwrap_err()
             .contains("`model`"));
@@ -351,7 +359,8 @@ pub(crate) mod tests {
             &root,
             "claude-opus-5-5",
             1,
-            r#"[{"item": "d1", "keep": "d1.2", "reason": "alternative-implementation"}]"#,
+            r#"[{"item": "d1", "keep": "d1.2", "reason": "alternative-implementation",
+                 "why": "decode.c is the library's own decoder;\nmini.c is a copy for other projects."}]"#,
         )
         .unwrap();
         assert_eq!(v["kind"], "questions");
@@ -361,6 +370,11 @@ pub(crate) mod tests {
         assert_eq!(file["items"]["d1"]["keep"], "d1.2");
         assert_eq!(file["items"]["d1"]["model"], "claude-opus-5-5");
         assert_eq!(file["items"]["d1"]["provider"], "chat");
+        // The why passes through to the reply file, folded to one line.
+        assert_eq!(
+            file["items"]["d1"]["why"],
+            "decode.c is the library's own decoder; mini.c is a copy for other projects."
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

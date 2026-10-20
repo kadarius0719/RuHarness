@@ -55,8 +55,10 @@ d1, and why?" or "Propose the build configuration for this project from its Make
    each further batch, if "batches" says there are more). It is the harness's prompt to a model:
    its system part gives the reply's exact JSON format.
 2. Say one short line ("answering the map's question"), then call harness_map_answer with model
-   = your own model id, the same batch, and text = your whole reply in that JSON format. Never
-   write the JSON in the chat. A refusal names what failed its check: fix that and answer again.
+   = your own model id, the same batch, and text = your whole reply in that JSON format. For each
+   held choice give "why": why, in one or two sentences a person who has not read the files would
+   understand (the cockpit shows it beside the choice). Never write the JSON in the chat. A
+   refusal names what failed its check: fix that and answer again.
 3. Then tell the person in a line or two what you advised and why, and that it is advice: they
    pick each file in Accept this program (the advice shows beside the choice), or copy the
    proposal from migration/map/config.proposed.toml with Write the build configuration and map

@@ -2154,8 +2154,11 @@ Under `external`, each reply below is written as the `text` of the hand-off enve
 - **The reply contract**: a JSON array (a Markdown fence is stripped), exactly one object per
   index asked, `{"item":"p3","kind":"tool|test|example|benchmark|other","name":"..",
   "purpose":".."}` (`name` 1–40 characters, `purpose` 1–200) or `{"item":"d1","keep":
-  "d1.2|undecided","reason":"platform|alternative-implementation|cannot-tell"}` (`keep` one of
-  that set's own definers). Refused in full, naming the index and the rule, when it names an
+  "d1.2|undecided","reason":"platform|alternative-implementation|cannot-tell","why":".."}`
+  (`keep` one of that set's own definers; `why` optional since 2026-10-19: one or two plain
+  sentences a person who has not read the files would understand, at most 300 characters, one
+  line — newlines in it are folded to spaces before any check; longer is refused, "`why` is over
+  300 characters"; the reply file keeps it and the cockpit shows it as "Why (<model>): …"). Refused in full, naming the index and the rule, when it names an
   index not asked, skips or repeats one, adds a field (unknown fields are refused), names a key
   twice in one object ("an object names the key `keep` twice"), gives a value outside its
   closed set, gives a `name` or `purpose` of combining marks only ("… holds only combining

@@ -393,7 +393,10 @@ final without a model and the person still accepts (decision 2, §7).
   object per index: `{"item": "p3", "kind": "tool | test | example |
   benchmark | other", "name": "…", "purpose": "…"}` (`name` 1–40 printable characters, `purpose`
   one line of at most 200, control characters refused, both display-only) and `{"item": "d1",
-  "keep": "d1.2" | "undecided", "reason": "platform | alternative-implementation | cannot-tell"}`;
+  "keep": "d1.2" | "undecided", "reason": "platform | alternative-implementation | cannot-tell",
+  "why": "…"}` (`why` optional, added 2026-10-19: one or two plain sentences, at most 300
+  characters, one line — newlines folded to spaces; kept in the reply file, shown by the cockpit's
+  card and `project ask`'s advice line);
   the validator refuses in full, naming the index and the rule, a reply that names an index not
   asked, skips or repeats one, adds a field (unknown fields are refused, unlike triage's reader) or
   an object, gives a `keep` that is not one of that set's own definers, or holds any character the

@@ -351,6 +351,34 @@ fn a_set_the_map_did_not_link_is_said_so() {
     );
 }
 
+/// The model's why, in its own words, ends the advice line (folded to
+/// one line) and is kept in the reply file.
+#[test]
+fn the_why_ends_the_advice_line_and_is_kept() {
+    let t = Tmp::new("why");
+    let run = ask(&t, &["--allow-guessed"]);
+    assert_eq!(run.code, 1, "{}", run.stderr);
+    let request = t.pending().remove(0);
+    t.answer(
+        &request,
+        r#"[{"item":"d1","keep":"d1.2","reason":"platform","why":"mini.c is the build for small\nmachines."},
+{"item":"d2","keep":"undecided","reason":"cannot-tell"}]"#,
+    );
+    let run = ask(&t, &["--allow-guessed"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout
+            .contains("in t-other it did not link; why: mini.c is the build for small machines.\n"),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(
+        t.reply()["items"]["d1"]["why"],
+        "mini.c is the build for small machines."
+    );
+    assert!(t.reply()["items"]["d2"].get("why").is_none());
+}
+
 /// A response cut short names its file and says to answer again (`ask`
 /// has no budget flag to raise).
 #[test]

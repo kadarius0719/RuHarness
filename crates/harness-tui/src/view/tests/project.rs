@@ -760,6 +760,74 @@ fn the_project_view_after_a_map_with_a_held_choice() {
     assert!(dialog_argv(&app).ends_with(&["--keep".to_string(), "d1=d1.2".to_string()]));
 }
 
+/// The why's round trip: a reply's why (as `ask` and the chat record it)
+/// is read as the advice's and shown on the card after "Why (<model>):";
+/// with no why (an older reply) the reason is said in words; a why over
+/// its limit drops the answer, as the validator refuses it.
+#[test]
+fn the_why_goes_from_the_reply_to_the_card() {
+    let (_tmp, root) = project("why");
+    write_map(&root, &map_text("stated", false));
+    let reply = |item: &str| {
+        std::fs::write(
+            root.join(crate::project::REPLY_FILE),
+            format!(
+                r#"{{"schema": "ruharness-project-map-reply", "root_hash": "blake3:aa",
+                    "inputs_hash": "blake3:bb", "items": {{"d1": {item}}}}}"#
+            ),
+        )
+        .unwrap();
+    };
+    reply(
+        r#"{"keep": "d1.2", "reason": "alternative-implementation", "model": "claude-x",
+            "provider": "chat", "why": "mini.c is a standalone copy; decode.c is the library's own."}"#,
+    );
+    let mut app = cockpit(&root);
+    app.select(Selection::Program("t-unlzg".into()));
+    let screen = text(&render(&mut app, 220, 44));
+    assert!(
+        screen.contains(
+            "│Why (claude-x): mini.c is a standalone copy; decode.c is the library's own. "
+        ),
+        "{screen}"
+    );
+    // No harness names on the pane: no build file, no "stated", no set
+    // index, no reason tag.
+    let pane: String = screen
+        .lines()
+        .map(|l| l.split('│').nth(3).unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for gone in [
+        "harness.toml",
+        "stated",
+        "d1.",
+        "alternative-implementation",
+        "platform",
+        "cannot-tell",
+        "held",
+        "choice d1",
+    ] {
+        assert!(!pane.contains(gone), "{gone}\n{pane}");
+    }
+    // An older reply: the reason in words.
+    reply(r#"{"keep": "d1.2", "reason": "platform", "model": "claude-x", "provider": "external"}"#);
+    app.reload_project();
+    let screen = text(&render(&mut app, 220, 44));
+    assert!(
+        screen.contains("│Why (claude-x): they are the same code for different platforms. "),
+        "{screen}"
+    );
+    // A why over 300 characters: not advice the view shows.
+    reply(&format!(
+        r#"{{"keep": "d1.2", "reason": "platform", "model": "claude-x", "provider": "chat",
+            "why": "{}"}}"#,
+        "x".repeat(301)
+    ));
+    app.reload_project();
+    assert!(app.project.as_ref().unwrap().advice.is_empty());
+}
+
 /// A run name of the person's, typed after the picks; a name the command
 /// line would refuse is said so, and typing goes on.
 #[test]
