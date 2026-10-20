@@ -154,6 +154,30 @@ commands, the project's Next preferring a tool with work waiting, plainer words,
 6. **Then the briefing's next milestone (M5, the extension proof)**, or what the scale run shows,
    as the person decides.
 
+## Two ideas the person raised on 2026-10-20, to design after the explain-anything pass
+
+- **A model proposes the features and the workloads.** Today the chat cannot write the features
+  file (by design: writing is the person's), and its brief does not even hold the file's syntax,
+  so when the person asked it for an example features file it could only decline (their
+  screenshot). The shape that fits the guided path is the build configuration's: **Propose
+  features — ask in chat** on the Features row (and **Propose a workload — ask in chat** on
+  Speed): the chat reads the program (its main, its options, the map, the pieces), writes a
+  draft through a harness-mcp tool that only ever writes the draft file the cockpit's Write act
+  already uses, and the cockpit opens that draft in the editor for the person to read, change
+  and save — nothing is checked until they do. The brief gains the two files' syntax and the
+  rule that a feature is something a person does with the program and can see the result of.
+  For a learner, the chat explains each proposed scenario in a sentence. Small: the editor path
+  and the draft checks exist (docs/FEATURES-DESIGN.md §7, COCKPIT-WRAPPER-DESIGN §9.1).
+- **Beyond "behaves the same": improve the Rust.** The person's next question after a green
+  port: can this be better — idiomatic, no unsafe, faster, readable? The judge is the safety
+  net that makes this safe to ask: an **Improve — ask in chat** act on a done piece is a steered
+  attempt (harness_steer exists: a new try seeded from the green one with a note, judged like
+  any other), with a brief section on what "better" means and the order to try it (safety
+  first, then clarity, then speed), Speed comparing the two tries, and the chat saying in plain
+  words what it changed and why — the learning tool the person wants. A ninth stage of the
+  journey, after Accept Rust: `Improve` (optional, never required). Design it with the
+  "program works" stage; it needs nothing new in the judge.
+
 ## Small open items (rechecked against the code on 2026-10-18)
 
 - The ask prompt still asks for fields "in this order" (crates/harness-llm/src/projectask.rs);
