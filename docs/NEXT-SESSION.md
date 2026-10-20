@@ -85,6 +85,18 @@ cockpit checks Claude Code is installed and signed in, and if not shows a plain 
 a new Terminal window, type `claude`, sign in, come back, "Check again"); the same dialog when the
 chat's process dies. The person agreed ("sounds good").
 
+## Done (2026-10-19): the Project view, revision 2
+
+Built from COCKPIT-WRAPPER-DESIGN §9.3 (DECISIONS 2026-10-19, "The Project view, revision 2"): the
+left pane is the one list (counts in the heading, a state word per row, an accepted program's row
+is its tool's row), the right pane the Next step in one line and a card for the selection (its
+decision with the files numbered, the model's advice and why, what Enter does), the help says what
+the states mean, Accept's picker numbers the files, the focused frame is in the section colour, and
+the chat with the focus takes half the width. The map's reply gains an optional `why` (300
+characters, one line) through `project ask`, harness-mcp and the chat's brief. Open from it: the
+person's own look at the Project view on liblzg (with a chat answer, so the why shows), and the live
+chat tests once (the brief changed).
+
 ## The work, in order
 
 1. **The person's own cold-start run.** docs/FIRST-HOUR.md as written (liblzg), then lz4 through

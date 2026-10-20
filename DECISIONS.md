@@ -85,6 +85,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-10-19 — **Model work in the cockpit goes through the chat, with a sign-in walk-through** — the Project view's Ask items type their question into the chat; harness-mcp's two map tools; the connection check and its dialog.
 - 2026-10-19 — **An old harness-mcp beside a newer cockpit is said as a rebuild, not a sign-in** — its own dialog, with the rebuild line to paste as step 2; the init check returns the problem itself.
 - 2026-10-19 — **A conversation in the chat asks before a move, and a new chat ends it** — Open tool / Back ask and start a new chat; a conversation is this chat's own messages, not the screen's old lines.
+- 2026-10-19 — **The Project view, revision 2: one list, one card, one line** — the left pane the only list; the right pane a card with the decision and the model's why; the Next step one line; the reply's optional `why`.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -3526,3 +3527,52 @@ grey the move, as they lose work; a conversation loses only words the chat would
 
 **Why asked rather than silent.** The person may be mid-question; ending the chat under them
 without a word would be the quiet surprise the cockpit avoids everywhere else. One dialog, one key.
+
+## 2026-10-19 — The Project view, revision 2: one list, one card, one line
+
+**Built** (docs/COCKPIT-WRAPPER-DESIGN.md §9.3, after the person's first real run on liblzg found the
+§9.1 view working but unreadable):
+
+- **One list.** The left pane (36 columns, 30 under 120) is the only list: a heading with the counts
+  of the states present (`Programs (3) · 1 accepted · 2 need a decision`), one row per program with
+  its state word at the right (`needs a decision`, `links`, `accepted`, …), no path line, no
+  "Accepted tools" group (an accepted program's row is its tool's row; Enter on it leads with Open
+  tool), a not-compiled `main` file as one row, Libraries only when there are any.
+- **One card.** The right pane is the Next step, then a card for the selection: its id and state, its
+  file and what the map guesses it is, the model's label, each decision with its files numbered
+  1, 2, the advised one marked `← the model advises this one`, the model's why, and `Enter: …`. An
+  accepted tool's card says where its build configuration is; a failed program shows the map's
+  first error and what the state means. The opening sentence, the Configuration line, the repeated
+  lists and the glosses are gone; the glosses and the two sentences on mapping moved to the help
+  (`?`, "What the states mean").
+- **One line.** `Next: <verb phrase> — <key>`, under 80 characters; the rules unchanged.
+- **The why.** The map's reply gains an optional `why` (at most 300 characters, one line, newlines
+  folded), checked by `project ask`'s validator (and so by harness-mcp's `harness_map_answer`),
+  kept in the reply file, named in the prompt's system part and the chat's brief, shown on the card
+  and at the end of `project ask`'s advice line. The recorded `project ask` test responses were
+  regenerated (the prompt changed, so did their request keys).
+- **Picker, focus, chat width.** Accept's picker asks `Keep which file for the functions both
+  define?`, the files numbered, the advised one marked, the why above. The focused pane's frame is
+  in the section colour, bold, in every theme. The chat's column, with the focus, takes half of what
+  the left pane leaves (at least its usual 64, the View keeping 80).
+
+**Decided where §9.3 left it open:**
+- A configuration that came with the project (proposed) now recommends Write the build configuration
+  instead of Map the project again: its words already said to write it, and the menu's first item
+  must be what the line names. The only change to a rule's action.
+- The guess's line with the chat on reads `Write the build configuration — Enter, or Ask for a
+  proposal in the chat` (§9.3's "it is the first item, or …" passes 80 characters).
+- `harness project accept` never reads the reply, so the "advice line on the command line" that
+  shows the why is `project ask`'s.
+- A program that did not compile or link: the card's Enter line says what Enter does there —
+  `Write (Edit) the build configuration, then Map the project again` — rather than §9.3's "Map the
+  project again", which would map with the same flags; once the configuration is newer than the
+  map, the Next step is Map the project again, as §9.3 says.
+- A `main` file that did not compile has no id, so its row stays unselectable; when its path does
+  not fit beside "did not compile" the row shows its file name.
+- The card holds no links: Enter in the right pane opens the selection's menu, as on its row.
+- The help's state glosses avoid "stated" ("the flags its build configuration does not give yet");
+  Accept's greyed reason now says "Accept waits for your build configuration".
+- The chat's typed question ("Which file should t-x keep for choice d1, and why?") is the chat's
+  (CHAT-PANE-DESIGN §3.6) and was left as it is; it is the one place `d1` still shows.
+- The chat-width rule applies on every screen, not only the Project view (the layout is shared).
