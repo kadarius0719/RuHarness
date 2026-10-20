@@ -3608,14 +3608,18 @@ const HELP_LEGEND: &[(&str, &str)] = &[
     ),
     (
         "✓",
-        "migrated (steered / by hand when a note or an edit made it)",
+        "done: its Rust is accepted and checked (steered / by hand when a note or an edit made it)",
     ),
     (
         "✓?",
-        "verified, origin not recorded: judged, but no attempt is known to have produced it",
+        "Rust green — accept it: an attempt passed every check and waits for you; on a done \
+         unit, verified with no attempt known to have produced it",
     ),
-    ("◐", "tried: attempts exist, none accepted"),
-    ("◇", "planned: no Rust yet, no attempt"),
+    ("◐", "Rust tried: attempts exist, none green"),
+    (
+        "◇",
+        "no test program / test program ready: no Rust yet — make its test program, then its Rust",
+    ),
     ("⊘", "blocked"),
     ("!", "changed since the scan"),
     ("+", "not scanned yet"),
@@ -3810,8 +3814,8 @@ pub const HELP_FIRST_KEYS: &[(&str, &str)] = &[
 
 /// The three marks of the first page.
 pub const HELP_FIRST_MARKS: &[(&str, &str)] = &[
-    ("◇", "planned: no Rust yet"),
-    ("✓", "in Rust: migrated, and the judge's checks pass"),
+    ("◇", "no Rust yet: no test program, or test program ready"),
+    ("✓", "done: in Rust, and the judge's checks pass"),
     ("⚠", "needs attention: the View says why and what to do"),
 ];
 
@@ -5269,7 +5273,7 @@ mod tests {
         let buffer = render(&mut app, 120, 40);
         golden("wide.txt", &app, &buffer);
         let screen = text(&buffer);
-        assert!(row_with(&screen, "✓ lib.c").contains("migrated"));
+        assert!(row_with(&screen, "✓ lib.c").contains("done"));
         assert!(screen.contains("⇄"));
         assert!(screen.contains("›"), "a cut code line ends with a dim ›");
         assert!(screen.contains("same outputs as C"));
@@ -5326,10 +5330,11 @@ mod tests {
             UnitState::Failing,
             UnitState::Migrated(Origin::Pipeline),
             UnitState::Migrated(Origin::Steered),
-            UnitState::Migrated(Origin::Human),
             UnitState::OriginUnknown,
-            UnitState::Tried,
-            UnitState::Planned,
+            UnitState::RustGreen,
+            UnitState::RustTried,
+            UnitState::TestProgramReady,
+            UnitState::NoTestProgram,
             UnitState::Other("in-progress".into()),
         ];
         for (i, s) in states.into_iter().enumerate() {
@@ -5379,10 +5384,12 @@ mod tests {
             ("⊘", "blocked"),
             ("⚠", "needs attention"),
             ("✗", "failing"),
-            ("✓", "migrated"),
+            ("✓", "done"),
             ("✓?", "origin not recorded"),
-            ("◐", "tried"),
-            ("◇", "planned"),
+            ("✓?", "Rust green — accept it"),
+            ("◐", "Rust tried"),
+            ("◇", "test program ready"),
+            ("◇", "no test program"),
             ("?", "missing"),
             ("!", "changed since scan"),
             ("+", "not scanned yet"),
@@ -6806,8 +6813,8 @@ mod tests {
                 "Esc     close, or step back",
                 "?       this help",
                 "q       quit",
-                "◇       planned: no Rust yet",
-                "✓       in Rust: migrated, and the judge's checks pass",
+                "◇       no Rust yet: no test program, or test program ready",
+                "✓       done: in Rust, and the judge's checks pass",
                 "⚠       needs attention: the View says why and what to do",
                 "",
                 "↓ more: every key, the mouse, every mark, features, speed, the chat",
@@ -7085,7 +7092,7 @@ mod tests {
             .collect();
         assert_eq!(
             view.first().map(String::as_str),
-            Some("◇ u-cache planned"),
+            Some("◇ u-cache no test program"),
             "{screen}"
         );
         assert!(view[1].starts_with("Next: "), "{screen}");
@@ -7144,7 +7151,7 @@ mod tests {
         let mut app = app_of("targets/zopfli", "planned-next");
         app.select(Selection::Unit("u-cache".into()));
         let screen = text(&render(&mut app, 160, 40));
-        assert!(screen.contains("◇ u-cache planned "), "{screen}");
+        assert!(screen.contains("◇ u-cache no test program "), "{screen}");
         assert!(screen.contains("No Rust yet"), "{screen}");
         assert!(
             screen.contains("Next: No Rust yet — ask the chat to migrate it"),

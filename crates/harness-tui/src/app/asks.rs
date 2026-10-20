@@ -656,7 +656,7 @@ impl App {
     /// --provider=<p> --model=<m> --requester=chat` — `<p>` the first
     /// `--provider`; `<m>` the chat's model when `<p>` is `external` (the
     /// chat answers), else the target's migrate model. Only a unit that is
-    /// planned, tried or failing.
+    /// before its Rust is accepted, or failing.
     fn chat_migrate_argv(&self, unit: &str, model: &str) -> Result<Pending, String> {
         if !harness_core::plan::is_clean_segment(unit) {
             return Err(format!("{unit:?} is not a plain unit id"));
@@ -674,12 +674,9 @@ impl App {
             .get(i)
             .map(|x| x.state.clone())
             .unwrap_or_else(|| crate::files::unit_state(u));
-        if !matches!(
-            state,
-            UnitState::Planned | UnitState::Tried | UnitState::Failing
-        ) {
+        if !(state.before_rust() || state == UnitState::Failing) {
             return Err(format!(
-                "unit {unit} is {} — Migrate is for a unit that is planned, tried or failing",
+                "unit {unit} is {} — Migrate is for a unit with no Rust accepted yet, or failing",
                 state.word()
             ));
         }
@@ -1789,7 +1786,7 @@ impl App {
         }
         let text = match &self.selection {
             Selection::Unit(id) => format!("Migrate {id}"),
-            _ => "Migrate the next planned unit".to_string(),
+            _ => "Migrate the next unit with no Rust yet".to_string(),
         };
         self.chat.input.insert(&text);
         self.move_focus(Focus::Chat);

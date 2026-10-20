@@ -23,14 +23,14 @@
 │    ▸ ◇ u-cache       ││26 files scanned                                      │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
-│    ▸ ◇ u-hash planned││Units (11): 1 ✓? verified, origin not recorded · 10 ◇ │
+│    ▸ ◇ u-hash        ││Units (11): 1 ✓? verified, origin not recorded · 10 ◇ │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
   @25-35 fg Blue BOLD "Units (11):"
-│    ▸ ◇ u-lz77 planned││planned                                               │
+│    ▸ ◇ u-lz77        ││no test program                                       │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
-│    ▸ ◇ u-tree planned││                                                      │
+│    ▸ ◇ u-tree        ││                                                      │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
 │    ▸ ◇ u-blocksplitt…││Features: 7 — 5 hold so far, 2 still all C            │
@@ -40,7 +40,7 @@
 │    ▸ ◇ u-gzip_contai…││                                                      │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
-│    ▸ ◇ u-util planned││                                                      │
+│    ▸ ◇ u-util        ││                                                      │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
 │    ▸ ◇ u-zlib_contai…││                                                      │

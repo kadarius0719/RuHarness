@@ -490,7 +490,7 @@ pub fn cockpit_tools() -> Vec<Tool> {
                 "unit",
                 Kind::Str,
                 true,
-                "The unit id (harness_status lists them): planned, tried or failing.",
+                "The unit id (harness_status lists them): one with no Rust accepted yet, or failing.",
             )],
         ),
         act(

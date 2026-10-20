@@ -1,9 +1,9 @@
 ┌ Files ───────────────────────┐┌ harness-tui-grun-0000000000 · 1 of 1 C file in Rust ─────────────────────────────────┐
 │▾ harness-tui-grun-00000… ✓1/1││Next: Every unit is in Rust and checked — measure its speed: choose Speed, under      │
 │  ▾ Units (1)                 ││Features in the tree                                                                  │
-│    ▸ ✓ u-lib         migrated││                                                                                      │
+│    ▸ ✓ u-lib             done││                                                                                      │
 │    Features (none yet)       ││2 files scanned                                                                       │
-│    Speed — not set up        ││Units (1): 1 ✓ migrated                                                               │
+│    Speed — not set up        ││Units (1): 1 ✓ done                                                                   │
 │  ▸ test_case/            ✓1/1││                                                                                      │
 │                              ││                                                                                      │
 │                              ││                                                                                      │

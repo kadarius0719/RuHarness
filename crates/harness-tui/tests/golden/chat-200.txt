@@ -1,9 +1,9 @@
 ┌ Files ───────────────────────┐┌ harness-tui-chat-goldens-0000000000 · 1 of 1 C file in Rust ─────────────────────┐┌ Chat — waiting for you · haiku-4-5 ─────────────────────────────────[New]─[?]─[×]┐
 │▾ harness-tui-chat-golde… ✓1/1││Next: Every unit is in Rust and checked — measure its speed: choose Speed, under  ││› Please migrate u-lib.                                                           │
 │  ▾ Units (1)                 ││Features in the tree                                                              ││                                                                                  │
-│    ▸ ✓ u-lib         migrated││                                                                                  ││I will ask to migrate u-lib.                                                      │
+│    ▸ ✓ u-lib             done││                                                                                  ││I will ask to migrate u-lib.                                                      │
 │    Features (none yet)       ││2 files scanned                                                                   ││                                                                                  │
-│    Speed — not set up        ││Units (1): 1 ✓ migrated                                                           ││  · read the project's status — done                                              │
+│    Speed — not set up        ││Units (1): 1 ✓ done                                                               ││  · read the project's status — done                                              │
 │  ▸ test_case/            ✓1/1││                                                                                  ││                                                                                  │
 │                              ││                                                                                  ││                                                                                  │
 │                              ││                                                                                  ││                                                                                  │

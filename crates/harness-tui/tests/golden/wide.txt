@@ -1,14 +1,14 @@
-┌ Files ───────────────────────┐┌ test_case/src/lib.c · migrated (u-lib) ──────────────────────────────────────────────┐
-│▾ harness-tui-g000-00000… ✓1/1││✓ u-lib migrated                                                                      │
+┌ Files ───────────────────────┐┌ test_case/src/lib.c · done (u-lib) ──────────────────────────────────────────────────┐
+│▾ harness-tui-g000-00000… ✓1/1││✓ u-lib done                                                                          │
 │  ▾ Units (1)                 ││Next: In Rust and checked — nothing to do                                             │
-│    ▸ ✓ u-lib         migrated││Crate from attempt a-13c9 (pipeline) · verdict green, fresh                           │
+│    ▸ ✓ u-lib             done││Crate from attempt a-13c9 (pipeline) · verdict green, fresh                           │
 │    Features (none yet)       ││Internal: get_bits() (compared through the unit's exported functions)                 │
 │    Speed — not set up        ││C  read_scalefactors (lib.c:17)           ⇄ Rust  read_scalefactors (src/ffi.rs:11)   │
 │  ▾ test_case/            ✓1/1││17 void read_scalefactors(bs_t *bs, uint› │  11 pub unsafe extern "C" fn read_scalefa›│
 │    ▾ include/                ││18                                   int› │  12     bs: *mut BsT,                     │
 │        · lib.h         header││19     static const float g_deq_L12[18 *› │  13     pba: *mut u8,                     │
 │    ▾ src/                ✓1/1││20         9.53674316e-07f / 3,     7.56› │  14     scfcod: *mut u8,                  │
-│      ▸ ✓ lib.c       migrated││21         6.00777173e-07f / 3,     9.53› │  15     bands: i32,                       │
+│      ▸ ✓ lib.c           done││21         6.00777173e-07f / 3,     9.53› │  15     bands: i32,                       │
 │                              ││22         7.56931807e-07f / 7,     6.00› │  16     scf: *mut f32,                    │
 │                              ││23         9.53674316e-07f / 15,    7.56› │  17 ) {                                   │
 │                              ││24         6.00777173e-07f / 15,    9.53› │  18     let bands_n: usize = if bands > 0›│

@@ -2592,7 +2592,7 @@ git status --short
 | **Pane** | One area of the cockpit's screen: **Files** on the left, **View** on the right, **Chat** beside or under them. |
 | **Focus** | The pane your keys go to. `Tab` moves the focus to the next pane. |
 | **Fold** | A row with `▸` is closed and `▾` is open. `→` opens a row, `←` closes it. |
-| **Marks** | `◇` means planned, no attempt yet. `✓` (green) means GREEN. `◐` beside a unit means tried: attempts exist, none accepted. Beside one of its attempts, `◐` marks an attempt that has not finished (it stopped at a hand-off; Part 10 shows how to carry on). |
+| **Marks** | `◇` beside a unit means no Rust yet: `◇ no test program` (make its test program first) or `◇ test program ready` (its Rust is next). `✓` (green) means GREEN, and `✓ done` beside a unit means its Rust is accepted and checked; `✓? Rust green — accept it` means an attempt passed and waits for you. `◐ Rust tried` beside a unit means attempts exist, none green. Beside one of its attempts, `◐` marks an attempt that has not finished (it stopped at a hand-off; Part 10 shows how to carry on). |
 | **Dialog** | A box over the screen that asks you to confirm. It is "ready" only after a short pause, so a key you were already pressing cannot approve anything. |
 | **Turn** | One question to the model and its answer. A migration has 1 translation turn and up to 3 **repair turns**, where the model is told which check failed and tries again. |
 | **Provider** | Whoever answers the harness's questions for a model. Here it is always `external`: the file hand-off of Part 3, where the chat writes the answer files for you. |
@@ -2639,7 +2639,7 @@ harness-tui --target targets/lzg
 **You should see** a full-screen view:
 
 - the **Files** pane on the left, with the project row `lzg`, then `Units (5)` with its five units under it, then `Features (none yet)`, `Speed — not set up`, and last the folder `src/`, folded (`▸`), its marks summed up at its right edge;
-- the **View** on the right, starting with a line `Next: 5 units have no Rust yet — migrate the first, u-checksum: press Enter and choose Migrate — ask in chat`, then a summary such as `7 files scanned`, `Units (5): 5 ◇ planned` and `Features: none yet — see Features`; its title says in words how many of the C files are in Rust (`0 of … C files in Rust`);
+- the **View** on the right, starting with a line `Next: 5 units have no Rust yet — migrate the first, u-checksum: press Enter and choose Migrate — ask in chat`, then a summary such as `7 files scanned`, `Units (5): 1 ◇ test program ready · 4 ◇ no test program` and `Features: none yet — see Features`; its title says in words how many of the C files are in Rust (`0 of … C files in Rust`);
 - the line `Ready — ↑↓ to choose a row, Enter for what you can do` under the panes (it says only `Ready.` while a menu, a dialog, the View or the chat has the keys);
 - a key bar at the bottom, like `↑↓ move   ←→ fold/open   Enter actions   Tab pane   …   q quit`.
 
@@ -2668,13 +2668,13 @@ The cockpit acts on whatever is selected, so you select the unit first.
 
 **You should see** in the View, in words first:
 
-- `◇ u-checksum planned`;
+- `◇ u-checksum test program ready`;
 - `Next: No Rust yet — ask the chat to migrate it (a model writes the Rust, the judge checks it, you accept it)`;
 - `1 exported function: _LZG_CalcChecksum (… lines)` and `Its C: 1 file — …checksum.c`;
 - `No Rust yet` and `Attempts: none yet`;
 - last, `▸ C source (Tab to the View, then Enter)`: the code, folded.
 
-**What it means.** The unit is planned and has no Rust yet. You only moved the selection. To read its C, press `Tab` (the View now has the keys, and the heading reads `▸ C source (Enter to open)`), then `Enter`; the C shows alone, since there is no Rust beside it yet. `Tab` until Files is highlighted again brings you back.
+**What it means.** The unit has its test program (Part 3) and no Rust yet. You only moved the selection. To read its C, press `Tab` (the View now has the keys, and the heading reads `▸ C source (Enter to open)`), then `Enter`; the C shows alone, since there is no Rust beside it yet. `Tab` until Files is highlighted again brings you back.
 
 **If you do not see that.** No `Units (5)` row: press `g` to make the cockpit read the project again.
 
@@ -2862,7 +2862,7 @@ Accepting is your decision, so look first.
 Ready. Last: Accept a-<4hex> into u-checksum — GREEN — all 8 checks passed (<time>)
 ```
 
-In Files, `u-checksum` now shows `✓` (so does `checksum.c`, inside the folded `src/` folder). The View's first line reads `✓ u-checksum migrated (asked in chat)`. The attempt row reads `✓ a-<4hex> green *c asked in chat` (`*c` marks the attempt the unit's crate came from).
+In Files, `u-checksum` now shows `✓` (so does `checksum.c`, inside the folded `src/` folder). The View's first line reads `✓ u-checksum done (asked in chat)`. The attempt row reads `✓ a-<4hex> green *c asked in chat` (`*c` marks the attempt the unit's crate came from).
 
 **What it means.** The cockpit ran `harness --json promote u-checksum a-<12hex> --target=…`. That created the crate `migration/units/u-checksum/u_checksum_rs/`, ran every check again in that final place, wrote the verdict files (`oracle-latest.json`, `oracle-latest.md`, `oracle-last-green.json`) and set `status = "verified"` in `plan.toml`. This answers the part's question: yes.
 
@@ -3935,7 +3935,7 @@ Press one key at a time, and check the screen after each:
 Ready. Last: Accept a-<4hex> into u-version — GREEN — all 8 checks passed (<time>)
 ```
 
-and the View's first line read `✓ u-version migrated (asked in chat)`.
+and the View's first line read `✓ u-version done (asked in chat)`.
 
 **What it means.** Accept created the crate `u_version_rs`, checked it again in place, and set the status to `verified`, as in Part 4.
 
@@ -4639,7 +4639,7 @@ harness-tui --target targets/lzg
 
 **Do** these, one press at a time, and check the screen after each:
 
-1. Press `?`. **You should see** the help's first page: six keys (`↑ ↓`, `Enter`, `Tab`, `Esc`, `?`, `q`), the three marks you meet first (`◇` planned, `✓` in Rust, `⚠` needs attention), and `↓ more: every key, the mouse, every mark, features, speed, the chat` at its foot.
+1. Press `?`. **You should see** the help's first page: six keys (`↑ ↓`, `Enter`, `Tab`, `Esc`, `?`, `q`), the three marks you meet first (`◇` no Rust yet, `✓` done, `⚠` needs attention), and `↓ more: every key, the mouse, every mark, features, speed, the chat` at its foot.
 2. Press `↓`. **You should see** the rest: every key and every symbol the cockpit uses (`◉`, `◌` and more), each with its meaning. Whenever a symbol in this part is unclear, `?` then `↓` explains it.
 3. Press any other key (`Esc`, say). **You should see** the help close.
 4. Press `↑` until the first row, `lzg`, is highlighted (it usually is already). **You should see** at the right edge of that row a summary like `✓2/5`, and the View's title saying it in words: `lzg · 2 of 5 C files in Rust`. The View starts with a `Next:` line, then a summary: the files scanned, the units by state, and a line beginning `Features: 3 — …`.
@@ -4658,8 +4658,8 @@ harness-tui --target targets/lzg
 **Do** these, one press at a time, and check the screen after each:
 
 1. Press `↓` until `src/`, the last row, is highlighted. It shows `▸`: the folder is folded, and its right edge sums up the marks of its files. Press `→`. **You should see** `lzg/` appear, indented, under `src/`. (`→` opens a folder; `←` closes it again.)
-2. Press `↓` to highlight `lzg/`; if it shows `▸`, press `→`. **You should see** the five C files and the two headers under it. `checksum.c` and `version.c` are marked migrated; `internal.h` and `lzg.h` show `· header`. (A header is never migrated by itself, so the cockpit just marks it.)
-3. Press `↓` until `checksum.c` is highlighted. **You should see** `✓ migrated (asked in chat)` on its row. (If you used Plan B for it, the row says `✓ migrated`.)
+2. Press `↓` to highlight `lzg/`; if it shows `▸`, press `→`. **You should see** the five C files and the two headers under it. `checksum.c` and `version.c` are marked `✓ done`; `internal.h` and `lzg.h` show `· header`. (A header is never migrated by itself, so the cockpit just marks it.)
+3. Press `↓` until `checksum.c` is highlighted. **You should see** `✓ done (asked in chat)` on its row. (If you used Plan B for it, the row says `✓ done`.)
 4. Press `→` to open `checksum.c`. **You should see** its function `_LZG_CalcChecksum()` appear under it.
 5. Press `↓` once to select `_LZG_CalcChecksum()`. **You should see** the View show the C next to the Rust, under a header like `C  _LZG_CalcChecksum (checksum.c:<line>)  ⇄ Rust  …`.
 
@@ -4670,7 +4670,7 @@ harness-tui --target targets/lzg
 | You see | Do this |
 |---|---|
 | the View scrolled instead of the list moving | The cockpit's attention had moved to the View. Press `Esc`, then repeat the press. |
-| `◇ planned` on `checksum.c` | The unit is not migrated: quit and check `harness state status --target targets/lzg` (Step 10.4). |
+| `◇ test program ready` on `checksum.c` | The unit is not migrated: quit and check `harness state status --target targets/lzg` (Step 10.4). |
 | no C next to Rust after press 5 | Press `Esc`, select `checksum.c` again, and repeat presses 4 and 5. |
 
 ### Step 9.4 — Open the units and select `u-checksum`
@@ -4684,7 +4684,7 @@ harness-tui --target targets/lzg
 
 **You should see** in the View, in words first:
 
-- `✓ u-checksum migrated (asked in chat)`;
+- `✓ u-checksum done (asked in chat)`;
 - a `Next:` line, such as `Next: In Rust and checked — nothing to do`;
 - `1 exported function: _LZG_CalcChecksum (… lines)` and `Its C: 1 file — …checksum.c`;
 - a line about the crate that ends `verdict green, fresh`;
@@ -4753,7 +4753,7 @@ Ready. Last: Re-check u-checksum — GREEN — all 11 checks passed (<time>)
 
 **Do.** Press `↑` to highlight `u-decode`.
 
-**You should see** `◇ planned`, and the View says something like `None of your features runs this unit's functions, so their checks pass whatever its Rust does.`
+**You should see** `◇ no test program`, and the View says something like `None of your features runs this unit's functions, so their checks pass whatever its Rust does.`
 
 **What it means.** The cockpit warns you before you migrate a unit your features would not test (Part 8 found this).
 
@@ -4808,7 +4808,7 @@ Does the cockpit show the same truth as the command line? Yes: its re-check in S
 
 ### Checkpoint — the cockpit is working if…
 
-- [ ] The Files list showed `u-checksum` and `u-version` as migrated, and the other three units as `◇ planned`.
+- [ ] The Files list showed `u-checksum` and `u-version` as `✓ done`, and the other three units as `◇ no test program`.
 - [ ] Step 9.6 ended `Ready. Last: Re-check u-checksum — GREEN — all 11 checks passed`.
 - [ ] The `Features (3)` group listed `compress`, `version` and `no-file`.
 - [ ] Step 9.11 printed `0`.

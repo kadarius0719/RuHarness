@@ -1,7 +1,7 @@
-┌ Files ───────────────┐┌ u-lib · migrated ────────────────────────────────────┐
-│▾ harness-tui-g0… ✓1/1││✓ u-lib migrated                                      │
+┌ Files ───────────────┐┌ u-lib · done ────────────────────────────────────────┐
+│▾ harness-tui-g0… ✓1/1││✓ u-lib done                                          │
 │  ▾ Units (1)         ││Next: In Rust and checked — nothing to do             │
-│    ▸ ✓ u-lib migrated││                                                      │
+│    ▸ ✓ u-lib     done││                                                      │
 │    Features (none ye…││1 exported function: read_scalefactors (44 lines)     │
 │    Speed — not set up││Its C: 1 file — test_case/src/lib.c                   │
 │  ▸ test_case/    ✓1/1││Crate from attempt a-13c9 (pipeline) · verdict green, │

@@ -3625,7 +3625,7 @@ impl App {
         }
         // A GREEN attempt waiting for the person, on a unit with no Rust
         // accepted yet (on a verified one it would be a Replace).
-        let no_rust = |s: &UnitState| matches!(s, UnitState::Planned | UnitState::Tried);
+        let no_rust = |s: &UnitState| s.before_rust();
         if let Some(u) = self
             .snapshot
             .units

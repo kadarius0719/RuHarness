@@ -153,6 +153,57 @@ pub struct UnitView {
     /// exists — what provenance and the "known code" test compare.
     /// Additive (the cockpit's file tree).
     pub crate_digest: Option<String>,
+    /// Its test program (docs/COCKPIT-WRAPPER-DESIGN.md §9.4).
+    pub driver: DriverState,
+}
+
+/// A unit's test program (its differential driver), as `harness gen-driver`
+/// leaves it (docs/COCKPIT-WRAPPER-DESIGN.md §9.4): the plan's
+/// `[unit.oracle]` (kind, driver, rust_crate) and the driver's validation
+/// record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DriverState {
+    /// No `[unit.oracle]` of the differential kind with a driver and a
+    /// crate name, or its driver file is missing.
+    None,
+    /// The driver exists and the judge takes it: a generated one with a
+    /// green validation of today's C and driver, or one written by hand (no
+    /// validation record and no generation attempts — `migrate`'s own rule).
+    Validated,
+    /// A generated driver whose validation is missing, red or of other
+    /// inputs: `migrate` refuses it until it is made again.
+    Stale,
+}
+
+impl DriverState {
+    /// Its word for the chat (`harness_unit`'s `driver`).
+    pub fn word(self) -> &'static str {
+        match self {
+            DriverState::None => "none",
+            DriverState::Validated => "validated",
+            DriverState::Stale => "stale",
+        }
+    }
+}
+
+/// The driver state of `unit` (see [`DriverState`]), with `unit_source` and
+/// `driver` its current binding (`driver` empty when the file is missing).
+pub fn driver_state(ledger: &Ledger, unit: &Unit, unit_source: &str, driver: &str) -> DriverState {
+    let complete = unit.oracle_kind() == Some("c-abi-differential")
+        && unit.oracle_param_str("driver").is_some()
+        && unit.oracle_param_str("rust_crate").is_some();
+    if !complete || driver.is_empty() || driver == UNREADABLE {
+        return DriverState::None;
+    }
+    let record = ledger.driver_validation_path(&unit.id);
+    let generated = ledger.unit_dir(&unit.id).join("driver-attempts").exists();
+    if !record.exists() && !generated {
+        return DriverState::Validated;
+    }
+    match harness_core::driver::DriverValidation::load(&record) {
+        Ok(v) if v.is_fresh_green(unit_source, driver) => DriverState::Validated,
+        _ => DriverState::Stale,
+    }
 }
 
 impl UnitView {
@@ -452,6 +503,7 @@ fn unit_view(
         crate_dir,
         verdict: Verdict::load(&ledger.verdict_latest_path(&unit.id)).ok(),
         crate_digest,
+        driver: driver_state(ledger, unit, &unit_source, &driver),
     })
 }
 

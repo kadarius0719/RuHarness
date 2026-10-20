@@ -186,7 +186,7 @@ fn each_tool_maps_onto_its_act_and_argv() {
         "a request never opens a dialog by itself"
     );
     assert!(no_denial(&log, "r1"), "held");
-    // A unit that is not planned, tried or failing is refused, fenced.
+    // A unit that is not in the plan is refused, fenced.
     ask(&mut a, "r2", "harness_migrate", json!({"unit": "u-nope"}));
     let m = wait_denial(&log, "r2");
     let v: Value = serde_json::from_str(&m).unwrap();
@@ -1794,7 +1794,7 @@ fn a_permission_follows_the_confirm_and_its_model() {
     assert!(b.asks.shown().is_some_and(|r| r.continue_asks));
 }
 
-/// Migrate only a unit that is planned, tried or failing (§3.1); in the
+/// Migrate only a unit with no Rust accepted yet, or failing (§3.1); in the
 /// chat a quit is asked even with no conversation (review USE-16); a line of
 /// the cockpit's while the chat is not looked at marks it "Chat ●".
 #[test]
@@ -1802,7 +1802,7 @@ fn migrate_gate_quit_asked_and_unseen() {
     let tmp = TmpDir::new("asks-gate-misc");
     let (mut a, log) = chat_app(None, "asks-gate-misc", &tmp);
     ask(&mut a, "m1", "harness_migrate", json!({"unit": "u-lib"}));
-    assert!(wait_denial(&log, "m1").contains("planned, tried or failing"));
+    assert!(wait_denial(&log, "m1").contains("no Rust accepted yet, or failing"));
     a.focus = Focus::Files;
     a.chat.unseen = false;
     ask(&mut a, "m2", "harness_migrate", json!({"unit": "u-nope"}));

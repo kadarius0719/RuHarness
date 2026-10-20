@@ -711,8 +711,8 @@ reader as cells change.
   file whose name is not shown" — and the state word. Plus any outcomes this chat was not told
   (§3.3).
 - The menu: **Ask in chat…** on every node (focuses the chat); **Migrate — ask in chat** on a
-  unit that is planned, tried or failing (types "Migrate <unit>"; on the project, "Migrate the
-  next planned unit"). Neither overwrites a draft ("the chat has a draft"); both are greyed with
+  unit with no Rust accepted yet, or failing (types "Migrate <unit>"; on the project, "Migrate the
+  next unit with no Rust yet"; greyed on a unit with no test program, §9.4 of the cockpit design). Neither overwrites a draft ("the chat has a draft"); both are greyed with
   the reason when the chat is unavailable.
 
 ### 5.4 Focus and keys

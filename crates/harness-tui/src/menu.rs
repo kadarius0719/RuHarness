@@ -643,10 +643,8 @@ impl App {
         }
         // Model work that happens in chat.
         let migratable = |u: &UnitView| {
-            matches!(
-                crate::files::unit_state(u),
-                UnitState::Planned | UnitState::Tried | UnitState::Failing
-            )
+            let s = crate::files::unit_state(u);
+            s.before_rust() || s == UnitState::Failing
         };
         let offer_migrate = match sel {
             Selection::Project => self.snapshot.units.iter().any(migratable),

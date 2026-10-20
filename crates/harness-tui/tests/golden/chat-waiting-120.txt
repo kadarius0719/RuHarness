@@ -1,7 +1,7 @@
 ┌ Files ───────────────────────┐┌ Chat — continuing… · haiku-4-5 ───────────────────────────────[New]─[?]─ View ─ Chat ┐
 │▾ harness-tui-chat-lines… ✓1/1││  line 184                                                                            │
 │  ▾ Units (1)                 ││  line 185                                                                            │
-│    ▸ ✓ u-lib         migrated││  line 186                                                                            │
+│    ▸ ✓ u-lib             done││  line 186                                                                            │
 │    Features (none yet)       ││  line 187                                                                            │
 │    Speed — not set up        ││  line 188                                                                            │
 │  ▸ test_case/            ✓1/1││  line 189                                                                            │

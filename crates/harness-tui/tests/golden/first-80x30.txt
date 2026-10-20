@@ -3,12 +3,12 @@
 │  ▾ Units (11)        ││u-cache: press Enter and choose Migrate — ask in chat │
 │    ▸ ✓? u001-katajai…││                                                      │
 │    ▸ ◇ u-cache       ││26 files scanned                                      │
-│    ▸ ◇ u-hash planned││Units (11): 1 ✓? verified, origin not recorded · 10 ◇ │
-│    ▸ ◇ u-lz77 planned││planned                                               │
-│    ▸ ◇ u-tree planned││                                                      │
+│    ▸ ◇ u-hash        ││Units (11): 1 ✓? verified, origin not recorded · 10 ◇ │
+│    ▸ ◇ u-lz77        ││no test program                                       │
+│    ▸ ◇ u-tree        ││                                                      │
 │    ▸ ◇ u-blocksplitt…││Features: 7 — 5 hold so far, 2 still all C            │
 │    ▸ ◇ u-gzip_contai…││                                                      │
-│    ▸ ◇ u-util planned││                                                      │
+│    ▸ ◇ u-util        ││                                                      │
 │    ▸ ◇ u-zlib_contai…││                                                      │
 │    ▸ ◇ u-zopfli_lib  ││                                                      │
 │    ▸ ◇ u-zopfli_bin  ││                                                      │

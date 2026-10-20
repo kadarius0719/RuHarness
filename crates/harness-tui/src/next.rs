@@ -131,7 +131,11 @@ impl App {
                  migrate it again",
                 Some(Action::Migrate),
             ),
-            UnitState::Tried | UnitState::Planned => {
+            UnitState::RustGreen
+            | UnitState::RustTried
+            | UnitState::TestProgramReady
+            | UnitState::TestProgramStale
+            | UnitState::NoTestProgram => {
                 if let Some(a) = acceptable(unit) {
                     advice(
                         format!(
@@ -168,7 +172,7 @@ impl App {
                         ),
                         None,
                     )
-                } else if matches!(state, UnitState::Tried) {
+                } else if matches!(state, UnitState::RustTried) {
                     advice(
                         "tried, none accepted — ask the chat to migrate it again",
                         Some(Action::Migrate),

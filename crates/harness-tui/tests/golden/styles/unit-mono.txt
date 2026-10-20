@@ -1,9 +1,9 @@
-┌ Files ───────────────┐┌ u-cache · planned ───────────────────────────────────┐
+┌ Files ───────────────┐┌ u-cache · no test program ───────────────────────────┐
   @0-0 fg - BOLD "┌"
   @1-7 fg - BOLD | REVERSED "Files"
   @8-23 fg - BOLD "───────────────┐"
-  @25-43 fg - BOLD "u-cache · planned"
-│▾ harness-tui-theme-u…││◇ u-cache planned                                     │
+  @25-51 fg - BOLD "u-cache · no test program"
+│▾ harness-tui-theme-u…││◇ u-cache no test program                             │
   @0-0 fg - BOLD "│"
   @3-23 fg - BOLD "harness-tui-theme-u…│"
   @27-34 fg - BOLD "u-cache"
@@ -17,18 +17,18 @@
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
   @25-78 fg - BOLD "model writes the Rust, the judge checks it, you accept"
-│    ▸ ◇ u-cac… planned││it)                                                   │
+│    ▸ ◇ u-c… no test …││it)                                                   │
   @0-0 fg - BOLD "│"
-  @1-22 fg - BOLD | REVERSED "▸ ◇ u-cac… planned"
+  @1-22 fg - BOLD | REVERSED "▸ ◇ u-c… no test …"
   @23-23 fg - BOLD "│"
   @25-27 fg - BOLD "it)"
-│    ▸ ◇ u-hash planned││                                                      │
+│    ▸ ◇ u-hash        ││                                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│    ▸ ◇ u-lz77 planned││5 exported functions: ZopfliCacheToSublen (22 lines), │
+│    ▸ ◇ u-lz77        ││5 exported functions: ZopfliCacheToSublen (22 lines), │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│    ▸ ◇ u-tree planned││ZopfliCleanCache (5 lines), ZopfliInitCache (19       │
+│    ▸ ◇ u-tree        ││ZopfliCleanCache (5 lines), ZopfliInitCache (19       │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
 │    ▸ ◇ u-blocksplitt…││lines), ZopfliMaxCachedSublen (11 lines),             │
@@ -37,7 +37,7 @@
 │    ▸ ◇ u-gzip_contai…││ZopfliSublenToCache (32 lines)                        │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│    ▸ ◇ u-util planned││Its C: 1 file — src/zopfli/cache.c                    │
+│    ▸ ◇ u-util        ││Its C: 1 file — src/zopfli/cache.c                    │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
 │    ▸ ◇ u-zlib_contai…││No Rust yet                                           │

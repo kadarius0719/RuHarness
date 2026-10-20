@@ -3,12 +3,12 @@
 │  ▾ Units (11)        ││open it under Units to see how to change it, if speed │
 │    ▸ ✓? u001-katajai…││matters there                                         │
 │    ▸ ◇ u-cache       ││                                                      │
-│    ▸ ◇ u-hash planned││Speed — your workloads, the C against the Rust in use │
-│    ▸ ◇ u-lz77 planned││measured on Apple M3 with 2 compilers — see each row ·│
-│    ▸ ◇ u-tree planned││as verify builds them · 15 runs each · compares what  │
+│    ▸ ◇ u-hash        ││Speed — your workloads, the C against the Rust in use │
+│    ▸ ◇ u-lz77        ││measured on Apple M3 with 2 compilers — see each row ·│
+│    ▸ ◇ u-tree        ││as verify builds them · 15 runs each · compares what  │
 │    ▸ ◇ u-blocksplitt…││the program prints and how it ends                    │
 │    ▸ ◇ u-gzip_contai…││                                                      │
-│    ▸ ◇ u-util planned││The original C                                        │
+│    ▸ ◇ u-util        ││The original C                                        │
 │    ▸ ◇ u-zlib_contai…││  big-text                  CPU 1.22 s · 12.4 MB      │
 │    ▸ ◇ u-zopfli_lib  ││  many-small                too short to time         │
 │    ▸ ◇ u-zopfli_bin  ││  compress-a-big-text-file  CPU 12.4 s · 124 MB       │

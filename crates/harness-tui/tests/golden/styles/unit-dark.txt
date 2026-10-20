@@ -1,11 +1,11 @@
-┌ Files ───────────────┐┌ u-cache · planned ───────────────────────────────────┐
+┌ Files ───────────────┐┌ u-cache · no test program ───────────────────────────┐
   @0-0 fg 75 BOLD "┌"
   @1-7 fg 75 BOLD | REVERSED "Files"
   @8-23 fg 75 BOLD "───────────────┐"
   @24-24 fg 244 NONE "┌"
-  @25-43 fg 75 BOLD "u-cache · planned"
-  @44-79 fg 244 NONE "───────────────────────────────────┐"
-│▾ harness-tui-theme-u…││◇ u-cache planned                                     │
+  @25-51 fg 75 BOLD "u-cache · no test program"
+  @52-79 fg 244 NONE "───────────────────────────┐"
+│▾ harness-tui-theme-u…││◇ u-cache no test program                             │
   @0-0 fg 75 BOLD "│"
   @1-2 fg 248 NONE "▾"
   @3-23 fg 75 BOLD "harness-tui-theme-u…│"
@@ -30,37 +30,34 @@
   @24-24 fg 244 NONE "│"
   @25-78 fg - BOLD "model writes the Rust, the judge checks it, you accept"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-cac… planned││it)                                                   │
+│    ▸ ◇ u-c… no test …││it)                                                   │
   @0-0 fg 75 BOLD "│"
   @1-6 fg 248 BOLD | REVERSED "▸"
   @7-8 fg 250 BOLD | REVERSED "◇"
-  @9-15 fg - BOLD | REVERSED "u-cac…"
-  @16-22 fg 250 BOLD | REVERSED "planned"
+  @9-13 fg - BOLD | REVERSED "u-c…"
+  @14-22 fg 250 BOLD | REVERSED "no test …"
   @23-23 fg 75 BOLD "│"
   @24-24 fg 244 NONE "│"
   @25-27 fg - BOLD "it)"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-hash planned││                                                      │
+│    ▸ ◇ u-hash        ││                                                      │
   @0-0 fg 75 BOLD "│"
   @1-6 fg 248 NONE "▸"
   @7-8 fg 250 NONE "◇"
-  @16-22 fg 250 NONE "planned"
   @23-23 fg 75 BOLD "│"
   @24-24 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-lz77 planned││5 exported functions: ZopfliCacheToSublen (22 lines), │
+│    ▸ ◇ u-lz77        ││5 exported functions: ZopfliCacheToSublen (22 lines), │
   @0-0 fg 75 BOLD "│"
   @1-6 fg 248 NONE "▸"
   @7-8 fg 250 NONE "◇"
-  @16-22 fg 250 NONE "planned"
   @23-23 fg 75 BOLD "│"
   @24-24 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-tree planned││ZopfliCleanCache (5 lines), ZopfliInitCache (19       │
+│    ▸ ◇ u-tree        ││ZopfliCleanCache (5 lines), ZopfliInitCache (19       │
   @0-0 fg 75 BOLD "│"
   @1-6 fg 248 NONE "▸"
   @7-8 fg 250 NONE "◇"
-  @16-22 fg 250 NONE "planned"
   @23-23 fg 75 BOLD "│"
   @24-24 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
@@ -78,11 +75,10 @@
   @23-23 fg 75 BOLD "│"
   @24-24 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-util planned││Its C: 1 file — src/zopfli/cache.c                    │
+│    ▸ ◇ u-util        ││Its C: 1 file — src/zopfli/cache.c                    │
   @0-0 fg 75 BOLD "│"
   @1-6 fg 248 NONE "▸"
   @7-8 fg 250 NONE "◇"
-  @16-22 fg 250 NONE "planned"
   @23-23 fg 75 BOLD "│"
   @24-24 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"

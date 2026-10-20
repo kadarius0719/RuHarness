@@ -7,7 +7,7 @@
 //! that walk, and hashes nothing: the snapshot already carries the stale
 //! paths and each unit crate's content hash.
 
-use crate::model::{ProvenanceView, Snapshot, UnitView};
+use crate::model::{DriverState, ProvenanceView, Snapshot, UnitView};
 use harness_core::config::Form;
 use harness_core::facts::Facts;
 use harness_core::status::VerdictState;
@@ -267,14 +267,22 @@ pub enum UnitState {
     Attention(Cause),
     /// 8 `✗ failing`: the current verdict is red.
     Failing,
-    /// 9 `✓ migrated`: verified or merged, green, fresh, attributed.
+    /// 9 `✓ done`: verified or merged, green, fresh, attributed.
     Migrated(Origin),
     /// 10 `✓? verified, origin not recorded`.
     OriginUnknown,
-    /// 11 `◐ tried`: pending, with an attempt.
-    Tried,
-    /// 12 `◇ planned`: pending, no attempt.
-    Planned,
+    /// 11 `✓? Rust green — accept it`: pending, with a green attempt bound
+    /// to today's inputs that waits for Accept (§9.4).
+    RustGreen,
+    /// 12 `◐ Rust tried`: pending, with an attempt, none green.
+    RustTried,
+    /// 13 `◇ test program ready`: pending, no attempt, its driver ready.
+    TestProgramReady,
+    /// 14 `◇ test program out of date`: pending, no attempt, its generated
+    /// driver's validation no longer holds — made again before Migrate.
+    TestProgramStale,
+    /// 15 `◇ no test program`: pending, no attempt, no driver yet.
+    NoTestProgram,
     /// Any other combination: the status word.
     Other(String),
 }
@@ -287,9 +295,11 @@ impl UnitState {
             UnitState::Attention(_) => "⚠",
             UnitState::Failing => "✗",
             UnitState::Migrated(_) => "✓",
-            UnitState::OriginUnknown => "✓?",
-            UnitState::Tried => "◐",
-            UnitState::Planned => "◇",
+            UnitState::OriginUnknown | UnitState::RustGreen => "✓?",
+            UnitState::RustTried => "◐",
+            UnitState::TestProgramReady
+            | UnitState::TestProgramStale
+            | UnitState::NoTestProgram => "◇",
             // The fallback has no glyph (§2.3): only its word.
             UnitState::Other(_) => "",
         }
@@ -301,15 +311,36 @@ impl UnitState {
             UnitState::Blocked => "blocked".into(),
             UnitState::Attention(_) => "needs attention".into(),
             UnitState::Failing => "failing".into(),
-            UnitState::Migrated(Origin::Pipeline) => "migrated".into(),
-            UnitState::Migrated(Origin::Steered) => "migrated (steered)".into(),
-            UnitState::Migrated(Origin::Chat) => "migrated (asked in chat)".into(),
-            UnitState::Migrated(Origin::Human) => "migrated (by hand)".into(),
+            UnitState::Migrated(Origin::Pipeline) => "done".into(),
+            UnitState::Migrated(Origin::Steered) => "done (steered)".into(),
+            UnitState::Migrated(Origin::Chat) => "done (asked in chat)".into(),
+            UnitState::Migrated(Origin::Human) => "done (by hand)".into(),
             UnitState::OriginUnknown => "verified, origin not recorded".into(),
-            UnitState::Tried => "tried".into(),
-            UnitState::Planned => "planned".into(),
+            UnitState::RustGreen => "Rust green — accept it".into(),
+            UnitState::RustTried => "Rust tried".into(),
+            UnitState::TestProgramReady => "test program ready".into(),
+            UnitState::TestProgramStale => "test program out of date".into(),
+            UnitState::NoTestProgram => "no test program".into(),
             UnitState::Other(status) => status.replace('-', " "),
         }
+    }
+
+    /// A pending unit before its Rust is accepted: one of the stage words
+    /// (no test program … Rust green — accept it).
+    pub fn before_rust(&self) -> bool {
+        matches!(
+            self,
+            UnitState::RustGreen
+                | UnitState::RustTried
+                | UnitState::TestProgramReady
+                | UnitState::TestProgramStale
+                | UnitState::NoTestProgram
+        )
+    }
+
+    /// A pending unit whose test program is missing or out of date.
+    pub fn needs_test_program(&self) -> bool {
+        matches!(self, UnitState::TestProgramStale | UnitState::NoTestProgram)
     }
 }
 
@@ -578,10 +609,16 @@ pub fn unit_state(unit: &UnitView) -> UnitState {
         };
     }
     if status == "pending" {
-        return if unit.attempts.is_empty() {
-            UnitState::Planned
+        return if crate::next::acceptable(unit).is_some() {
+            UnitState::RustGreen
+        } else if !unit.attempts.is_empty() {
+            UnitState::RustTried
         } else {
-            UnitState::Tried
+            match unit.driver {
+                DriverState::Validated => UnitState::TestProgramReady,
+                DriverState::Stale => UnitState::TestProgramStale,
+                DriverState::None => UnitState::NoTestProgram,
+            }
         };
     }
     UnitState::Other(status.to_string())
@@ -971,7 +1008,7 @@ mod tests {
         assert!(files.units[0].known_code);
         let lib = files.file(LIB_C).unwrap();
         assert_eq!(lib.state, FileState::Owned(0));
-        assert_eq!(file_label(&files, &lib.state), ("✓", "migrated".into()));
+        assert_eq!(file_label(&files, &lib.state), ("✓", "done".into()));
         let fns: Vec<(&str, bool)> = lib
             .functions
             .iter()
@@ -1009,7 +1046,7 @@ mod tests {
         let planned = files
             .units
             .iter()
-            .filter(|u| u.state == UnitState::Planned)
+            .filter(|u| u.state == UnitState::NoTestProgram)
             .count();
         assert_eq!(planned, 10);
         let three = snap
@@ -1112,19 +1149,60 @@ mod tests {
         assert_eq!(t.read().1.rollup("").text(), "✗1 ✓0/1");
     }
 
-    /// Rules 11 and 12: a pending unit with attempts is tried; without, it
-    /// is planned.
+    /// Rules 11 to 15 (§9.4): a pending unit says its stage — a green attempt
+    /// that waits for Accept, attempts none of which waits, and with none its
+    /// test program: ready (a fresh green validation), out of date (the
+    /// driver changed since), or none (no driver file, or no
+    /// `[unit.oracle]`).
     #[test]
-    fn pending_units_are_tried_or_planned() {
+    fn pending_units_say_their_stage() {
         let t = Copy::of(CASE, "tried");
         std::fs::remove_file(t.0.join("migration/units/u-lib/oracle-latest.json")).unwrap();
         t.edit("migration/plan.toml", |s| {
             s.replace("status = \"verified\"", "status = \"pending\"")
         });
         std::fs::remove_dir_all(t.0.join("migration/units/u-lib/u_lib_rs")).unwrap();
-        assert_eq!(t.unit("u-lib").state, UnitState::Tried);
-        std::fs::remove_dir_all(t.0.join("migration/units/u-lib/attempts")).unwrap();
-        assert_eq!(t.unit("u-lib").state, UnitState::Planned);
+        // Its green attempt was promoted once: none waits for Accept.
+        assert_eq!(t.unit("u-lib").state, UnitState::RustTried);
+        assert_eq!(t.unit("u-lib").state.word(), "Rust tried");
+        // Un-promoted, it waits for the person.
+        let attempts = t.0.join("migration/units/u-lib/attempts");
+        for e in std::fs::read_dir(&attempts).unwrap() {
+            let f = e.unwrap().path().join("attempt.json");
+            let s = std::fs::read_to_string(&f).unwrap();
+            std::fs::write(&f, s.replace("\"promoted\": true", "\"promoted\": false")).unwrap();
+        }
+        assert_eq!(t.unit("u-lib").state, UnitState::RustGreen);
+        assert_eq!(
+            (t.unit("u-lib").state.glyph(), t.unit("u-lib").state.word()),
+            ("✓?", "Rust green — accept it".to_string())
+        );
+        std::fs::remove_dir_all(&attempts).unwrap();
+        let (snap, files) = t.read();
+        assert_eq!(snap.units[0].driver, DriverState::Validated);
+        assert_eq!(files.units[0].state, UnitState::TestProgramReady);
+        assert_eq!(files.units[0].state.word(), "test program ready");
+        // The driver changed since its validation: out of date.
+        let driver = t.0.join("migration/units/u-lib/driver.c");
+        let text = std::fs::read_to_string(&driver).unwrap();
+        std::fs::write(&driver, format!("{text}\n/* changed */\n")).unwrap();
+        assert_eq!(t.read().0.units[0].driver, DriverState::Stale);
+        assert_eq!(t.unit("u-lib").state, UnitState::TestProgramStale);
+        // No driver file: none.
+        std::fs::remove_file(&driver).unwrap();
+        assert_eq!(t.read().0.units[0].driver, DriverState::None);
+        assert_eq!(t.unit("u-lib").state, UnitState::NoTestProgram);
+        assert_eq!(t.unit("u-lib").state.word(), "no test program");
+        // A hand-written driver (no validation, no generation attempts) is
+        // ready; without `[unit.oracle]` there is none whatever the files.
+        std::fs::write(&driver, &text).unwrap();
+        std::fs::remove_file(t.0.join("migration/units/u-lib/driver-validation.json")).unwrap();
+        std::fs::remove_dir_all(t.0.join("migration/units/u-lib/driver-attempts")).unwrap();
+        assert_eq!(t.read().0.units[0].driver, DriverState::Validated);
+        t.edit("migration/plan.toml", |s| {
+            s.replace("kind = \"c-abi-differential\"", "kind = \"golden\"")
+        });
+        assert_eq!(t.read().0.units[0].driver, DriverState::None);
     }
 
     /// CHK-11: a blocked unit shows ⊘ on its row; a file it held that a new

@@ -431,7 +431,7 @@ Common options of `migrate`: `--model <name>` names who answers; `--provider <na
 | `10` | the judge said RED |
 | `130` | stopped with Ctrl-C; the harness stopped everything it had started |
 
-**The cockpit's keys.** The help's first page (`?`) shows the six you need to start — `↑ ↓` choose a row, `Enter` what you can do with it, `Tab` the next pane, `Esc` close or step back, `?` the help, `q` quit — and the three marks you meet first (`◇` planned, `✓` in Rust, `⚠` needs attention); `↓` then lists them all:
+**The cockpit's keys.** The help's first page (`?`) shows the six you need to start — `↑ ↓` choose a row, `Enter` what you can do with it, `Tab` the next pane, `Esc` close or step back, `?` the help, `q` quit — and the three marks you meet first (`◇` no Rust yet, `✓` done, `⚠` needs attention); `↓` then lists them all:
 
 | Key | What it does |
 |---|---|
@@ -460,10 +460,10 @@ In the chat, letters are text. `Enter` sends (or, on an empty input, reviews a w
 |---|---|
 | `✗` | failing: the current verdict is red |
 | `⚠` | needs attention: a cause you can fix, named in the View |
-| `✓` | migrated (steered / by hand when a note or an edit made it) |
-| `✓?` | verified, origin not recorded: judged, but no attempt is known to have produced it |
-| `◐` | tried: attempts exist, none accepted |
-| `◇` | planned: no Rust yet, no attempt |
+| `✓` | done: its Rust is accepted and checked (steered / by hand when a note or an edit made it) |
+| `✓?` | Rust green — accept it: an attempt passed every check and waits for you; on a done unit, verified with no attempt known to have produced it |
+| `◐` | Rust tried: attempts exist, none green |
+| `◇` | no test program / test program ready: no Rust yet — make its test program, then its Rust |
 | `⊘` | blocked |
 | `!` | changed since the scan |
 | `+` | not scanned yet |
