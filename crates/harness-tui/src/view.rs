@@ -1244,6 +1244,10 @@ fn unit_lead(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
             lines.extend(wrapped(&text, width, style));
         }
     }
+    // A piece that stays C: what it calls, under its state.
+    if let Some(why) = state.and_then(UnitState::stays_c_why) {
+        lines.extend(wrapped(&why, width, Style::default()));
+    }
     // The Next step: the unit's (or the attempt's) one action, the cause
     // first when it needs attention.
     if let Some(next) = app.advice(&app.selection) {
@@ -7741,12 +7745,12 @@ mod tests {
         app.select(Selection::Unit("u-lz77".into()));
         let screen = text(&render(&mut app, 160, 40));
         assert!(
-            screen.contains("Next: It calls u-cache, u-hash, so in this version it stays C"),
+            screen.contains("It calls u-cache and u-hash, so in this version it stays C — the judge tests each piece alone"),
             "{screen}"
         );
         // Its own word and mark; out of the tool's count (fix pass, item 2).
         assert!(
-            screen.contains("· u-lz77 stays C (calls u-cache, u-hash)"),
+            screen.contains("· u-lz77 stays C") && !screen.contains("stays C (calls"),
             "{screen}"
         );
         app.open_menu();

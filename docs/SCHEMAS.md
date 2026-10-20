@@ -2158,8 +2158,8 @@ newer than the map, folded to "Step N of 8: <stage>" under 100 columns or where 
 A unit's state word says its stage: "◇ no test program", "◇ test program out of date", "◈ test
 program ready", "◐ Rust tried", "⚑ waiting for your answer" (a try in progress), "✓? Rust green —
 accept it", "✓ done" (with "(steered)", "(asked in chat)", "(by hand)"; a verified one no try is
-known to have made is "✓ done" too, its card saying "origin not recorded"), "· stays C (calls
-<units>)" (it has `depends_on`), besides "✗ failing", "⚠ needs attention" and "⊘ blocked"; under
+known to have made is "✓ done" too, its card saying "origin not recorded"), "· stays C" (it has `depends_on`; its card: "It calls <units>, so in this version it stays C — the
+judge tests each piece alone"), besides "✗ failing", "⚠ needs attention" and "⊘ blocked"; under
 about 36 columns the short forms "no test", "outdated", "ready", "tried", "waiting", "accept?",
 "done", "stays C". The
 read model's `UnitView.driver` is `None | Validated | Stale` (from the plan's `[unit.oracle]` —

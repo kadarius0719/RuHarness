@@ -119,13 +119,8 @@ impl App {
                  migrate it again",
                 Some(Action::Migrate),
             ),
-            UnitState::StaysC(deps) => advice(
-                format!(
-                    "it calls {}, so in this version it stays C — the judge tests each unit alone",
-                    deps.join(", ")
-                ),
-                None,
-            ),
+            // Why is the line above it on the card.
+            UnitState::StaysC(_) => advice("nothing to do on it in this version", None),
             UnitState::Waiting => {
                 // An attempt of this session's: Resume; one the command line
                 // left: its answer file and the command again.

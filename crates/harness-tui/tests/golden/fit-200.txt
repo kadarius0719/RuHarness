@@ -1,30 +1,30 @@
-┌ Files ─────────────────────────────────────────────────────────┐┌ u-cache · no test program ─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│▾ harness-tui-fit-0000000000                       ✓0/13 (+1 ✓?)││Map ✓ · Configure ✓ · Accept program ✓ · Scan ✓ · Plan ✓ · Test program ○ · Rust · Accept Rust                                      │
-│  ▾ Units (11)                                                  ││◇ u-cache no test program                                                                                                           │
-│    ▸ ✓ u001-katajainen                                     done││Next: Make the test program — run harness gen-driver u-cache (the chat is off)                                                      │
-│    ▸ ◇ u-cache                                  no test program││                                                                                                                                    │
-│    ▸ ◇ u-hash                                   no test program││5 exported functions: ZopfliCacheToSublen (22 lines), ZopfliCleanCache (5 lines), ZopfliInitCache (19 lines), ZopfliMaxCachedSublen │
-│    ▸ · u-lz77                   stays C (calls u-cache, u-hash)││(11 lines), ZopfliSublenToCache (32 lines)                                                                                          │
-│    ▸ · u-tree                   stays C (calls u001-katajainen)││Its C: 1 file — src/zopfli/cache.c                                                                                                  │
-│    ▸ · u-blocks…-squeeze stays C (calls u-hash, u-lz77, u-tree)││No Rust yet                                                                                                                         │
-│    ▸ · u-gz…ner stays C (calls u-blocksplitter-deflate-squeeze)││5 of your features run it · still C — see Features                                                                                  │
-│    ▸ ◇ u-util                                   no test program││Attempts: none yet                                                                                                                  │
-│    ▸ · u-zl…ner stays C (calls u-blocksplitter-deflate-squeeze)││                                                                                                                                    │
-│    ▸ · u-zopfli_lib                                     stays C││▸ C source (Tab to the View, then Enter)                                                                                            │
-│    ▸ · u-zopfli_bin        stays C (calls u-util, u-zopfli_lib)││                                                                                                                                    │
-│  ▾ Features (7)                                                ││                                                                                                                                    │
-│      ◉ Compress to gzip            holds so far · 1 of 10 units││                                                                                                                                    │
-│      ◉ Compress to zlib            holds so far · 1 of 10 units││                                                                                                                                    │
-│      ◉ Compress to raw deflate      holds so far · 1 of 9 units││                                                                                                                                    │
-│      ◉ Say what it does            holds so far · 1 of 10 units││                                                                                                                                    │
-│      ◉ Compress quickly            holds so far · 1 of 10 units││                                                                                                                                    │
-│      ◌ Show the help                                still all C││                                                                                                                                    │
-│      ◌ Report a missing file                        still all C││                                                                                                                                    │
-│    Speed — not set up                                          ││                                                                                                                                    │
-│  ▸ src/                                           ✓0/13 (+1 ✓?)││                                                                                                                                    │
-│                                                                ││                                                                                                                                    │
-│                                                                ││                                                                                                                                    │
-└────────────────────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Files ─────────────────────────────────────────────────────┐┌ u-cache · no test program ─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│▾ harness-tui-fit-0000000000                   ✓0/13 (+1 ✓?)││Map ✓ · Configure ✓ · Accept program ✓ · Scan ✓ · Plan ✓ · Test program ○ · Rust · Accept Rust                                          │
+│  ▾ Units (11)                                              ││◇ u-cache no test program                                                                                                               │
+│    ▸ ✓ u001-katajainen                                 done││Next: Make the test program — run harness gen-driver u-cache (the chat is off)                                                          │
+│    ▸ ◇ u-cache                              no test program││                                                                                                                                        │
+│    ▸ ◇ u-hash                               no test program││5 exported functions: ZopfliCacheToSublen (22 lines), ZopfliCleanCache (5 lines), ZopfliInitCache (19 lines), ZopfliMaxCachedSublen (11 │
+│    ▸ · u-lz77                                       stays C││lines), ZopfliSublenToCache (32 lines)                                                                                                  │
+│    ▸ · u-tree                                       stays C││Its C: 1 file — src/zopfli/cache.c                                                                                                      │
+│    ▸ · u-blocksplitter-deflate-squeeze              stays C││No Rust yet                                                                                                                             │
+│    ▸ · u-gzip_container                             stays C││5 of your features run it · still C — see Features                                                                                      │
+│    ▸ ◇ u-util                               no test program││Attempts: none yet                                                                                                                      │
+│    ▸ · u-zlib_container                             stays C││                                                                                                                                        │
+│    ▸ · u-zopfli_lib                                 stays C││▸ C source (Tab to the View, then Enter)                                                                                                │
+│    ▸ · u-zopfli_bin                                 stays C││                                                                                                                                        │
+│  ▾ Features (7)                                            ││                                                                                                                                        │
+│      ◉ Compress to gzip        holds so far · 1 of 10 units││                                                                                                                                        │
+│      ◉ Compress to zlib        holds so far · 1 of 10 units││                                                                                                                                        │
+│      ◉ Compress to raw deflate  holds so far · 1 of 9 units││                                                                                                                                        │
+│      ◉ Say what it does        holds so far · 1 of 10 units││                                                                                                                                        │
+│      ◉ Compress quickly        holds so far · 1 of 10 units││                                                                                                                                        │
+│      ◌ Show the help                            still all C││                                                                                                                                        │
+│      ◌ Report a missing file                    still all C││                                                                                                                                        │
+│    Speed — not set up                                      ││                                                                                                                                        │
+│  ▸ src/                                       ✓0/13 (+1 ✓?)││                                                                                                                                        │
+│                                                            ││                                                                                                                                        │
+│                                                            ││                                                                                                                                        │
+└────────────────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
  Ready — ↑↓ to choose a row, Enter for what you can do
 
  ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit

@@ -4130,7 +4130,7 @@ echo "exit=$?"
 
 **You should see** `exit=1`: the harness refused.
 
-**What it means.** `u-encode` calls `checksum.c`'s function, so no test program of its own could be built, and the harness says so before anything runs. The cockpit shows such a unit as `· stays C (calls u-checksum)`, greys Make the test program and Migrate on it, and leaves it out of the step line's counts.
+**What it means.** `u-encode` calls `checksum.c`'s function, so no test program of its own could be built, and the harness says so before anything runs. The cockpit shows such a unit as `· stays C` (its card: `It calls u-checksum, so in this version it stays C`), greys Make the test program and Migrate on it, and leaves it out of the step line's counts.
 
 **If you do not see that.** Anything that starts `awaiting response:` means the harness is about to ask a model: that should not happen for `u-encode`. Run `git status --short`; if it lists files, run `git restore targets/lzg` and ask for help.
 
@@ -4754,7 +4754,7 @@ Ready. Last: Re-check u-checksum — GREEN — all 11 checks passed (<time>)
 
 **Do.** Press `↑` to highlight `u-decode`.
 
-**You should see** `· stays C (calls u-checksum)`, and the View says something like `None of your features runs this unit's functions, so their checks pass whatever its Rust does.`
+**You should see** `· stays C`, the View's line `It calls u-checksum, so in this version it stays C — the judge tests each piece alone`, and the View says something like `None of your features runs this unit's functions, so their checks pass whatever its Rust does.`
 
 **What it means.** The cockpit warns you before you migrate a unit your features would not test (Part 8 found this).
 
@@ -6756,7 +6756,7 @@ Map ✓ · Configure ✓ · Accept program ✓ · Scan ✓ · Plan ✓ · Test p
 Next: 2 of the 4 can move to Rust now — open u-checksum: Enter
 ```
 
-and under `Units (4)`: `◇ u-checksum no test program`, `· u-encode stays C (calls u-checksum)`, `◇ u-version no test program`, `· u-lzg stays C (calls u-encode, u-version)`.
+and under `Units (4)`: `◇ u-checksum no test program`, `· u-encode stays C`, `◇ u-version no test program`, `· u-lzg stays C`.
 
 **What it means.** The tool is cut into four pieces; two can move to Rust (the counts are of those two), and the two that call other pieces stay C, as Part 7 explained. The `○` sits on the step the `Next:` line names.
 

@@ -326,7 +326,9 @@ impl UnitState {
             UnitState::Migrated(Origin::Human) => "done (by hand)".into(),
             UnitState::OriginUnknown => "done".into(),
             UnitState::Waiting => "waiting for your answer".into(),
-            UnitState::StaysC(deps) => format!("stays C (calls {})", deps.join(", ")),
+            // What it calls is said on its card and in the greyed items,
+            // not in the row (the row stays short).
+            UnitState::StaysC(_) => "stays C".into(),
             UnitState::RustGreen => "Rust green — accept it".into(),
             UnitState::RustTried => "Rust tried".into(),
             UnitState::TestProgramReady => "test program ready".into(),
@@ -334,6 +336,22 @@ impl UnitState {
             UnitState::NoTestProgram => "no test program".into(),
             UnitState::Other(status) => status.replace('-', " "),
         }
+    }
+
+    /// Why a piece that calls others stays C, for its card: "It calls
+    /// u-cache and u-hash, so in this version it stays C — …".
+    pub fn stays_c_why(&self) -> Option<String> {
+        let UnitState::StaysC(deps) = self else {
+            return None;
+        };
+        let calls = match deps.split_last() {
+            Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+            Some((last, _)) => last.clone(),
+            None => "other pieces".into(),
+        };
+        Some(format!(
+            "It calls {calls}, so in this version it stays C — the judge tests each piece alone"
+        ))
     }
 
     /// Its word in a narrow pane (under about 36 columns), when the whole
