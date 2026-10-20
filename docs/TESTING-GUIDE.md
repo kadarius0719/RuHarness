@@ -2639,7 +2639,7 @@ harness-tui --target targets/lzg
 **You should see** a full-screen view:
 
 - the **Files** pane on the left, with the project row `lzg`, then `Units (5)` with its five units under it, then `Features (none yet)`, `Speed — not set up`, and last the folder `src/`, folded (`▸`), its marks summed up at its right edge;
-- the **View** on the right, starting with a line `Next: 5 units have no Rust yet — migrate the first, u-checksum: press Enter and choose Migrate — ask in chat`, then a summary such as `7 files scanned`, `Units (5): 1 ◇ test program ready · 4 ◇ no test program` and `Features: none yet — see Features`; its title says in words how many of the C files are in Rust (`0 of … C files in Rust`);
+- the **View** on the right, starting with a line that says where you are among the eight steps a program goes through: on a wide window `Map ✓ · Configure ✓ · Accept ✓ · Scan ✓ · Plan ✓ · Test program 1/5 ○ · Rust 0/5 · Accept 0/5` (one unit of five has its test program, from Part 3), on a narrower one `Step 6 of 8: Test program 1/5`; then a line `Next: 2 units have no Rust yet — migrate the first, u-checksum: press Enter and choose Migrate — ask in chat`, then a summary such as `7 files scanned`, `Units (5): 1 ◇ test program ready · 4 ◇ no test program` and `Features: none yet — see Features`; its title says in words how many of the C files are in Rust (`0 of … C files in Rust`);
 - the line `Ready — ↑↓ to choose a row, Enter for what you can do` under the panes (it says only `Ready.` while a menu, a dialog, the View or the chat has the keys);
 - a key bar at the bottom, like `↑↓ move   ←→ fold/open   Enter actions   Tab pane   …   q quit`.
 
@@ -2668,6 +2668,7 @@ The cockpit acts on whatever is selected, so you select the unit first.
 
 **You should see** in the View, in words first:
 
+- the step line, now `u-checksum`'s own: `… Test program ✓ · Rust ○ · Accept` (on a narrower window `Step 7 of 8: Rust`);
 - `◇ u-checksum test program ready`;
 - `Next: No Rust yet — ask the chat to migrate it (a model writes the Rust, the judge checks it, you accept it)`;
 - `1 exported function: _LZG_CalcChecksum (… lines)` and `Its C: 1 file — …checksum.c`;
@@ -2862,7 +2863,7 @@ Accepting is your decision, so look first.
 Ready. Last: Accept a-<4hex> into u-checksum — GREEN — all 8 checks passed (<time>)
 ```
 
-In Files, `u-checksum` now shows `✓` (so does `checksum.c`, inside the folded `src/` folder). The View's first line reads `✓ u-checksum done (asked in chat)`. The attempt row reads `✓ a-<4hex> green *c asked in chat` (`*c` marks the attempt the unit's crate came from).
+In Files, `u-checksum` now shows `✓` (so does `checksum.c`, inside the folded `src/` folder). The View's line under the step line reads `✓ u-checksum done (asked in chat)`, and the step line has every step ticked (`All 8 steps done ✓` on a narrower window). The attempt row reads `✓ a-<4hex> green *c asked in chat` (`*c` marks the attempt the unit's crate came from).
 
 **What it means.** The cockpit ran `harness --json promote u-checksum a-<12hex> --target=…`. That created the crate `migration/units/u-checksum/u_checksum_rs/`, ran every check again in that final place, wrote the verdict files (`oracle-latest.json`, `oracle-latest.md`, `oracle-last-green.json`) and set `status = "verified"` in `plan.toml`. This answers the part's question: yes.
 
@@ -3924,7 +3925,7 @@ Press one key at a time, and check the screen after each:
 
 1. Press `Tab` to leave the chat. **You should see** the focus go to the Files list.
 2. Press `↑` or `↓` until `u-version` is highlighted, then press `→` to open it. **You should see** its `crate` row and a new attempt row `a-<4hex>` marked `✓` under it.
-3. Press `↓` until the attempt row is highlighted. **You should see** the View's first line start `Attempt a-<12hex> · green`, and the checks at the bottom all with `✓`. You do not need to judge the Rust: the checks did that.
+3. Press `↓` until the attempt row is highlighted. **You should see** a line in the View start `Attempt a-<12hex> · green`, and the checks at the bottom all with `✓`. You do not need to judge the Rust: the checks did that.
 4. Press `Enter`. **You should see** a menu with `Accept a-<4hex> into u-version`.
 5. Press `↓` until that item is highlighted, then press `Enter`. **You should see** the dialog `Accept a-<12hex> into u-version?`, as in Step 4.11.
 6. When the dialog says `ready`, press `→` and then `Enter`. **You should see** the activity line say `Running the judge…`.
@@ -3935,7 +3936,7 @@ Press one key at a time, and check the screen after each:
 Ready. Last: Accept a-<4hex> into u-version — GREEN — all 8 checks passed (<time>)
 ```
 
-and the View's first line read `✓ u-version done (asked in chat)`.
+and the View's line under the step line read `✓ u-version done (asked in chat)`.
 
 **What it means.** Accept created the crate `u_version_rs`, checked it again in place, and set the status to `verified`, as in Part 4.
 
@@ -4118,7 +4119,7 @@ harness migrate u-encode --target targets/lzg
 **You should see.**
 
 ```text
-error: invalid plan: u-encode has no test program yet: make one first (`harness gen-driver u-encode`, or Make the test program in the cockpit)
+error: invalid plan: u-encode has no test program yet: make one first (`harness gen-driver u-encode --target targets/lzg`, or Make the test program in the cockpit)
 ```
 
 **Run.**
@@ -4642,7 +4643,7 @@ harness-tui --target targets/lzg
 1. Press `?`. **You should see** the help's first page: six keys (`↑ ↓`, `Enter`, `Tab`, `Esc`, `?`, `q`), the three marks you meet first (`◇` no Rust yet, `✓` done, `⚠` needs attention), and `↓ more: every key, the mouse, every mark, features, speed, the chat` at its foot.
 2. Press `↓`. **You should see** the rest: every key and every symbol the cockpit uses (`◉`, `◌` and more), each with its meaning. Whenever a symbol in this part is unclear, `?` then `↓` explains it.
 3. Press any other key (`Esc`, say). **You should see** the help close.
-4. Press `↑` until the first row, `lzg`, is highlighted (it usually is already). **You should see** at the right edge of that row a summary like `✓2/5`, and the View's title saying it in words: `lzg · 2 of 5 C files in Rust`. The View starts with a `Next:` line, then a summary: the files scanned, the units by state, and a line beginning `Features: 3 — …`.
+4. Press `↑` until the first row, `lzg`, is highlighted (it usually is already). **You should see** at the right edge of that row a summary like `✓2/5`, and the View's title saying it in words: `lzg · 2 of 5 C files in Rust`. The View starts with the step line, then a `Next:` line, then a summary: the files scanned, the units by state, and a line beginning `Features: 3 — …`.
 
 **What it means.** The other 3 units stay in C in this version of RuHarness (Part 7 explains why).
 
@@ -6521,10 +6522,11 @@ ls ~/lzg-cockpit/src
 harness-tui --target ~/lzg-cockpit
 ```
 
-**You should see** the full-screen cockpit of Parts 4 and 9, opened on its **Project view**. The left pane is titled `Project` and holds one row, `Map the project`. The right pane's title and first lines read:
+**You should see** the full-screen cockpit of Parts 4 and 9, opened on its **Project view**. The left pane is titled `Project` and holds one row, `Map the project`. The right pane's title and first lines read (on a window under 100 columns the second line is `Step 1 of 8: Map`):
 
 ```text
 lzg-cockpit · not mapped yet
+Map ○ · Configure · Accept · then: scan, plan, and each piece
 Next: Map the project — Enter
 
 Nothing is mapped yet.
@@ -6563,6 +6565,7 @@ Programs (3)
 and the right pane, for the selected row (`t-benchmark`):
 
 ```text
+Map ✓ · Configure ○ · Accept · then: scan, plan, and each piece
 Next: Write the build configuration — Enter, or Ask for a proposal in the chat
 
 t-benchmark                                                     ⚠ needs a decision
@@ -6574,7 +6577,7 @@ Decision: two files define the same functions. Keep which?
 Advice comes once the build configuration is written and the project mapped again
 ```
 
-(Without Claude Code on this computer the first line ends `Enter, it is the first item` instead.) The first line is the one thing to do now; the rest is the selected program: its file, what the map guesses it is and why, and the decision linking could not make for you. The heading counts the programs by state (`Programs (3) · 1 accepted`) when that fits the pane on one line. `?` says what each state word means.
+(Without Claude Code on this computer the `Next:` line ends `Enter, it is the first item` instead.) The first line says where you are among the steps, the `Next:` line the one thing to do now; the rest is the selected program: its file, what the map guesses it is and why, and the decision linking could not make for you. The heading counts the programs by state (`Programs (3) · 1 accepted`) when that fits the pane on one line. `?` says what each state word means.
 
 **Do.** Press `c`. **You should see** the activity details: the map's own screen of Step 12.2 (without the `.git` line: this copy has no git), ending `exit 0`. Press `c` again to close them.
 
@@ -6650,6 +6653,7 @@ Advice comes once the build configuration is written and the project mapped agai
 **You should see** the right pane now begin:
 
 ```text
+Map ✓ · Configure ✓ · Accept ○ · then: scan, plan, and each piece
 Next: Accept t-benchmark — Enter on its row, it asks for the file
 ```
 
@@ -6696,7 +6700,7 @@ and the card's last line says how advice comes: `No advice yet — Enter, then A
    ✓ t-unlzg                 accepted
    ```
 
-   with `t-unlzg` still selected: an accepted program's row is its tool's row. The right pane begins `Next: Open tool t-unlzg — Enter on its row` (the tool you just accepted comes first, until you move to another row), and the card says `Its build configuration: migration/tools/t-unlzg/harness.toml`.
+   with `t-unlzg` still selected: an accepted program's row is its tool's row. The right pane begins `Map ✓ · Configure ✓ · Accept ✓ · then: scan, plan, and each piece` and `Next: Open tool t-unlzg — Enter on its row` (the tool you just accepted comes first, until you move to another row), and the card says `Its build configuration: migration/tools/t-unlzg/harness.toml`.
 
 6. Press `Enter`. **You should see** a menu whose first item is `Open tool t-unlzg`, with `↳ recommended: it is accepted`.
 7. Press `Enter`. **You should see** the tool's screen: `Next: Nothing is scanned yet — press Enter and choose Scan the project`, and in Files, first, the row `◂ Back to the project view`. Under it come the tool, `Features` and `Speed`, then the project's folders and files, open (the tool has no units yet: once it has, the folders start folded and `Units` comes first). The project's files that are not part of the tool are greyed out and marked `⊖`.

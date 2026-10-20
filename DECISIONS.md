@@ -86,6 +86,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-10-19 — **An old harness-mcp beside a newer cockpit is said as a rebuild, not a sign-in** — its own dialog, with the rebuild line to paste as step 2; the init check returns the problem itself.
 - 2026-10-19 — **A conversation in the chat asks before a move, and a new chat ends it** — Open tool / Back ask and start a new chat; a conversation is this chat's own messages, not the screen's old lines.
 - 2026-10-19 — **The Project view, revision 2: one list, one card, one line** — the left pane the only list; the right pane a card with the decision and the model's why; the Next step one line; the reply's optional `why`.
+- 2026-10-20 — **The guided path: the journey on every screen, the test program in the cockpit, dialogs that stand out, panes that fit** — the stage words and the journey line; Make the test program asked in chat; migrate's refusal in words; the backdrop and panel roles; panes as wide as their rows.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -3611,3 +3612,77 @@ card now leaves out what the Next step already says; the tool's "looks like a to
 the map really checks (the first folder is not a test, example or benchmark one), not on a
 `tools/` folder.
 
+
+## 2026-10-20 — The guided path: the journey on every screen, the test program in the cockpit, dialogs that stand out, panes that fit
+
+**Built** (docs/COCKPIT-WRAPPER-DESIGN.md §9.4, after the person's first unit: a planned unit's Next
+step sent them to Migrate, the migrate was refused because the unit had no test program, the
+refusal spoke of `[unit.oracle] kind`, and the missing step was only on the command line):
+
+- **The stage words and the driver state.** The read model's `UnitView` carries `driver: None |
+  Validated | Stale`, read from the plan's `[unit.oracle]` (kind, driver, rust_crate) and
+  `driver-validation.json`. `planned` and `tried` are gone: a pending unit reads `◇ no test
+  program`, `◇ test program ready`, `◐ Rust tried` or `✓? Rust green — accept it`; a done one `✓
+  done` (with "(steered)", "(asked in chat)", "(by hand)"). Help, guide, tutorial and the cockpit
+  topic follow.
+- **The journey line** (`crates/harness-tui/src/journey.rs`): under the View's title on every
+  screen, the eight stages with `✓` (good), `○` (the line's one accent) and plain later stages; a
+  unit's own last three, the tool's counts of units past each, the Project view's three then "then:
+  scan, plan, and each piece"; folded to "Step N of 8: <stage>" under 100 columns or where it does
+  not fit.
+- **The test program in the cockpit.** `Act::GenDriver`, "Make the test program — ask in chat", is
+  wired as Migrate is: harness-mcp's cockpit mode lists `harness_gen_driver {unit}` (so the
+  cockpit's tool list changed: harness-mcp must be rebuilt beside it, which the "out of date"
+  dialog already says); the dialog "Make <unit>'s test program?" says what the chat writes, what the
+  judge does and what is written; the argv is `gen-driver <unit> … --requester=chat`; a hand-off's
+  Continue re-runs gen-driver with `--answer=-`; the outcome line says "<unit>'s test program is
+  ready — next, its Rust" or which checks failed. `harness gen-driver` gained `--requester`,
+  `--answer`, `--answer-key`, `--answer-bytes`; driver attempts can now carry the chat label (their
+  id mixes it in, as migrate's; their hand-offs in `driver-traces/chat/`), which the trajectory had
+  refused before. Migrate is greyed on a unit with none, the Next step there is "Make the test
+  program — Enter, then ask in chat", `harness_unit` and `harness_status` report `driver`, and the
+  chat's brief asks for the test program first.
+- **The refusal in words.** migrate on a unit with no test program: "<unit> has no test program
+  yet: make one first (`harness gen-driver <unit> --tool …`, or Make the test program in the
+  cockpit)"; the other shapes say what is missing the same way. The guide's known quirk about "a
+  later milestone" is gone.
+- **Dialogs that stand out.** Roles `backdrop` (every cell behind a dialog, a menu or the help) and
+  `panel` (the box's background); the box's frame and title in the section colour, its command in
+  the label colour, the safe button reversed, the armed one in the accent reversed. Style goldens
+  gained a dialog per theme, and print backgrounds.
+- **Panes that fit.** The Files / Project pane as wide as its longest row, within 30 and a third of
+  the screen while the View keeps 80; `files_width` in cockpit.toml; names cut in the middle, the
+  project row keeping the tool's name; the chat column without the focus the larger of 64 and a
+  third of what is left. Goldens at 100, 120, 200 and 280 columns.
+
+**Decided where §9.4 left it open or could not be followed as written:**
+- A generated driver whose validation no longer holds is a fourth word, `◇ test program out of
+  date`, not "no test program" (which would be untrue); Make the test program on it passes
+  `--promote`, which gen-driver needs to replace a generated driver.
+- A driver written by hand (no validation record, no driver attempts) counts as ready, because
+  migrate takes it.
+- The tool's Next step with several units waiting migrates the first one whose test program is
+  ready; when none is, it opens the first unit for its test program (the menu on the tool's row has
+  no Make the test program item, so the Next step names Open unit).
+- **The panel's contrast forced palette changes.** Words in a dialog are read on the panel, and at
+  254 the light theme's label (242), good (28), bad (160), attention (130) and disabled (243) were
+  under 4.5:1, as was the dark theme's disabled (245) on 235. They became 241, 22, 124, 94, 240
+  and 246; the §9.2 table's values for those roles are superseded. The contrast test covers every
+  role drawn on a panel.
+- The backdrop is the terminal's "bright black" and mono's dim, which the colour rules forbade
+  everywhere; the rules now allow exactly those, on the backdrop's cells. The key bar is not
+  backdropped: it names the box's own keys.
+- At 100 to 109 columns the 30-column floor wins over the View's 80 (the View has 70); under 100
+  the floor is 24. At 100 columns a unit row still drops its state word when even a cut name would
+  not leave room for it (the selected row keeps it): the pane cannot be wider there without
+  squeezing the View further.
+- The counts column already sat in the state column's place on group rows; nothing changed there.
+- The chat's own words for an act are kept ("Make the test program for u-x" is typed into the
+  chat, as "Migrate u-x" is).
+
+**Also fixed on the way.** The stage words made `files.rs` (built without the tui feature for
+harness-mcp) call the tui-only `next` module; harness-mcp's own build broke until the step that
+followed moved `acceptable` into `files.rs`.
+
+**Not done here; the person's to run once:** the live chat tests (the brief and the tool list
+changed); a real Make the test program through the chat on liblzg.

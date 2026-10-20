@@ -2093,7 +2093,16 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
     };
     let run = harness_llm::migrate::run_migration(
         &params, &oracle, &ctx, &facts, &plan_doc, unit, &hazards,
-    );
+    )
+    // The refusal names `harness gen-driver <unit>`: spelled for this
+    // target and tool, so the command it gives runs as typed.
+    .map_err(|e| match e {
+        Error::InvalidPlan(m) => Error::InvalidPlan(m.replace(
+            &format!("`harness gen-driver {unit_id}`"),
+            &format!("`{}`", hint(&ctx, &format!("gen-driver {unit_id}"))),
+        )),
+        e => e,
+    });
     // An answer the run never asked for is refused after the fact — the
     // one refusal that cannot come first — and only when the run ended
     // awaiting another request or finished; any other error keeps its own

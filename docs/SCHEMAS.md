@@ -963,8 +963,22 @@ runner}` + `heldout/tools/…` (never inside a target root), `scores.json`.
 ## CLI additions
 
 - `harness gen-driver <UNIT> [--target] [--provider] [--model] [--promote] [--retry]
-  [--attempt ID] [--allow-unsandboxed]` — exit 0 green · 10 red/blocked/truncated/
-  format · 1 harness error (incl. awaiting external responses).
+  [--attempt ID] [--allow-unsandboxed] [--requester chat] [--answer FILE --answer-key KEY
+  [--answer-bytes N]]` — exit 0 green · 10 red/blocked/truncated/
+  format · 1 harness error (incl. awaiting external responses). Since 2026-10-20
+  (docs/COCKPIT-WRAPPER-DESIGN.md §9.4, the cockpit's Make the test program): `--requester`,
+  `--answer`, `--answer-key` and `--answer-bytes` as `migrate` has them — a labelled driver
+  attempt mixes the label into its `d-` id (blake3(… ‖ request_key ‖ NUL ‖ `requester:chat`);
+  unlabelled ids unchanged), its hand-offs live in `units/<u>/driver-traces/chat/`, an answer is
+  checked as migrate's and one the run never asked for is `answer-unused`. Its end is an
+  `attempt` event (`promotion` "promoted: the unit's test program" when the driver was
+  promoted, "not promoted: not green" when red), and a red run's last message names the failed
+  checks: "gen-driver: the test program did not pass: <check>, …".
+- `harness migrate` on a unit with no usable `[unit.oracle]` is refused (`invalid-plan`, before
+  any model call) in words naming the missing stage: "<unit> has no test program yet: make one
+  first (`harness gen-driver <unit> [--tool …]`, or Make the test program in the cockpit)"; a
+  kind other than `c-abi-differential`, a table with no `driver` and one with no `rust_crate`
+  each say what is missing the same way (§9.4).
 - `harness bench vendor --suite DIR --from CHECKOUT` — checkout's detached HEAD must
   equal the pin; never overwrites a vendored file with different bytes.
 - `harness bench verify-corpus | status | init [--check] --suite DIR` (`status`, `init`,
@@ -2058,7 +2072,9 @@ after the picks' `message` lines.
 `--tool` — no mapped tool yet, a map to act on, or several tools — opens on its **Project
 view** (pass 3 of docs/reviews/2026-10-18-cockpit-usability-critique.md): the cockpit's own
 screen, panes, key bar and dialogs. Since 2026-10-19 (docs/COCKPIT-WRAPPER-DESIGN.md §9.3,
-"one list, one card, one line") its left pane (36 columns, 30 under 120) is the only list:
+"one list, one card, one line") its left pane (since 2026-10-20 as wide as its longest row
+needs, within 30 columns and a third of the screen while the View keeps 80; `files_width` in
+`cockpit.toml` fixes it, within 24 and half the screen) is the only list:
 before a map one row, "Map the project"; after a map the heading "Programs (n)", with the counts
 of the states present ("· 1 accepted · 2 need a decision", "did not compile" and "did not link"
 too) only when the whole heading fits the pane on one line, then one row per program from the
@@ -2067,8 +2083,11 @@ pane's edge — its mark, its id (cut with "…" when needed, never the state), 
 incomplete", "· fuzzer, not a tool" — an accepted program's row being its tool's row (a tool
 the map does not name keeps a row of its own); a file holding a `main` that did not compile is
 one row, "✗ <file>", "did not compile"; "Libraries (n)" only when there are any. Its right pane
-is titled with the folder's name (never the full path) and "n programs found"; line 1 is the
-Next step, one line "Next: <verb phrase> — <key>" ("Next:" in the accent, the phrase bold):
+is titled with the folder's name (never the full path) and "n programs found"; line 1 (since
+2026-10-20, docs/COCKPIT-WRAPPER-DESIGN.md §9.4) is the journey line — "Map ✓ · Configure ○ ·
+Accept · then: scan, plan, and each piece" (a done step `✓` in the good colour, the current `○` in
+the accent, later ones in the label colour; under 100 columns "Step 2 of 8: Configure"); line 2
+is the Next step, one line "Next: <verb phrase> — <key>" ("Next:" in the accent, the phrase bold):
 "Map the project — Enter"; "Write the build configuration — Enter, it is the first item" (a
 guess; "— Enter, or Ask for a proposal in the chat" while the chat can be used); "Write the build
 configuration — Enter (or harness project map --adopt)" (a configuration that came with the
@@ -2125,6 +2144,33 @@ Back to the project view", comes back (neither while a command runs, a hand edit
 kept or a hand-off waits; a conversation in the chat asks first, and the move starts a new chat
 there). A project with exactly one tool and no
 map opens that tool, with the same first row. harness-mcp never runs these acts.
+
+**The guided path** (2026-10-20, docs/COCKPIT-WRAPPER-DESIGN.md §9.4). Every View's first line
+is the journey line of the eight stages — Map, Configure, Accept (the project's), Scan, Plan
+(the tool's), Test program, Rust, Accept (each unit's): on a unit's screen its own last three,
+on the tool's whole screen the units past each ("Test program 2/4 ○ · Rust 1/4 · Accept 1/4"),
+folded to "Step N of 8: <stage>" under 100 columns or where it does not fit. A unit's state word
+says its stage: "◇ no test program", "◇ test program out of date", "◇ test program ready", "◐ Rust
+tried", "✓? Rust green — accept it", "✓ done" (with "(steered)", "(asked in chat)", "(by hand)"),
+besides "✗ failing", "⚠ needs attention", "⊘ blocked" and "✓? verified, origin not recorded". The
+read model's `UnitView.driver` is `None | Validated | Stale` (from the plan's `[unit.oracle]` —
+kind, driver, rust_crate — and `driver-validation.json`; a driver with neither a validation nor
+driver attempts is one written by hand: Validated), and harness-mcp's `harness_unit` and
+`harness_status` report it as `driver` ("none", "validated", "stale"). On a unit with none (or
+stale), "Make the test program — ask in chat" leads its menu and the Next step is "Make the test
+program — Enter, then ask in chat"; "Migrate — ask in chat" is greyed "it has no test program
+yet — Make the test program first". The chat's `harness_gen_driver {unit}` (cockpit mode) is
+held as a request; its dialog "Make <unit>'s test program?" says what the chat writes, what the
+judge does and what is written, then `harness --json gen-driver <unit> --target=… --provider=…
+--model=… --requester=chat` (`--promote` when the generated driver is out of date); a hand-off's
+Continue re-runs that shape with `--answer=-`. Its outcome line: "✓ <unit>'s test program is
+ready — next, its Rust", or "✗ <unit>'s test program did not pass the judge's checks — it did
+not pass: <checks> — ask the chat to make it again". While a dialog, a menu or the help is open
+every cell behind it is drawn in the role `backdrop` (248 dark, 242 light, the terminal's bright
+black, dim in mono; no bold, no state colours, no reverse), and the box's cells sit on the role
+`panel`'s background (235 dark, 254 light, none in terminal and mono): its frame and title in the
+section role, bold, its `Command:` line in the label role, the safe button plain reversed, the
+armed one in the accent reversed. Both roles may be set in `cockpit.toml`'s `[colors]`.
 
 ## `harness project ask` (docs/PROJECT-MAP-DESIGN.md §3.4, §3.8, §5 step d)
 

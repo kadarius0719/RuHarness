@@ -102,6 +102,22 @@ views explain rather than show. The next cockpit pass applies §9.3's three rule
 card, one line) to the tool's screen; design it first, as §9.3 was, then build it with Opus and
 check it with a newcomer walk.
 
+## Done (2026-10-20): the guided path
+
+Built from COCKPIT-WRAPPER-DESIGN §9.4 (DECISIONS 2026-10-20, "The guided path"), after the person's
+principle that the cockpit drives a person through the workflow: a line of the eight stages under
+every View's title (folded to "Step N of 8: …" under 100 columns); a unit's state says its stage
+(`no test program`, `test program ready`, `Rust tried`, `Rust green — accept it`, `done`); **Make
+the test program — ask in chat** in the cockpit, through the chat as Migrate is (harness-mcp's
+`harness_gen_driver`; `gen-driver` gained `--requester` and `--answer`), Migrate greyed until it is
+made; migrate's refusal says the missing stage in words; dialogs, menus and the help stand on a
+panel over a grey backdrop; the Files and Project panes are as wide as their rows (`files_width` in
+cockpit.toml). The light theme's label, good, bad, attention and disabled colours and the dark
+theme's disabled colour were darkened for the panel's contrast. Open from it: **rebuild harness-mcp
+beside the cockpit** (its tool list changed); the live chat tests once (the brief changed); the
+person's own Make the test program through the chat on liblzg, and a look at the new dialogs in
+their terminal. The tool's-screen pass named above is still the next cockpit design.
+
 ## The work, in order
 
 1. **The person's own cold-start run.** docs/FIRST-HOUR.md as written (liblzg), then lz4 through

@@ -339,6 +339,17 @@ fn a_tools_refusals_name_the_next_step() {
         .find_map(|l| l.strip_prefix("id = \""))
         .and_then(|l| l.strip_suffix('"'))
         .unwrap();
+    // Migrate names the stage that was skipped, and the command spelled
+    // for this tool (cockpit design §9.4).
+    let r = on_tool(&["migrate", unit, "--allow-unsandboxed"]);
+    assert_eq!(r.code, 1, "{}{}", r.stdout, r.stderr);
+    assert_eq!(
+        r.stderr.trim_end(),
+        format!(
+            "error: invalid plan: {unit} has no test program yet: make one first (`harness \
+             gen-driver {unit} --tool t-a --target {t}`, or Make the test program in the cockpit)"
+        )
+    );
     let r = on_tool(&["verify", unit, "--allow-unsandboxed"]);
     assert_eq!(r.code, 1, "{}{}", r.stdout, r.stderr);
     assert!(

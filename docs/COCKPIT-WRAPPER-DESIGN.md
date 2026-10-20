@@ -943,6 +943,8 @@ the words, and are unchanged by the palette.
 
 ### 9.4 The guided path: the journey on every screen, the test program in the cockpit, dialogs that stand out, panes that fit (2026-10-20)
 
+*Status (2026-10-20): built; where it was decided otherwise (a fourth word for an out-of-date test program, the panel's contrast darkening five light and one dark colour of §9.2's table, the 30-column floor at 100 columns) see DECISIONS 2026-10-20, "The guided path".*
+
 The person's principle, after their first unit (2026-10-20): the cockpit drives a person through
 the workflow; leaving them to find the steps makes newer users lost; design for that first, and
 keep the depth for those who want it. What their run showed: a planned unit's Next step said
