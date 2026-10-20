@@ -1,13 +1,13 @@
 ┌ Files ───────────────┐┌ harness-tui-heads00-0000000000 · 0 of 13 C files in R┐
-│▾ harness… ✓0/13 (+1 …││Next step: 3 units have no Rust yet — migrate the     │
-│  ▾ Units (11)        ││first, u-cache: press Enter and choose Migrate — ask  │
-│    ▸ ✓? u001-katajai…││in chat                                               │
-│    ▸ ◇ u-cache       ││                                                      │
-│    ▸ ◇ u-hash planned││26 files scanned                                      │
-│    ▸ ◇ u-lz77 planned││Units (11): 1 ✓? verified, origin not recorded · 10 ◇ │
-│    ▸ ◇ u-tree planned││planned                                               │
-│    ▸ ◇ u-blocksplitt…││                                                      │
-│    ▸ ◇ u-gzip_contai…││Features: 7 — 5 hold so far, 2 still all C            │
+│▾ harness… ✓0/13 (+1 …││Next: 3 units have no Rust yet — migrate the first,   │
+│  ▾ Units (11)        ││u-cache: press Enter and choose Migrate — ask in chat │
+│    ▸ ✓? u001-katajai…││                                                      │
+│    ▸ ◇ u-cache       ││26 files scanned                                      │
+│    ▸ ◇ u-hash planned││Units (11): 1 ✓? verified, origin not recorded · 10 ◇ │
+│    ▸ ◇ u-lz77 planned││planned                                               │
+│    ▸ ◇ u-tree planned││                                                      │
+│    ▸ ◇ u-blocksplitt…││Features: 7 — 5 hold so far, 2 still all C            │
+│    ▸ ◇ u-gzip_contai…││                                                      │
 │    ▸ ◇ u-util planned││                                                      │
 │    ▸ ◇ u-zlib_contai…││                                                      │
 │    ▸ ◇ u-zopfli_lib  ││                                                      │

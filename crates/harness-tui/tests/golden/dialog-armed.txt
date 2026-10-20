@@ -1,6 +1,6 @@
 ┌ Files ───────────────────────┐┌ u-lib · migrated ────────────────────────────────────────────────────────────────────┐
 │▾ harness-tui-gdialog-00… ✓1/1││✓ u-lib migrated                                                                      │
-│  ▾ Units (1)                 ││Next step: In Rust and checked — nothing to do                                        │
+│  ▾ Units (1)                 ││Next: In Rust and checked — nothing to do                                             │
 │    ▸ ✓ u-lib         migrated││                                                                                      │
 │    Features (none yet)       ││1 exported function: read_scalefactors (44 lines)                                     │
 │    Speed — not set up        ││Its C: 1 file — test_case/src/lib.c                                                   │

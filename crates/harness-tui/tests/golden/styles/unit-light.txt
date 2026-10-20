@@ -13,14 +13,14 @@
   @25-26 fg 240 NONE "◇"
   @27-34 fg - BOLD "u-cache"
   @79-79 fg 244 NONE "│"
-│  ▾ Units (11)        ││Next step: No Rust yet — ask the chat to migrate it (a│
+│  ▾ Units (11)        ││Next: No Rust yet — ask the chat to migrate it (a     │
   @0-0 fg 25 BOLD "│"
   @1-4 fg 242 NONE "▾"
   @5-14 fg 25 BOLD "Units (11)"
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
-  @25-34 fg 23 BOLD "Next step:"
-  @35-78 fg - BOLD "No Rust yet — ask the chat to migrate it (a"
+  @25-29 fg 23 BOLD "Next:"
+  @30-73 fg - BOLD "No Rust yet — ask the chat to migrate it (a"
   @79-79 fg 244 NONE "│"
 │    ▸ ✓? u001-katajai…││model writes the Rust, the judge checks it, you accept│
   @0-0 fg 25 BOLD "│"

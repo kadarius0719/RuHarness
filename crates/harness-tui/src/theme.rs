@@ -14,7 +14,7 @@
 //! - `notice`: informational lines that are neither a state nor the next
 //!   step (a file written, the project changed, the chat waiting).
 //! - `label`: secondary labels ("(a tool, by its folder)", a program's path,
-//!   "c for its words").
+//!   "c for details").
 //! - `accent`: one colour, only for the Next step's label and the menu's
 //!   recommended item.
 //! - `good`, `bad`, `attention`: the three state colours, only where a state

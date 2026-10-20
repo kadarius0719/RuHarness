@@ -15,7 +15,7 @@ use crate::tree::Selection;
 /// What to do now, in words, and the menu item that does it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Advice {
-    /// The Next step, a sentence (the View's "Next step: …" line).
+    /// The Next step, a sentence (the View's "Next: …" line).
     pub text: String,
     /// The item the menu puts first, when one does it.
     pub action: Option<Action>,
@@ -25,7 +25,7 @@ pub struct Advice {
 }
 
 impl Advice {
-    /// The View's line: "Next step: " and the sentence, capitalised — not
+    /// The View's line: "Next: " and the sentence, capitalised — not
     /// when it starts with a name ("u-lib's Rust…").
     pub fn line(&self) -> String {
         let first = self.text.split(' ').next().unwrap_or_default();
@@ -35,7 +35,7 @@ impl Advice {
             Some(c) if word => c.to_uppercase().chain(chars).collect(),
             _ => self.text.clone(),
         };
-        format!("Next step: {text}")
+        format!("Next: {text}")
     }
 }
 

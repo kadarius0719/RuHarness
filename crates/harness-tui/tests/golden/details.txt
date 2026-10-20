@@ -1,5 +1,5 @@
 ┌ Files ───────────────────────┐┌ harness-tui-gdetails-0000000000 · 1 of 1 C file in Rust ─────────────────────────────┐
-│▾ harness-tui-gdetails-0… ✓1/1││Next step: Every unit is in Rust and checked — measure its speed: choose Speed, under │
+│▾ harness-tui-gdetails-0… ✓1/1││Next: Every unit is in Rust and checked — measure its speed: choose Speed, under      │
 │  ▾ Units (1)                 ││Features in the tree                                                                  │
 │    ▸ ✓ u-lib         migrated││                                                                                      │
 │    Features (none yet)       ││2 files scanned                                                                       │

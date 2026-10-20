@@ -1,7 +1,7 @@
 ┌ Files ───────────────┐┌ Speed (1 of 1) ──────────────────────────────────────┐
-│▾ harness-tui-speed-v…││Next step: u001-katajainen's Rust is slower than the C│
-│  ▾ Units (11)        ││— open it under Units to see how to change it, if     │
-│    ▸ ✓? u001-katajai…││speed matters there                                   │
+│▾ harness-tui-speed-v…││Next: u001-katajainen's Rust is slower than the C —   │
+│  ▾ Units (11)        ││open it under Units to see how to change it, if speed │
+│    ▸ ✓? u001-katajai…││matters there                                         │
 │    ▸ ◇ u-cache       ││                                                      │
 │    ▸ ◇ u-hash planned││Speed — your workloads, the C against the Rust in use │
 │    ▸ ◇ u-lz77 planned││measured on Apple M3 with 2 compilers — see each row ·│

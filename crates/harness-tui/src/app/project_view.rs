@@ -1007,7 +1007,10 @@ impl App {
         next.chat.tool = Some(id.clone());
         next.chat_on = chat_wanted;
         next.run = self.run.take();
-        next.last = self.last.take();
+        // A screen never opens with another screen's last command (the
+        // details, c, keep it).
+        next.last = None;
+        self.last = None;
         next.mouse = self.mouse;
         next.now = self.now;
         next.layout = self.layout.clone();
@@ -1027,6 +1030,9 @@ impl App {
         };
         p.shown = true;
         p.chat_wanted = chat_on;
+        // The tool's last command is not the project's.
+        self.last = None;
+        self.last_waiting = false;
         // The next chat starts on the project, no tool open (the switch
         // waits while the chat holds a conversation).
         self.chat.tool = None;

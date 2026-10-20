@@ -161,7 +161,7 @@ fn a_map_run_shows_its_words_and_the_rows_follow() {
     app.on_child_exit(std::process::ExitStatus::from_raw(0));
     let last = app.last.clone().unwrap();
     assert!(
-        last.starts_with("Map the project — done (") && last.ends_with("c for its words"),
+        last.starts_with("Map the project — done (") && last.ends_with("c for details"),
         "{last}"
     );
     let lines: Vec<String> = app
@@ -222,7 +222,7 @@ fn a_failed_run_says_so_and_offers_the_adoption_question() {
         last.starts_with(
             "Map the project — done, with a problem: could not record /x as made on this \
              computer (parse error)"
-        ) && last.ends_with("c for its words"),
+        ) && last.ends_with("c for details"),
         "{last}"
     );
     assert!(app
@@ -514,16 +514,16 @@ fn a_hand_off_pause_waits_for_the_answer_and_never_fails() {
 fn the_status_line_shortens_paths_and_keeps_its_end() {
     let long = " Ready. Last: Map the project — done, with a problem: could not read \
                 /Users/someone/code/projects/liblzg/migration/map/project-map.json (2s); c for \
-                its words";
+                details";
     let fitted = super::super::fit_status(long, 120);
-    assert!(fitted.ends_with("; c for its words"), "{fitted}");
+    assert!(fitted.ends_with("; c for details"), "{fitted}");
     assert!(
         fitted.contains("…/migration/map/project-map.json"),
         "{fitted}"
     );
     assert!(super::super::width_of(&fitted) <= 120);
     let narrow = super::super::fit_status(long, 60);
-    assert!(narrow.ends_with("; c for its words"), "{narrow}");
+    assert!(narrow.ends_with("; c for details"), "{narrow}");
     assert!(super::super::width_of(&narrow) <= 60, "{narrow}");
     assert_eq!(super::super::fit_status(" Ready.", 60), " Ready.");
     assert_eq!(super::super::short_path("/a/b/c/d.json:"), "…/b/c/d.json:");
@@ -920,13 +920,12 @@ fn the_help_says_what_the_states_mean() {
     assert!(!screen.contains("in Rust"), "{screen}");
     assert!(!screen.contains("planned"), "{screen}");
     for words in [
-        "✓       links, or accepted (it is a tool now)",
-        "⚠       needs a decision: Accept asks which file to keep",
         "Mapping finds its programs and libraries",
         "What the states mean",
-        "⚠ needs a decision: two files define the same functions;",
-        "✓ links: its files compile and link into one program",
-        "✗ did not compile, ✗ did not link: the build likely needs flags",
+        "⚠ needs a decision: two files define the same functions; pick one in Accept.",
+        "✓ accepted: it is a tool: open it to scan, plan and migrate it.",
+        "✓ links: its files compile and link; Accept makes it a tool.",
+        "✗ did not compile or link: the build likely needs more flags.",
     ] {
         assert!(screen.contains(words), "{words}\n{screen}");
     }
@@ -1405,15 +1404,20 @@ fn a_tools_screen_comes_back_to_the_project_view() {
     let buffer = render(&mut app, 120, 30);
     golden("tool-come-back.txt", &app, &buffer);
     // Its menu would hold only the Next step's item: one Enter goes back.
+    // A screen never opens with another screen's last command.
+    app.last = Some("Scan the project — done (1 s); c for details".into());
     assert_eq!(app.project_menu_items().len(), 1);
     code(&mut app, KeyCode::Enter);
     assert!(app.in_project_view());
+    assert_eq!(app.last, None);
     assert_eq!(app.config.tool, None);
     assert_eq!(app.selection, Selection::Tool("t-lzg".into()));
     // And into the tool again, as the event loop does on Open tool.
     let read = crate::load::read_tool(&root, Some("t-lzg")).unwrap();
+    app.last = Some("Accept t-benchmark — done (1 s); c for details".into());
     app.open_tool("t-lzg".into(), read);
     assert!(!app.in_project_view());
+    assert_eq!(app.last, None);
     assert_eq!(app.config.tool.as_deref(), Some("t-lzg"));
     assert_eq!(app.rows[0].selection(), Some(&Selection::ProjectHome));
     assert!(app.chat.tool.as_deref() == Some("t-lzg"));

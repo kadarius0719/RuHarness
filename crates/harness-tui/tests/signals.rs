@@ -727,7 +727,7 @@ fn the_keyboard_scans_the_project_end_to_end() {
         std::thread::sleep(Duration::from_millis(300));
     };
     wait_for("the cockpit to draw", 30, || {
-        saw("Next step: 1 file changed").then_some(())
+        saw("Next: 1 file changed").then_some(())
     });
     let tui_pid = wait_for("the cockpit process", 10, || {
         children_of(script.id()).into_iter().next()
@@ -1065,7 +1065,7 @@ fn the_mouse_scans_the_project_end_to_end() {
         std::thread::sleep(Duration::from_millis(300));
     };
     wait_for("the cockpit to draw", 30, || {
-        saw("Next step: 1 file changed").then_some(())
+        saw("Next: 1 file changed").then_some(())
     });
     let tui_pid = wait_for("the cockpit process", 10, || {
         children_of(script.id()).into_iter().next()
@@ -1246,7 +1246,7 @@ fn the_keyboard_maps_the_features_end_to_end() {
         std::thread::sleep(Duration::from_millis(300));
     };
     wait_for("the cockpit to draw", 30, || {
-        saw("Next step: Map the features").then_some(())
+        saw("Next: Map the features").then_some(())
     });
     let tui_pid = wait_for("the cockpit process", 10, || {
         children_of(script.id()).into_iter().next()

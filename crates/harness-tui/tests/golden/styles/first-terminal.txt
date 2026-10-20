@@ -3,44 +3,43 @@
   @1-7 fg Blue BOLD | REVERSED "Files"
   @8-23 fg Blue BOLD "───────────────┐"
   @25-78 fg Blue BOLD "harness-tui-theme-first-0000000000 · 0 of 13 C files"
-│▾ harness… ✓0/13 (+1 …││Next step: 3 units have no Rust yet — migrate the     │
+│▾ harness… ✓0/13 (+1 …││Next: 3 units have no Rust yet — migrate the first,   │
   @0-0 fg Blue BOLD "│"
   @1-2 fg - BOLD | REVERSED "▾"
   @3-10 fg Blue BOLD | REVERSED "harness…"
   @11-22 fg - BOLD | REVERSED "✓0/13 (+1 …"
   @23-23 fg Blue BOLD "│"
-  @25-34 fg Cyan BOLD "Next step:"
-  @35-73 fg - BOLD "3 units have no Rust yet — migrate the"
-│  ▾ Units (11)        ││first, u-cache: press Enter and choose Migrate — ask  │
+  @25-29 fg Cyan BOLD "Next:"
+  @30-75 fg - BOLD "3 units have no Rust yet — migrate the first,"
+│  ▾ Units (11)        ││u-cache: press Enter and choose Migrate — ask in chat │
   @0-0 fg Blue BOLD "│"
   @5-14 fg Blue BOLD "Units (11)"
   @23-23 fg Blue BOLD "│"
-  @25-76 fg - BOLD "first, u-cache: press Enter and choose Migrate — ask"
-│    ▸ ✓? u001-katajai…││in chat                                               │
+  @25-77 fg - BOLD "u-cache: press Enter and choose Migrate — ask in chat"
+│    ▸ ✓? u001-katajai…││                                                      │
   @0-0 fg Blue BOLD "│"
   @7-9 fg Green NONE "✓?"
   @23-23 fg Blue BOLD "│"
-  @25-31 fg - BOLD "in chat"
-│    ▸ ◇ u-cache       ││                                                      │
+│    ▸ ◇ u-cache       ││26 files scanned                                      │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
-│    ▸ ◇ u-hash planned││26 files scanned                                      │
-  @0-0 fg Blue BOLD "│"
-  @23-23 fg Blue BOLD "│"
-│    ▸ ◇ u-lz77 planned││Units (11): 1 ✓? verified, origin not recorded · 10 ◇ │
+│    ▸ ◇ u-hash planned││Units (11): 1 ✓? verified, origin not recorded · 10 ◇ │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
   @25-35 fg Blue BOLD "Units (11):"
-│    ▸ ◇ u-tree planned││planned                                               │
+│    ▸ ◇ u-lz77 planned││planned                                               │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
-│    ▸ ◇ u-blocksplitt…││                                                      │
+│    ▸ ◇ u-tree planned││                                                      │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
-│    ▸ ◇ u-gzip_contai…││Features: 7 — 5 hold so far, 2 still all C            │
+│    ▸ ◇ u-blocksplitt…││Features: 7 — 5 hold so far, 2 still all C            │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"
   @25-33 fg Blue BOLD "Features:"
+│    ▸ ◇ u-gzip_contai…││                                                      │
+  @0-0 fg Blue BOLD "│"
+  @23-23 fg Blue BOLD "│"
 │    ▸ ◇ u-util planned││                                                      │
   @0-0 fg Blue BOLD "│"
   @23-23 fg Blue BOLD "│"

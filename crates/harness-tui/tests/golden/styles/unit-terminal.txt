@@ -7,12 +7,12 @@
   @0-0 fg Blue BOLD "│"
   @3-23 fg Blue BOLD "harness-tui-theme-u…│"
   @27-34 fg - BOLD "u-cache"
-│  ▾ Units (11)        ││Next step: No Rust yet — ask the chat to migrate it (a│
+│  ▾ Units (11)        ││Next: No Rust yet — ask the chat to migrate it (a     │
   @0-0 fg Blue BOLD "│"
   @5-14 fg Blue BOLD "Units (11)"
   @23-23 fg Blue BOLD "│"
-  @25-34 fg Cyan BOLD "Next step:"
-  @35-78 fg - BOLD "No Rust yet — ask the chat to migrate it (a"
+  @25-29 fg Cyan BOLD "Next:"
+  @30-73 fg - BOLD "No Rust yet — ask the chat to migrate it (a"
 │    ▸ ✓? u001-katajai…││model writes the Rust, the judge checks it, you accept│
   @0-0 fg Blue BOLD "│"
   @7-9 fg Green NONE "✓?"

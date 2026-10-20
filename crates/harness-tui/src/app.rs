@@ -2034,12 +2034,12 @@ impl App {
                     }
                     (_, Some(sig)) => format!("{label} — stopped ({sig}) ({took})"),
                     (Some(0), _) if problem.is_some() => format!(
-                        "{label} — {} ({took}); c for its words",
+                        "{label} — {} ({took}); c for details",
                         with("done, with a problem".into())
                     ),
-                    (Some(0), _) => format!("{label} — done ({took}); c for its words"),
+                    (Some(0), _) => format!("{label} — done ({took}); c for details"),
                     (Some(code), _) => format!(
-                        "{label} — {} ({took}); c for its words",
+                        "{label} — {} ({took}); c for details",
                         with(format!("failed (exit {code})"))
                     ),
                     (None, None) => format!("{label} — ended ({took})"),

@@ -164,7 +164,7 @@ fn glyph_style(glyph: &str) -> Style {
     }
 }
 
-/// A "Next step: …" line (the Project view's "Next: …") wrapped to
+/// A "Next: …" line (the Project view's "Next: …") wrapped to
 /// `width`: its label in the accent, the rest bold.
 fn next_step(line: &str, width: usize) -> Vec<Line<'static>> {
     let mut lines = wrapped(line, width, bold());
@@ -1728,7 +1728,7 @@ fn features_reach_words(app: &App, v: &harness_core::Verdict) -> String {
     }
 }
 
-/// A View's "Next step: …" line and a blank line after it, when the node has
+/// A View's "Next: …" line and a blank line after it, when the node has
 /// one (pass 1 of the 2026-10-18 critique).
 fn next_lines(app: &App, sel: &Selection, width: usize) -> Vec<Line<'static>> {
     let Some(next) = app.advice(sel) else {
@@ -3278,7 +3278,7 @@ fn short_path(word: &str) -> String {
 
 /// The status line's text in `width` columns: whole when it fits; else its
 /// long paths shortened to their last three parts; else its head cut with
-/// `…` — never the sentence's end after its last `; ` ("c for its words"
+/// `…` — never the sentence's end after its last `; ` ("c for details"
 /// stays in sight).
 fn fit_status(text: &str, width: usize) -> String {
     let text = display::line(text);
@@ -3841,15 +3841,8 @@ fn help_project_page(width: usize, chat: bool) -> Vec<Line<'static>> {
     ] {
         rows.extend(wrapped(&format!("{k:<7} {v}"), width, Style::default()));
     }
-    rows.push(Line::from(""));
-    for (g, v) in [
-        ("✓", "links, or accepted (it is a tool now)"),
-        ("⚠", "needs a decision: Accept asks which file to keep"),
-        ("✗", "did not compile, or did not link"),
-        ("·", "a fuzzer, or incomplete: nothing to accept"),
-    ] {
-        rows.extend(wrapped(&format!("{g:<7} {v}"), width, Style::default()));
-    }
+    // The marks, each with what it means, one line each, so the page fits
+    // a 30-row terminal.
     rows.push(Line::from(""));
     rows.push(Line::from(Span::styled(
         "What the states mean",
@@ -5428,7 +5421,7 @@ mod tests {
             screen.contains("Why not: 1 file changed or new since the scan — scan first"),
             "{screen}"
         );
-        assert!(screen.contains("Next step: 1 file changed since the scan"));
+        assert!(screen.contains("Next: 1 file changed since the scan"));
     }
 
     fn running(app: &mut App) {
@@ -6859,7 +6852,7 @@ mod tests {
         let screen = text(&render(&mut app, 160, 40));
         assert!(
             screen.contains(
-                "Next step: u-lib needs attention: status and verdict disagree — Re-check with \
+                "Next: u-lib needs attention: status and verdict disagree — Re-check with \
                  the judge — open it"
             ),
             "{screen}"
@@ -6894,7 +6887,7 @@ mod tests {
         app.select(Selection::Unit("u-lib".into()));
         let screen = text(&render(&mut app, 160, 40));
         assert!(
-            screen.contains("Next step: Its status and its verdict disagree — Re-check it"),
+            screen.contains("Next: Its status and its verdict disagree — Re-check it"),
             "{screen}"
         );
         assert!(!screen.contains("· status"), "one state word: {screen}");
@@ -7095,7 +7088,7 @@ mod tests {
             Some("◇ u-cache planned"),
             "{screen}"
         );
-        assert!(view[1].starts_with("Next step: "), "{screen}");
+        assert!(view[1].starts_with("Next: "), "{screen}");
         assert_eq!(
             view.last().map(String::as_str),
             Some(CODE_FOLDED),
@@ -7154,7 +7147,7 @@ mod tests {
         assert!(screen.contains("◇ u-cache planned "), "{screen}");
         assert!(screen.contains("No Rust yet"), "{screen}");
         assert!(
-            screen.contains("Next step: No Rust yet — ask the chat to migrate it"),
+            screen.contains("Next: No Rust yet — ask the chat to migrate it"),
             "{screen}"
         );
         assert!(!screen.contains("No crate yet"), "{screen}");
@@ -7185,7 +7178,7 @@ mod tests {
         let screen = text(&render(&mut app, 160, 40));
         assert!(
             screen.contains(
-                "Next step: It calls other units (u-cache, u-hash), so in this version it stays C"
+                "Next: It calls other units (u-cache, u-hash), so in this version it stays C"
             ),
             "{screen}"
         );
@@ -8325,7 +8318,7 @@ mod tests {
         );
         assert!(
             screen.contains(
-                "Next step: Its Rust is slower than the C — if speed matters here, change it as \
+                "Next: Its Rust is slower than the C — if speed matters here, change it as \
                  said below"
             ),
             "{screen}"
@@ -8395,7 +8388,7 @@ mod tests {
         );
         assert!(
             screen.contains(
-                "Next step: With its Rust the program behaves differently on big-text — Compare \
+                "Next: With its Rust the program behaves differently on big-text — Compare \
                  the outputs"
             ),
             "{screen}"
@@ -8713,10 +8706,7 @@ mod tests {
         assert_eq!(app.speed.label(), "Speed — not set up");
         app.select(Selection::Speed);
         let screen = text(&render(&mut app, 80, 40));
-        assert!(
-            screen.contains("Next step: No workloads file yet"),
-            "{screen}"
-        );
+        assert!(screen.contains("Next: No workloads file yet"), "{screen}");
         app.select(Selection::Project);
         let screen = text(&render(&mut app, 160, 40));
         assert!(
@@ -9388,7 +9378,7 @@ mod tests {
             ),
             "{screen}"
         );
-        assert!(screen.contains("Next step: Nothing to do"), "{screen}");
+        assert!(screen.contains("Next: Nothing to do"), "{screen}");
         // The summary: counts only, no dense parenthetical.
         app.select(Selection::Project);
         let screen = text(&render(&mut app, 160, 40));

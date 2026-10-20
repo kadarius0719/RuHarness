@@ -55,15 +55,15 @@ pub fn title(app: &App) -> String {
 pub const STATE_GLOSSES: &[(&str, &str)] = &[
     (
         "✓ links",
-        "its files compile and link into one program; Accept makes it a tool.",
+        "its files compile and link; Accept makes it a tool.",
     ),
     (
         "⚠ needs a decision",
-        "two files define the same functions; Accept asks which one to keep.",
+        "two files define the same functions; pick one in Accept.",
     ),
     (
-        "✗ did not compile, ✗ did not link",
-        "the build likely needs flags its build configuration does not give yet.",
+        "✗ did not compile or link",
+        "the build likely needs more flags.",
     ),
     (
         "✓ compiles",
@@ -75,11 +75,11 @@ pub const STATE_GLOSSES: &[(&str, &str)] = &[
     ),
     (
         "· fuzzer, not a tool",
-        "it is linked only with the project's fuzzing driver, never accepted.",
+        "linked only with the project's fuzzing driver.",
     ),
     (
         "· incomplete",
-        "the map could not tell every file it needs; map the project again after a change.",
+        "the map could not tell every file it needs.",
     ),
 ];
 
@@ -137,7 +137,7 @@ pub fn project_view(
 /// The Next step, one line: `Next:` in the accent, the phrase bold.
 pub fn next_line(next: &crate::next::Advice, width: usize) -> Vec<Line<'static>> {
     let line = next.line();
-    let phrase = line.strip_prefix("Next step: ").unwrap_or(&line);
+    let phrase = line.strip_prefix("Next: ").unwrap_or(&line);
     next_step(&format!("Next: {phrase}"), width)
 }
 
