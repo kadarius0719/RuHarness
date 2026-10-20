@@ -739,7 +739,7 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
         // A file holding a `main` that did not compile: a program's row,
         // its mark and its state at the right.
         RowKind::Failed(path) => {
-            let lead = format!("{indent}  ");
+            let lead = indent.clone();
             let word = "did not compile";
             let room = width.saturating_sub(width_of(&lead) + 2);
             let show_word = room > 8 + word.len();
@@ -768,7 +768,10 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
         }
         RowKind::Node(sel) => sel,
     };
-    let marker = if !row.expandable {
+    // The Project view's rows do not fold: no marker column.
+    let marker = if app.in_project_view() {
+        ""
+    } else if !row.expandable {
         "  "
     } else if row.open {
         "▾ "
@@ -812,7 +815,18 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
     // gives way — dropped when too little of it would show.
     let name_first = glyph == files::NOT_IN_TOOL;
     let show_word = show_word && !(name_first && room.saturating_sub(name_w + 1) < 4);
-    let (name_text, pad, word_text) = if show_word {
+    // A Project view program: its state is what it says, so the id gives
+    // way (cut with "…"), never the state word.
+    let project_row = app.in_project_view()
+        && matches!(sel, Selection::Program(_) | Selection::Tool(_))
+        && !word.is_empty();
+    let (name_text, pad, word_text) = if project_row {
+        let word_text = ellipsis(&word, room.saturating_sub(2));
+        let name_room = room.saturating_sub(width_of(&word_text) + 1).max(1);
+        let name_text = ellipsis(&name, name_room);
+        let pad = room.saturating_sub(width_of(&name_text) + width_of(&word_text));
+        (name_text, pad, word_text)
+    } else if show_word {
         let name_keep = if name_first {
             name_w.min(room)
         } else if selected
@@ -957,11 +971,13 @@ fn draw_files(frame: &mut Frame, app: &mut App, area: Rect) {
     {
         let selected = i == cursor && row.selection() == Some(&app.selection);
         let mut line = tree_row(app, row, width, selected);
+        // The selection shows whichever pane has the focus: reversed, and
+        // bold while this pane has it.
         if selected {
             line = line.style(if focused {
-                selected_row()
+                selected_row().add_modifier(Modifier::BOLD)
             } else {
-                Style::default().add_modifier(Modifier::UNDERLINED)
+                selected_row()
             });
         }
         lines.push(line);
@@ -3802,6 +3818,65 @@ pub const HELP_FIRST_MARKS: &[(&str, &str)] = &[
 /// The first page's last line.
 pub const HELP_MORE: &str = "↓ more: every key, the mouse, every mark, features, speed, the chat";
 
+/// The Project view's first help page: its panes and keys, its marks,
+/// what each state means and what mapping does (§9.3; a tool's page would
+/// say ✓ is "in Rust").
+fn help_project_page(width: usize, chat: bool) -> Vec<Line<'static>> {
+    let mut rows = Vec::new();
+    let tab = if chat {
+        "the next pane: Project, the card, Chat"
+    } else {
+        "the other pane: Project, the card"
+    };
+    for (k, v) in [
+        ("↑ ↓", "choose a program"),
+        (
+            "Enter",
+            "what you can do with it — the first item is the next step",
+        ),
+        ("Tab", tab),
+        ("Esc", "close, or step back"),
+        ("?", "this help"),
+        ("q", "quit"),
+    ] {
+        rows.extend(wrapped(&format!("{k:<7} {v}"), width, Style::default()));
+    }
+    rows.push(Line::from(""));
+    for (g, v) in [
+        ("✓", "links, or accepted (it is a tool now)"),
+        ("⚠", "needs a decision: Accept asks which file to keep"),
+        ("✗", "did not compile, or did not link"),
+        ("·", "a fuzzer, or incomplete: nothing to accept"),
+    ] {
+        rows.extend(wrapped(&format!("{g:<7} {v}"), width, Style::default()));
+    }
+    rows.push(Line::from(""));
+    rows.push(Line::from(Span::styled(
+        "What the states mean",
+        section_role(),
+    )));
+    for (state, gloss) in project_pane::STATE_GLOSSES {
+        rows.extend(wrapped(
+            &format!("{state}: {gloss}"),
+            width,
+            Style::default(),
+        ));
+    }
+    rows.push(Line::from(""));
+    rows.extend(wrapped(
+        project_pane::MAPPING_WORDS,
+        width,
+        Style::default(),
+    ));
+    rows.push(Line::from(""));
+    rows.extend(wrapped(
+        "↓ more: every key, the mouse, the chat",
+        width,
+        bold(),
+    ));
+    rows
+}
+
 fn help_first_page(width: usize, chat: bool) -> Vec<Line<'static>> {
     let mut rows = Vec::new();
     for (k, v) in HELP_FIRST_KEYS {
@@ -3823,13 +3898,10 @@ fn help_first_page(width: usize, chat: bool) -> Vec<Line<'static>> {
 /// Help's rows, and which of them are the mouse on/off line (a click there
 /// is `m`).
 /// `chat`: the chat pane exists — `Some(why)` when it cannot be used.
-/// `project`: the Project view is shown — what mapping does and what the
-/// states mean, the words that left its pane (§9.3).
 fn help_rows(
     width: usize,
     mouse: bool,
     chat: Option<Option<&str>>,
-    project: bool,
 ) -> (Vec<Line<'static>>, std::ops::Range<usize>) {
     let mut rows = Vec::new();
     for l in HELP_INTRO {
@@ -3853,27 +3925,6 @@ fn help_rows(
     let toggle = start..rows.len();
     for l in HELP_MOUSE {
         rows.extend(wrapped(l, width, Style::default()));
-    }
-    if project {
-        rows.push(Line::from(""));
-        rows.push(Line::from(Span::styled("The project", section_role())));
-        rows.extend(wrapped(
-            project_pane::MAPPING_WORDS,
-            width,
-            Style::default(),
-        ));
-        rows.push(Line::from(""));
-        rows.push(Line::from(Span::styled(
-            "What the states mean",
-            section_role(),
-        )));
-        for (state, gloss) in project_pane::STATE_GLOSSES {
-            rows.extend(wrapped(
-                &format!("{state}: {gloss}"),
-                width,
-                Style::default(),
-            ));
-        }
     }
     rows.push(Line::from(""));
     rows.push(Line::from(Span::styled("Keys", section_role())));
@@ -4356,7 +4407,11 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
         Mode::Help { scroll: 0 } => {
             // A short page: no wider than its longest line needs.
             let width = pct(area.width, 86).clamp(40, 78).min(area.width);
-            let rows = help_first_page(width.saturating_sub(2) as usize, app.chat_on);
+            let rows = if app.in_project_view() {
+                help_project_page(width.saturating_sub(2) as usize, app.chat_on)
+            } else {
+                help_first_page(width.saturating_sub(2) as usize, app.chat_on)
+            };
             let rect = centered(
                 area,
                 width,
@@ -4384,7 +4439,6 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
                 app.mouse,
                 app.chat_on
                     .then(|| app.chat.bins.as_ref().err().map(String::as_str)),
-                app.in_project_view(),
             );
             let shown = overlay(
                 frame,
@@ -8540,7 +8594,7 @@ mod tests {
             "{screen}"
         );
         // The help says what perf compares.
-        let (rows, _) = help_rows(1000, true, None, false);
+        let (rows, _) = help_rows(1000, true, None);
         let help: String = rows
             .iter()
             .map(|l| {
@@ -8992,7 +9046,7 @@ mod tests {
     /// with its own next step (more runs only where they can settle it).
     #[test]
     fn the_glossary_names_each_kind_of_cant_tell() {
-        let (rows, _) = help_rows(1000, true, None, false);
+        let (rows, _) = help_rows(1000, true, None);
         let help: String = rows
             .iter()
             .map(|l| {
@@ -9473,7 +9527,7 @@ mod tests {
         ));
         let screen = text(&render(&mut app, 160, 40));
         assert!(!screen.contains("Run by none"), "{screen}");
-        let (help, _) = help_rows(160, false, None, false);
+        let (help, _) = help_rows(160, false, None);
         // Wrapped lines, read as one text.
         let help: String = help
             .iter()

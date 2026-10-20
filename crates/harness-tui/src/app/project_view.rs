@@ -108,20 +108,19 @@ fn heading(text: String) -> Row {
 }
 
 /// A group's heading and its counts ("Programs (3) · 1 accepted · 2 need a
-/// decision"), wrapped at the counts to the tree's `width` (0: one row);
-/// the rows after the first indented.
+/// decision") when the whole of it fits the tree's `width` on one line (0:
+/// not drawn yet), else the heading alone: a second line would read as a
+/// row.
 fn headings(head: String, counts: &[String], width: usize) -> Vec<Row> {
-    let mut lines = vec![head];
-    for c in counts {
-        let last = lines.last_mut().expect("one line at least");
-        let joined = format!("{last} · {c}");
-        if width == 0 || joined.chars().count() <= width {
-            *last = joined;
-        } else {
-            lines.push(format!("  {c}"));
-        }
+    let full = std::iter::once(head.clone())
+        .chain(counts.iter().cloned())
+        .collect::<Vec<_>>()
+        .join(" · ");
+    if width == 0 || full.chars().count() <= width {
+        vec![heading(full)]
+    } else {
+        vec![heading(head)]
     }
-    lines.into_iter().map(heading).collect()
 }
 
 /// A count in words: "1 needs a decision", "2 need a decision".
@@ -253,7 +252,7 @@ impl App {
                 rows.extend(
                     others
                         .iter()
-                        .map(|id| node(1, Selection::Tool((*id).clone()))),
+                        .map(|id| node(0, Selection::Tool((*id).clone()))),
                 );
             }
             return rows;
@@ -292,14 +291,14 @@ impl App {
             width,
         ));
         for o in programs {
-            rows.push(node(1, Selection::Program(o.id.clone())));
+            rows.push(node(0, Selection::Program(o.id.clone())));
         }
         for id in others {
-            rows.push(node(1, Selection::Tool(id.clone())));
+            rows.push(node(0, Selection::Tool(id.clone())));
         }
         for path in &m.not_compiled {
             rows.push(Row {
-                depth: 1,
+                depth: 0,
                 kind: RowKind::Failed(safe_line(path)),
                 expandable: false,
                 open: false,
@@ -313,7 +312,7 @@ impl App {
                 width,
             ));
             for o in libraries {
-                rows.push(node(1, Selection::Program(o.id.clone())));
+                rows.push(node(0, Selection::Program(o.id.clone())));
             }
         }
         rows
@@ -326,29 +325,42 @@ impl App {
     /// the menu's reason is the verb phrase.
     pub fn project_next(&self) -> Option<Advice> {
         let p = self.project.as_ref()?;
-        let say = |text: String, action: Option<Action>| Some(Advice { text, action });
+        let say = |text: String, why: &str, action: Option<Action>| {
+            Some(Advice {
+                text,
+                action,
+                reason: Some(why.to_string()),
+            })
+        };
         // A command was refused because the results were made elsewhere:
         // nothing else runs until the folder is adopted.
         if self.not_adopted.is_some() {
             return say(
                 "Adopt this folder — Enter; its results were made elsewhere".into(),
+                "its results were made elsewhere",
                 Some(Action::Adopt),
             );
         }
         // A hand-off's pause: the person's answer is what comes next.
         if let Some((act, words)) = &self.project_waiting {
-            return say(words.clone(), Some(Action::Project(*act)));
+            return say(
+                words.clone(),
+                "a model's answer is awaited",
+                Some(Action::Project(*act)),
+            );
         }
         let m = match &p.map {
             Err(_) => {
                 return say(
                     "Map the project again — Enter; the map could not be read".into(),
+                    "the map could not be read",
                     Some(Action::Project(project::Act::Map)),
                 )
             }
             Ok(None) => {
                 return say(
                     "Map the project — Enter".into(),
+                    "nothing is mapped yet",
                     Some(Action::Project(project::Act::Map)),
                 )
             }
@@ -359,6 +371,7 @@ impl App {
         if let Some(id) = &p.just_accepted {
             return say(
                 format!("Open tool {} — Enter on its row", safe_line(id)),
+                "it was just accepted",
                 Some(Action::OpenTool(id.clone())),
             );
         }
@@ -367,6 +380,7 @@ impl App {
         if p.config_newer {
             return say(
                 "Map the project again — Enter".into(),
+                "the build configuration is newer than the map",
                 Some(Action::Project(project::Act::Map)),
             );
         }
@@ -376,6 +390,7 @@ impl App {
             // writes theirs (or adopts the project's on the command line).
             return say(
                 format!("{write} — Enter (or harness project map --adopt)"),
+                "the configuration came with the project",
                 Some(Action::WriteBuildConfig),
             );
         }
@@ -387,7 +402,11 @@ impl App {
             } else {
                 "Enter, it is the first item"
             };
-            return say(format!("{write} — {key}"), Some(Action::WriteBuildConfig));
+            return say(
+                format!("{write} — {key}"),
+                "the configuration is a guess",
+                Some(Action::WriteBuildConfig),
+            );
         }
         let open = |o: &&Offered| o.acceptable() && !p.tools.contains(&o.id);
         if let Some(o) = m
@@ -401,6 +420,7 @@ impl App {
                     "Accept {} — Enter on its row, it asks for the file",
                     safe_line(&o.id)
                 ),
+                "it needs a decision",
                 Some(Action::AcceptProgram {
                     id: o.id.clone(),
                     run_name: false,
@@ -415,6 +435,11 @@ impl App {
         {
             return say(
                 format!("Accept {} — Enter on its row", safe_line(&o.id)),
+                if o.state == State::Linked {
+                    "it links"
+                } else {
+                    "it compiles"
+                },
                 Some(Action::AcceptProgram {
                     id: o.id.clone(),
                     run_name: false,
@@ -434,11 +459,13 @@ impl App {
                 } else {
                     format!("Open tool {} — Enter on its row", safe_line(id))
                 },
+                "it is accepted",
                 Some(Action::OpenTool(id.clone())),
             );
         }
         say(
             format!("{write} — Enter, then Map the project again"),
+            "no program links yet",
             Some(Action::WriteBuildConfig),
         )
     }
@@ -465,10 +492,17 @@ impl App {
     /// A Project view row's Next step (the menu's recommended item), in
     /// the Next step's words.
     pub fn project_row_advice(&self, sel: &Selection) -> Option<Advice> {
-        let say = |text: String, action: Option<Action>| Some(Advice { text, action });
+        let say = |text: String, why: &str, action: Option<Action>| {
+            Some(Advice {
+                text,
+                action,
+                reason: Some(why.to_string()),
+            })
+        };
         let open = |id: &str| {
             say(
                 format!("Open tool {} — Enter on its row", safe_line(id)),
+                "it is accepted",
                 Some(Action::OpenTool(id.to_string())),
             )
         };
@@ -477,6 +511,7 @@ impl App {
                 "the project's programs, Map, Ask and Accept are on the project view — press \
                  Enter to go back to it"
                     .into(),
+                "the project's acts are there",
                 Some(Action::BackToProject),
             ),
             Selection::Tool(id) => open(id),
@@ -499,10 +534,17 @@ impl App {
                             "Accept {} — Enter on its row, it asks for the file",
                             safe_line(id)
                         ),
+                        "it needs a decision",
                         accept,
                     ),
-                    State::Linked | State::Compiles => say(
+                    State::Linked => say(
                         format!("Accept {} — Enter on its row", safe_line(id)),
+                        "it links",
+                        accept,
+                    ),
+                    State::Compiles => say(
+                        format!("Accept {} — Enter on its row", safe_line(id)),
+                        "it compiles",
                         accept,
                     ),
                     State::DidNotCompile | State::DidNotLink | State::Incomplete => say(
@@ -510,10 +552,12 @@ impl App {
                             "{} — Enter, then Map the project again",
                             self.build_config_label()
                         ),
+                        o.state.words(),
                         Some(Action::WriteBuildConfig),
                     ),
                     State::Fuzzer | State::Driver => say(
                         "nothing here — a fuzzer is not accepted as a tool".into(),
+                        "",
                         None,
                     ),
                 }
@@ -953,10 +997,9 @@ impl App {
         if let Some(p) = project.as_mut() {
             p.shown = false;
             p.pick = None;
-            // Opened: no longer the Next step.
-            if p.just_accepted.as_ref() == Some(&id) {
-                p.just_accepted = None;
-            }
+            // A tool opened: the one just accepted is no longer the Next
+            // step, whichever it was.
+            p.just_accepted = None;
         }
         next.project = project;
         next.not_adopted = self.not_adopted.take();

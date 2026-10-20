@@ -138,7 +138,12 @@ pub fn recommend(items: &mut Vec<Item>, advice: Option<&crate::next::Advice>) ->
         .position(|i| &i.action == want && i.greyed.is_none())?;
     let it = items.remove(at);
     items.insert(0, it);
-    Some(reason_of(&advice.text))
+    Some(
+        advice
+            .reason
+            .clone()
+            .unwrap_or_else(|| reason_of(&advice.text)),
+    )
 }
 
 /// A Next step's reason: its words up to the first " — ".

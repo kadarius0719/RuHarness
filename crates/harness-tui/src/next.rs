@@ -19,6 +19,9 @@ pub struct Advice {
     pub text: String,
     /// The item the menu puts first, when one does it.
     pub action: Option<Action>,
+    /// Why that item, for the menu's "recommended:" line, when the text's
+    /// lead would only repeat the item (the Project view's).
+    pub reason: Option<String>,
 }
 
 impl Advice {
@@ -40,6 +43,7 @@ fn advice(text: impl Into<String>, action: Option<Action>) -> Advice {
     Advice {
         text: text.into(),
         action,
+        reason: None,
     }
 }
 

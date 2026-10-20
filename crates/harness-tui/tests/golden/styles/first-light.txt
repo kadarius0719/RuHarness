@@ -7,9 +7,9 @@
   @79-79 fg 244 NONE "┐"
 │▾ harness… ✓0/13 (+1 …││Next step: 3 units have no Rust yet — migrate the     │
   @0-0 fg 25 BOLD "│"
-  @1-2 fg 242 REVERSED "▾"
+  @1-2 fg 242 BOLD | REVERSED "▾"
   @3-10 fg 25 BOLD | REVERSED "harness…"
-  @12-22 fg 240 REVERSED "✓0/13 (+1 …"
+  @12-22 fg 240 BOLD | REVERSED "✓0/13 (+1 …"
   @23-23 fg 25 BOLD "│"
   @24-24 fg 244 NONE "│"
   @25-34 fg 23 BOLD "Next step:"

@@ -205,6 +205,7 @@ impl App {
                     crate::menu::reason_of(&a.text)
                 ),
                 action: self.chat.problem.is_some().then_some(Action::CheckChat),
+                reason: None,
             },
             _ => a,
         }

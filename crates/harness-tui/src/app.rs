@@ -1251,6 +1251,11 @@ impl App {
         }
         tree::reveal(&mut self.expansion, &sel);
         self.selection = sel;
+        // "Open the tool you just accepted" lasts until the selection
+        // moves: then the rules fall through to what still waits.
+        if let Some(p) = self.project.as_mut() {
+            p.just_accepted = None;
+        }
         self.tree_follow = true;
         self.rebuild_rows();
         self.scroll = 0;
@@ -3518,7 +3523,13 @@ impl App {
     /// points to — model work only ever recommended, never started.
     pub fn next_step(&self) -> Option<crate::next::Advice> {
         use crate::next::Advice;
-        let say = |text: String, action: Option<Action>| Some(Advice { text, action });
+        let say = |text: String, action: Option<Action>| {
+            Some(Advice {
+                text,
+                action,
+                reason: None,
+            })
+        };
         let Some(state) = &self.snapshot.facts_state else {
             return say(
                 "Nothing is scanned yet — press Enter and choose Scan the project".into(),

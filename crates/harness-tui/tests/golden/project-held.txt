@@ -1,22 +1,22 @@
 ┌ Project ─────────────────────────┐┌ liblzg · 4 programs found ───────────────────────────────────────────────────────┐
-│Programs (4) · 1 needs a decision ││Next: Accept t-unlzg — Enter on its row, it asks for the file                     │
-│  1 links · 1 did not compile     ││                                                                                  │
-│    ✓ t-lzg                  links││t-unlzg                                                         ⚠ needs a decision│
-│    ⚠ t-unlzg     needs a decision││tools/unlzg.c · a tool, by its folder                                             │
-│    · t-fuzz    fuzzer, not a tool││                                                                                  │
-│    ✗ broken.c     did not compile││Decision: two files define the same functions. Keep which?                        │
-│Libraries (2)                     ││  1  src/decode.c                                                                 │
-│    ✓ l-checksum          compiles││  2  src/mini.c                                       ← the model advises this one│
-│    ✗ l-bad        did not compile││Why (claude-x): they are two implementations of the same thing.                   │
+│Programs (4)                      ││Next: Accept t-unlzg — Enter on its row, it asks for the file                     │
+│✓ t-lzg                      links││                                                                                  │
+│⚠ t-unlzg         needs a decision││t-unlzg                                                         ⚠ needs a decision│
+│· t-fuzz        fuzzer, not a tool││tools/unlzg.c · looks like a tool (it is not in a test, example or benchmark      │
+│✗ tools/broken.c   did not compile││folder)                                                                           │
+│Libraries (2)                     ││                                                                                  │
+│✓ l-checksum              compiles││Decision: two files define the same functions. Keep which?                        │
+│✗ l-bad            did not compile││  1  src/decode.c                                                                 │
+│                                  ││  2  src/mini.c  ← the model advises this one                                     │
+│                                  ││Why (claude-x): they are two implementations of the same thing.                   │
 │                                  ││This is advice; you pick the file when you accept.                                │
 │                                  ││                                                                                  │
 │                                  ││Decision: two files define the same functions. Keep which?                        │
 │                                  ││Asked only if you keep src/decode.c.                                              │
 │                                  ││  1  src/check_a.c                                                                │
 │                                  ││  2  src/check_b.c                                                                │
-│                                  ││No advice yet — Enter, then Ask for advice (the chat answers)                     │
-│                                  ││                                                                                  │
-│                                  ││Enter: Accept t-unlzg — it asks for the file                                      │
+│                                  ││No advice yet — ask a model with harness project ask on the command line (the     │
+│                                  ││models topic)                                                                     │
 │                                  ││                                                                                  │
 │                                  ││                                                                                  │
 │                                  ││                                                                                  │

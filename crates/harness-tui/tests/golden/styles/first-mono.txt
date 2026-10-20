@@ -5,9 +5,7 @@
   @25-78 fg - BOLD "harness-tui-theme-first-0000000000 · 0 of 13 C files"
 │▾ harness… ✓0/13 (+1 …││Next step: 3 units have no Rust yet — migrate the     │
   @0-0 fg - BOLD "│"
-  @1-2 fg - REVERSED "▾"
-  @3-10 fg - BOLD | REVERSED "harness…"
-  @11-22 fg - REVERSED "✓0/13 (+1 …"
+  @1-22 fg - BOLD | REVERSED "▾ harness… ✓0/13 (+1 …"
   @23-23 fg - BOLD "│"
   @25-34 fg - BOLD | UNDERLINED "Next step:"
   @35-73 fg - BOLD "3 units have no Rust yet — migrate the"

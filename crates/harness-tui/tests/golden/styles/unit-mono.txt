@@ -19,7 +19,7 @@
   @25-78 fg - BOLD "model writes the Rust, the judge checks it, you accept"
 │    ▸ ◇ u-cac… planned││it)                                                   │
   @0-0 fg - BOLD "│"
-  @1-22 fg - REVERSED "▸ ◇ u-cac… planned"
+  @1-22 fg - BOLD | REVERSED "▸ ◇ u-cac… planned"
   @23-23 fg - BOLD "│"
   @25-27 fg - BOLD "it)"
 │    ▸ ◇ u-hash planned││                                                      │

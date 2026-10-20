@@ -1,14 +1,14 @@
 ┌ Project ─────────────────────────┐┌ liblzg · 4 programs found ───────────────────────────────────────────────────────┐
-│Programs (4) · 1 accepted         ││Next: Accept t-unlzg — Enter on its row, it asks for the file                     │
-│  1 needs a decision              ││                                                                                  │
-│  1 did not compile               ││t-lzg                                                                   ✓ accepted│
-│    ✓ t-lzg               accepted││tools/lzg.c · a tool, by its folder                                               │
-│    ⚠ t-unlzg     needs a decision││Its build configuration: migration/tools/t-lzg/harness.toml                       │
-│    · t-fuzz    fuzzer, not a tool││                                                                                  │
-│    ✗ broken.c     did not compile││Enter: Open tool t-lzg                                                            │
+│Programs (4)                      ││Next: Accept t-unlzg — Enter on its row, it asks for the file                     │
+│✓ t-lzg                   accepted││                                                                                  │
+│⚠ t-unlzg         needs a decision││t-lzg                                                                   ✓ accepted│
+│· t-fuzz        fuzzer, not a tool││tools/lzg.c                                                                       │
+│✗ tools/broken.c   did not compile││Its build configuration: migration/tools/t-lzg/harness.toml                       │
 │Libraries (2)                     ││                                                                                  │
-│    ✓ l-checksum          compiles││                                                                                  │
-│    ✗ l-bad        did not compile││                                                                                  │
+│✓ l-checksum              compiles││Enter: Open tool t-lzg                                                            │
+│✗ l-bad            did not compile││                                                                                  │
+│                                  ││                                                                                  │
+│                                  ││                                                                                  │
 │                                  ││                                                                                  │
 │                                  ││                                                                                  │
 │                                  ││                                                                                  │

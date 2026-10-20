@@ -108,9 +108,14 @@ fn number(n: usize) -> String {
     }
 }
 
+/// The card's width at most: on a wide screen the state and the advised
+/// file stay near what they describe.
+pub const CARD_MAX: usize = 100;
+
 /// The Project view's right pane: the Next step in one line, then the
-/// card of the selection, then the last command. The card holds no link:
-/// Enter in this pane opens the selection's menu, as on its row.
+/// card of the selection. The card holds no link: Enter in this pane opens
+/// the selection's menu, as on its row. The last command is the status
+/// line's, under the panes, not repeated here.
 pub fn project_view(
     app: &App,
     width: usize,
@@ -120,12 +125,12 @@ pub fn project_view(
     if app.project.is_none() {
         return lines;
     }
+    let width = width.min(CARD_MAX);
     if let Some(next) = app.project_next() {
         lines.extend(next_line(&next, width));
         lines.push(Line::from(""));
     }
     card(app, width, &mut lines);
-    last_line(app, width, &mut lines);
     lines
 }
 
@@ -170,7 +175,11 @@ fn card(app: &App, width: usize, lines: &mut Vec<Line<'static>>) {
             ));
         }
     }
-    if let Some(enter) = enter_line(app, &sel) {
+    // What Enter does, unless the Next step above already says it.
+    let next = app.project_next().map(|n| crate::menu::reason_of(&n.text));
+    if let Some(enter) = enter_line(app, &sel)
+        .filter(|e| next.as_deref() != Some(crate::menu::reason_of(e).as_str()))
+    {
         lines.push(Line::from(""));
         lines.extend(wrapped(&format!("Enter: {enter}"), width, Style::default()));
     }
@@ -220,15 +229,13 @@ fn program_card(app: &App, o: &Offered, width: usize, lines: &mut Vec<Line<'stat
     } else {
         head(&o.id, o.state.glyph(), o.state.words(), width, lines);
     }
-    let what = match o.kind.as_str() {
-        "library" => "a library (compiled, never linked)".to_string(),
-        _ => o.what(),
+    // Once accepted, what the map guessed no longer matters: its path.
+    let file = if accepted {
+        o.path.clone()
+    } else {
+        format!("{} · {}", o.path, o.what())
     };
-    lines.extend(wrapped(
-        &format!("{} · {what}", o.path),
-        width,
-        Style::default(),
-    ));
+    lines.extend(wrapped(&file, width, Style::default()));
     if let Some(l) = app.project.as_ref().and_then(|p| p.labels.get(&o.id)) {
         lines.extend(wrapped(&l.words(), width, label_role()));
     }
@@ -286,11 +293,11 @@ fn decision_lines(
             lines.push(Line::from(ellipsis(&file, width)));
             continue;
         }
-        let gap = width.saturating_sub(width_of(&file) + width_of(ADVISED));
-        if gap >= 2 {
+        // The mark right after the file, as in Accept's picker.
+        if width_of(&file) + 2 + width_of(ADVISED) <= width {
             lines.push(Line::from(vec![
                 Span::raw(file),
-                Span::raw(" ".repeat(gap)),
+                Span::raw("  "),
                 Span::styled(ADVISED, label_role()),
             ]));
         } else {
@@ -302,11 +309,18 @@ fn decision_lines(
         }
     }
     match advice {
-        None => lines.extend(wrapped(
-            "No advice yet — Enter, then Ask for advice (the chat answers)",
-            width,
-            label_role(),
-        )),
+        None => {
+            // What gets advice, from where the person is.
+            let how = if app.project_map().is_some_and(|m| m.unstated()) {
+                "Advice comes once the build configuration is written and the project mapped again"
+            } else if app.chat_on {
+                "No advice yet — Enter, then Ask for advice (the chat answers)"
+            } else {
+                "No advice yet — ask a model with harness project ask on the command line (the \
+                 models topic)"
+            };
+            lines.extend(wrapped(how, width, label_role()));
+        }
         Some(a) => {
             lines.extend(wrapped(&a.why_line(), width, Style::default()));
             lines.extend(wrapped(
@@ -353,14 +367,6 @@ pub fn enter_line(app: &App, sel: &Selection) -> Option<String> {
         | Action::Project(crate::project::Act::Map) => phrase,
         _ => return None,
     })
-}
-
-/// The last command, as the activity line says it.
-fn last_line(app: &App, width: usize, lines: &mut Vec<Line<'static>>) {
-    if let Some(last) = &app.last {
-        lines.push(Line::from(""));
-        lines.extend(wrapped(&format!("Last: {last}"), width, last_style(app)));
-    }
 }
 
 /// A tool's row back to the Project view: what it leads to.

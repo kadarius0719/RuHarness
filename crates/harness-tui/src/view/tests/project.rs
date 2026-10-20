@@ -367,9 +367,10 @@ fn a_guessed_configuration_asks_for_the_build() {
         ]
     );
     assert!(write_item(&app).starts_with("Write the build configuration (in "));
+    // The reason, not the item again.
     assert_eq!(
         menu(&app).reason.as_deref(),
-        Some("Write the build configuration")
+        Some("the configuration is a guess")
     );
     let accept = &menu(&app).items[1];
     assert_eq!(
@@ -386,7 +387,7 @@ fn a_guessed_configuration_asks_for_the_build() {
             .unwrap_or_else(|| panic!("{words}:\n{screen}"))
     };
     assert_eq!(
-        at("↳ recommended: Write the build configuration"),
+        at("↳ recommended: the configuration is a guess"),
         at("Write the build configuration (in ") + 1
     );
     assert!(!row_with(&screen, "↳ recommended").contains("uses a model"));
@@ -596,12 +597,12 @@ fn the_build_configuration_is_written_from_the_cockpit() {
         Some("migration/map/config.toml is written — choose Map the project again to map with it")
     );
     let screen = text(&render(&mut app, 220, 40));
-    for words in [
-        "│Next: Map the project again — Enter ",
-        "Enter: Map the project again",
-    ] {
-        assert!(screen.contains(words), "{words}\n{screen}");
-    }
+    assert!(
+        screen.contains("│Next: Map the project again — Enter "),
+        "{screen}"
+    );
+    // The card does not say again what the Next step says.
+    assert!(!screen.contains("Enter: Map the project again"), "{screen}");
     code(&mut app, KeyCode::Enter);
     assert_eq!(menu_labels(&app)[0], "Map the project again");
     assert!(menu_labels(&app).contains(&format!("Edit the build configuration (in {name})")));
@@ -675,24 +676,24 @@ fn the_project_view_after_a_map_with_a_held_choice() {
     golden("project-held.txt", &app, &buffer);
     let screen = text(&render(&mut app, 220, 44));
     for words in [
-        "│Programs (4) · 1 needs a decision ",
+        "│Programs (4) ",
         "✓ t-lzg",
         "⚠ t-unlzg",
         "needs a decision",
-        "✗ broken.c",
+        "✗ tools/broken.c",
         "Libraries (2)",
         "│Next: Accept t-unlzg — Enter on its row, it asks for the file ",
         // The card: what it is, its decisions, the advice, what Enter does.
-        "│tools/unlzg.c · a tool, by its folder ",
+        "│tools/unlzg.c · looks like a tool (it is not in a test, example or benchmark folder)",
         "│Decision: two files define the same functions. Keep which? ",
         "│  1  src/decode.c ",
-        "│  2  src/mini.c ",
-        "← the model advises this one│",
+        "│  2  src/mini.c  ← the model advises this one ",
         "│Why (claude-x): they are two implementations of the same thing. ",
         "│This is advice; you pick the file when you accept. ",
         "│Asked only if you keep src/decode.c. ",
-        "│No advice yet — Enter, then Ask for advice (the chat answers) ",
-        "│Enter: Accept t-unlzg — it asks for the file ",
+        // The chat is off here: the command line's way.
+        "│No advice yet — ask a model with harness project ask on the command line (the models \
+         topic) ",
     ] {
         assert!(screen.contains(words), "{words}\n{screen}");
     }
@@ -705,6 +706,9 @@ fn the_project_view_after_a_map_with_a_held_choice() {
         "t-lzg — tools/lzg.c",
         "held on a choice",
         "C project with no",
+        // What Enter does is the Next step here: not said twice.
+        "Enter: Accept t-unlzg",
+        "Last:",
     ] {
         assert!(!screen.contains(gone), "{gone}\n{screen}");
     }
@@ -719,7 +723,7 @@ fn the_project_view_after_a_map_with_a_held_choice() {
             "Ask for advice — ask in chat".into(),
         ]
     );
-    assert_eq!(menu(&app).reason.as_deref(), Some("Accept t-unlzg"));
+    assert_eq!(menu(&app).reason.as_deref(), Some("it needs a decision"));
     assert!(menu(&app).items[4].model);
     // The picker: d1, its definers none suggested, the advice beside them.
     choose(&mut app, "Accept this program");
@@ -905,21 +909,32 @@ fn the_help_says_what_the_states_mean() {
     let (_tmp, root) = project("help");
     write_map(&root, &map_text("stated", false));
     let mut app = cockpit(&root);
-    app.mode = Mode::Help { scroll: 1 };
-    let screen = text(&render(&mut app, 120, 120));
+    code(&mut app, KeyCode::Char('?'));
+    assert!(
+        matches!(app.mode, Mode::Help { scroll: 0 }),
+        "{:?}",
+        app.mode
+    );
+    let screen = text(&render(&mut app, 120, 60));
+    // Its own first page: never a tool's marks ("✓ in Rust").
+    assert!(!screen.contains("in Rust"), "{screen}");
+    assert!(!screen.contains("planned"), "{screen}");
     for words in [
-        "The project",
+        "✓       links, or accepted (it is a tool now)",
+        "⚠       needs a decision: Accept asks which file to keep",
         "Mapping finds its programs and libraries",
         "What the states mean",
-        "⚠ needs a decision: two files define the same functions; Accept asks which one to",
+        "⚠ needs a decision: two files define the same functions;",
         "✓ links: its files compile and link into one program",
         "✗ did not compile, ✗ did not link: the build likely needs flags",
     ] {
         assert!(screen.contains(words), "{words}\n{screen}");
     }
     // Not on a tool's screen.
-    let (rows, _) = super::super::help_rows(1000, true, None, false);
-    let help: String = rows.iter().map(|l| l.to_string() + "\n").collect();
+    let help: String = super::super::help_first_page(1000, true)
+        .iter()
+        .map(|l| l.to_string() + "\n")
+        .collect();
     assert!(!help.contains("What the states mean"), "{help}");
 }
 
@@ -952,7 +967,7 @@ fn the_card_of_each_selection() {
         [
             "Next: Accept t-unlzg — Enter on its row, it asks for the file",
             "",
-            "tools/lzg.c · a tool, by its folder",
+            "tools/lzg.c · looks like a tool (it is not in a test, example or benchmark folder)",
             "",
             "Enter: Accept t-lzg",
         ],
@@ -961,7 +976,7 @@ fn the_card_of_each_selection() {
     let lines = card(&mut app, Selection::Program("l-checksum".into()));
     assert_eq!(
         lines[3],
-        "src/checksum.c · a library (compiled, never linked)"
+        "src/checksum.c · looks like a library (nothing in it has a main)"
     );
     assert_eq!(lines[5], "Enter: Accept l-checksum");
     let lines = card(&mut app, Selection::Program("l-bad".into()));
@@ -977,7 +992,10 @@ fn the_card_of_each_selection() {
     );
     let lines = card(&mut app, Selection::Program("t-fuzz".into()));
     assert!(lines[2].ends_with("· fuzzer, not a tool"), "{lines:#?}");
-    assert_eq!(lines[3], "fuzz/f.c · a fuzzer");
+    assert_eq!(
+        lines[3],
+        "fuzz/f.c · a fuzzer (it defines LLVMFuzzerTestOneInput, no main)"
+    );
     assert!(!lines.iter().any(|l| l.starts_with("Enter:")), "{lines:#?}");
 }
 
@@ -1061,12 +1079,91 @@ fn every_program_a_tool_leaves_nothing_here() {
         "nothing here — every program is a tool; open one"
     );
     let screen = text_of_render(&mut app);
-    assert!(screen.contains("│Programs (4) · 2 accepted "), "{screen}");
+    assert!(screen.contains("│Programs (4) "), "{screen}");
     assert!(!screen.contains("Libraries"), "{screen}");
 }
 
 fn text_of_render(app: &mut App) -> String {
     text(&render(app, 120, 30))
+}
+
+/// At 100 columns the left pane keeps every state word whole: the id
+/// gives way, cut with "…"; the rows start at the pane's edge (no tree
+/// here), and the selected row shows when the focus is on the card.
+#[test]
+fn narrow_rows_keep_the_state_and_the_selection_shows() {
+    let (_tmp, root) = project("narrow");
+    let text_map = map_text("stated", false).replace("t-unlzg", "t-unlzg-decoder");
+    write_map(&root, &text_map);
+    let mut app = cockpit(&root);
+    app.select(Selection::Program("t-unlzg-decoder".into()));
+    let buffer = render(&mut app, 100, 30);
+    let screen = text(&buffer);
+    let row = row_with(&screen, "needs a decision");
+    assert!(row.starts_with("│⚠ t-unlzg-… needs a decision│"), "{row}");
+    assert!(
+        row_with(&screen, "t-fuzz").contains("fuzzer, not a tool│"),
+        "{screen}"
+    );
+    // The focus on the card: the selected row still reversed.
+    code(&mut app, KeyCode::Tab);
+    let buffer = render(&mut app, 100, 30);
+    let y = text(&buffer)
+        .lines()
+        .position(|l| l.contains("needs a decision│"))
+        .unwrap() as u16;
+    assert!(buffer[(2, y)].modifier.contains(Modifier::REVERSED));
+    assert!(!buffer[(2, y)].modifier.contains(Modifier::BOLD));
+}
+
+/// "Open the tool you just accepted" lasts until the selection moves or a
+/// tool is opened: then the rules fall through to the program that waits.
+#[test]
+fn the_tool_just_accepted_is_the_next_step_only_until_the_selection_moves() {
+    let (_tmp, root) = project("just-accepted");
+    write_map(&root, &map_text("stated", false));
+    let dir = harness_core::config::tool_dir(&root, "t-lzg");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("harness.toml"), "schema_version = 2\n").unwrap();
+    let mut app = cockpit(&root);
+    app.project.as_mut().unwrap().just_accepted = Some("t-lzg".into());
+    app.selection = Selection::Program("t-lzg".into());
+    assert_eq!(
+        app.project_next().unwrap().text,
+        "Open tool t-lzg — Enter on its row"
+    );
+    app.select(Selection::Program("t-unlzg".into()));
+    app.select(Selection::Program("t-lzg".into()));
+    assert_eq!(
+        app.project_next().unwrap().text,
+        "Accept t-unlzg — Enter on its row, it asks for the file"
+    );
+}
+
+/// With no advice, the card says how advice comes from where the person
+/// is: after the build configuration while it is a guess; Ask for advice
+/// with the chat on; the command line with it off.
+#[test]
+fn no_advice_says_how_advice_comes() {
+    let (_tmp, root) = project("no-advice");
+    guessed_map(&root);
+    let mut app = cockpit(&root);
+    with_chat(&mut app);
+    app.select(Selection::Program("t-unlzg".into()));
+    let screen = text(&render(&mut app, 200, 40));
+    assert!(
+        screen.contains(
+            "Advice comes once the build configuration is written and the project mapped again"
+        ),
+        "{screen}"
+    );
+    write_map(&root, &map_text("stated", false));
+    app.reload_project();
+    let screen = text(&render(&mut app, 200, 40));
+    assert!(
+        screen.contains("No advice yet — Enter, then Ask for advice (the chat answers)"),
+        "{screen}"
+    );
 }
 
 /// A run name of the person's, typed after the picks; a name the command
@@ -1079,7 +1176,7 @@ fn accept_under_a_run_name() {
     app.select(Selection::Program("t-lzg".into()));
     code(&mut app, KeyCode::Enter);
     assert_eq!(menu_labels(&app)[0], "Accept this program");
-    assert_eq!(menu(&app).reason.as_deref(), Some("Accept t-lzg"));
+    assert_eq!(menu(&app).reason.as_deref(), Some("it links"));
     choose(&mut app, "Accept it under a run name of your own…");
     assert!(matches!(app.mode, Mode::RunName { .. }), "{:?}", app.mode);
     let screen = text(&render(&mut app, 120, 30));
@@ -1121,7 +1218,7 @@ fn after_an_accept_the_next_step_is_the_new_tool() {
     assert_eq!(next.text, "Open tool t-lzg — Enter on its row");
     code(&mut app, KeyCode::Enter);
     assert_eq!(menu_labels(&app)[0], "Open tool t-lzg");
-    assert_eq!(menu(&app).reason.as_deref(), Some("Open tool t-lzg"));
+    assert_eq!(menu(&app).reason.as_deref(), Some("it is accepted"));
     // Opened: the held choice is the project's Next step again.
     app.mode = Mode::Normal;
     let read = crate::load::read_tool(&root, Some("t-lzg"));
@@ -1225,10 +1322,10 @@ fn the_project_view_after_an_accept() {
     golden("project-accepted.txt", &app, &buffer);
     let screen = text(&render(&mut app, 220, 44));
     for words in [
-        "│Programs (4) · 1 accepted ",
-        "│  1 needs a decision ",
-        "│  1 did not compile ",
-        "│tools/lzg.c · a tool, by its folder ",
+        // The counts do not fit the pane on one line: the heading alone.
+        "│Programs (4) ",
+        // Accepted: its path, no longer what the map guessed.
+        "│tools/lzg.c ",
         "│Its build configuration: migration/tools/t-lzg/harness.toml ",
         "│Enter: Open tool t-lzg ",
     ] {

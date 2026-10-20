@@ -3,9 +3,9 @@
   @1-9 fg Blue BOLD | REVERSED "Project"
   @10-35 fg Blue BOLD "─────────────────────────┐"
   @37-61 fg Blue BOLD "liblzg · not mapped yet"
-│  Map the project                 ││Next: Map the project — Enter                                                     │
+│Map the project                   ││Next: Map the project — Enter                                                     │
   @0-0 fg Blue BOLD "│"
-  @3-17 fg Blue BOLD | REVERSED "Map the project"
+  @1-15 fg Blue BOLD | REVERSED "Map the project"
   @35-35 fg Blue BOLD "│"
   @37-41 fg Cyan BOLD "Next:"
   @42-65 fg - BOLD "Map the project — Enter"
@@ -30,7 +30,7 @@
 │                                  ││                                                                                  │
   @0-0 fg Blue BOLD "│"
   @35-35 fg Blue BOLD "│"
-│                                  ││Enter: Map the project                                                            │
+│                                  ││                                                                                  │
   @0-0 fg Blue BOLD "│"
   @35-35 fg Blue BOLD "│"
 │                                  ││                                                                                  │

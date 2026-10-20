@@ -149,18 +149,30 @@ pub struct Offered {
 }
 
 impl Offered {
-    /// What the map knows it is, in words: "a tool, by its folder" (the
-    /// map's guess from where its file sits), "a library", "a fuzzer".
+    /// What the map knows it is, in words, with what it rests on: "looks
+    /// like a tool (it is not in a test, example or benchmark folder)",
+    /// "looks like a test (it is in a tests/ folder)", "looks like a
+    /// library (nothing in it has a main)", "a fuzzer (it defines
+    /// LLVMFuzzerTestOneInput, no main)".
     pub fn what(&self) -> String {
+        // The map guesses from the first folder of the path.
+        let folder = self.path.split_once('/').map(|(first, _)| first);
         match self.kind.as_str() {
-            "library" => "a library".into(),
-            "fuzz" => "a fuzzer".into(),
-            "driver" => "a fuzzer driver".into(),
-            _ if self.kind_guess.is_empty() => "a program".into(),
+            "library" => "looks like a library (nothing in it has a main)".into(),
+            "fuzz" => "a fuzzer (it defines LLVMFuzzerTestOneInput, no main)".into(),
+            "driver" => "a fuzzing driver (a main that runs the fuzzers)".into(),
+            _ if self.kind_guess.is_empty() => "a program (it has a main)".into(),
+            "main" if self.kind_guess == "tool" => match folder {
+                Some(_) => {
+                    "looks like a tool (it is not in a test, example or benchmark folder)".into()
+                }
+                None => "looks like a tool (it sits at the project's top)".into(),
+            },
             _ => format!(
-                "{} {}, by its folder",
+                "looks like {} {} (it is in a {}/ folder)",
                 article(&self.kind_guess),
-                self.kind_guess
+                self.kind_guess,
+                safe_line(folder.unwrap_or_default())
             ),
         }
     }
@@ -1114,9 +1126,22 @@ pub(crate) mod tests {
         let map = read_map(&p.0).unwrap().unwrap();
         let lzg = map.get("t-lzg").unwrap();
         assert_eq!(lzg.index, "p1");
-        assert_eq!(lzg.what(), "a tool, by its folder");
-        assert_eq!(map.get("t-fuzz").unwrap().what(), "a fuzzer");
-        assert_eq!(map.get("l-checksum").unwrap().what(), "a library");
+        assert_eq!(
+            lzg.what(),
+            "looks like a tool (it is not in a test, example or benchmark folder)"
+        );
+        assert_eq!(
+            map.get("t-fuzz").unwrap().what(),
+            "a fuzzer (it defines LLVMFuzzerTestOneInput, no main)"
+        );
+        assert_eq!(
+            map.get("l-checksum").unwrap().what(),
+            "looks like a library (nothing in it has a main)"
+        );
+        let mut test = lzg.clone();
+        test.path = "tests/check.c".into();
+        test.kind_guess = "test".into();
+        assert_eq!(test.what(), "looks like a test (it is in a tests/ folder)");
         assert_eq!(
             map.example,
             "[[configuration]]\nname = \"make\"\nfrom = \"make\"\nflags = []  # the -I and -D \

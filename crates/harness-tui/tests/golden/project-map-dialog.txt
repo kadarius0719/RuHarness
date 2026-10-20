@@ -1,5 +1,5 @@
 ┌ Project ─────────────────────────┐┌ liblzg · not mapped yet ─────────────────────────────────────────────────────────┐
-│  Map the project                 ││Next: Map the project — Enter                                                     │
+│Map the project                   ││Next: Map the project — Enter                                                     │
 │                                  ││                                                                                  │
 │                                  ││Nothing is mapped yet.                                                            │
 │                                  ││Mapping finds its programs and libraries, the files each one needs, what they     │
