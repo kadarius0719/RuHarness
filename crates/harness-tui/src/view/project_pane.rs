@@ -61,8 +61,7 @@ pub const MAPPING_WORDS: &str = "Mapping finds its programs and libraries, the f
      needs, what they share, and whether each program links. It compiles in the sandbox, runs \
      nothing, and writes only under migration/.";
 
-/// The mark beside the file the model advises.
-pub const ADVISED: &str = "← the model advises this one";
+use crate::project::ADVISED;
 
 /// A number in words, for the few files a decision has.
 fn number(n: usize) -> String {

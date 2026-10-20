@@ -723,23 +723,32 @@ fn the_project_view_after_a_map_with_a_held_choice() {
     assert_eq!(
         m.note,
         [
-            "t-unlzg holds the choice d1: two files define the same function, so keep which \
-             one?",
-            "The model's advice (claude-x): keep d1.2, reason alternative-implementation — \
-             advice only, the choice is yours.",
+            "Keep which file for the functions both define?",
+            "Why (claude-x): they are two implementations of the same thing.",
         ]
     );
-    assert_eq!(menu_labels(&app), ["d1.1 src/decode.c", "d1.2 src/mini.c"]);
+    // The files numbered, the advised one marked; no set or definer id.
+    assert_eq!(
+        menu_labels(&app),
+        [
+            "1  src/decode.c",
+            "2  src/mini.c  ← the model advises this one"
+        ]
+    );
     assert!(m.reason.is_none(), "nothing is recommended in the picker");
     let buffer = render(&mut app, 120, 34);
     golden("project-picker.txt", &app, &buffer);
     // d1.1 kept: d2, reached only under it, is asked next.
-    choose(&mut app, "d1.1 src/decode.c");
+    choose(&mut app, "1  src/decode.c");
+    assert_eq!(menu_labels(&app), ["1  src/check_a.c", "2  src/check_b.c"]);
     assert_eq!(
-        menu_labels(&app),
-        ["d2.1 src/check_a.c", "d2.2 src/check_b.c"]
+        menu(&app).note,
+        [
+            "Keep which file for the functions both define?",
+            "Asked only if you keep src/decode.c."
+        ]
     );
-    choose(&mut app, "d2.2 src/check_b.c");
+    choose(&mut app, "2  src/check_b.c");
     let target = root.display().to_string();
     assert_eq!(
         dialog_argv(&app),
@@ -756,7 +765,7 @@ fn the_project_view_after_a_map_with_a_held_choice() {
     app.mode = Mode::Normal;
     code(&mut app, KeyCode::Enter);
     choose(&mut app, "Accept this program");
-    choose(&mut app, "d1.2 src/mini.c");
+    choose(&mut app, "2  src/mini.c  ← the model advises this one");
     assert!(dialog_argv(&app).ends_with(&["--keep".to_string(), "d1=d1.2".to_string()]));
 }
 

@@ -740,18 +740,42 @@ impl App {
             return;
         };
         if let Some(h) = o.next_held(&pick.kept, &pick.asked) {
-            // The definers listed, none suggested; the model's advice, when
-            // there is some, beside them.
-            let mut note = vec![project::keep_question(&o.id, &h.set)];
-            if let Some(a) = self.project.as_ref().and_then(|p| p.advice.get(&h.set)) {
-                note.push(a.words());
+            // The files numbered, none recommended; the one the model
+            // advises marked, and its why above them. The set and definer
+            // ids stay behind the items (the command's --keep flags).
+            let advice = self.project.as_ref().and_then(|p| p.advice.get(&h.set));
+            let mut note = vec![project::keep_question(h.definers.len())];
+            if !h.under.is_empty() {
+                let path_of = |index: &str| {
+                    o.held
+                        .iter()
+                        .flat_map(|x| x.definers.iter())
+                        .find(|(i, _)| i == index)
+                        .map_or_else(|| index.to_string(), |(_, path)| safe_line(path))
+                };
+                let paths: Vec<String> = h.under.iter().map(|u| path_of(u)).collect();
+                note.push(format!("Asked only if you keep {}.", paths.join(" or ")));
+            }
+            if let Some(a) = advice {
+                note.push(a.why_line());
             }
             let items = h
                 .definers
                 .iter()
-                .map(|(index, path)| {
+                .enumerate()
+                .map(|(n, (index, path))| {
+                    let advised = advice.is_some_and(|a| &a.keep == index);
                     item(
-                        format!("{} {}", safe_line(index), safe_line(path)),
+                        format!(
+                            "{}  {}{}",
+                            n + 1,
+                            safe_line(path),
+                            if advised {
+                                format!("  {}", project::ADVISED)
+                            } else {
+                                String::new()
+                            }
+                        ),
                         Action::Keep(index.clone()),
                         None,
                     )

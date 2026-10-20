@@ -437,7 +437,6 @@ fn the_question_is_typed_and_the_recorded_advice_shows() {
     };
     assert_eq!(
         m.note[1],
-        "The model's advice (claude-opus-5-5): keep d1.2, reason alternative-implementation — \
-         advice only, the choice is yours."
+        "Why (claude-opus-5-5): they are two implementations of the same thing."
     );
 }

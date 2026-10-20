@@ -580,24 +580,6 @@ impl Advice {
             format!("Why ({model}): {why}.")
         }
     }
-
-    /// The advice in words, labelled as the model's.
-    pub fn words(&self) -> String {
-        if self.keep == "undecided" {
-            format!(
-                "The model's advice ({}): it could not decide (reason {}).",
-                safe_line(&self.model),
-                self.reason
-            )
-        } else {
-            format!(
-                "The model's advice ({}): keep {}, reason {} — advice only, the choice is yours.",
-                safe_line(&self.model),
-                safe_line(&self.keep),
-                self.reason
-            )
-        }
-    }
 }
 
 /// The advice of the reply file under `root`, by set, when it is bound to
@@ -858,14 +840,17 @@ pub const ACCEPT_NEEDS_STATED: &str = "Accept needs a stated configuration, and 
      guess (or came with the project): choose Write the build configuration (or Ask for a \
      proposal — ask in chat), then Map the project again";
 
-/// The picker's question for one held set.
-pub fn keep_question(id: &str, set: &str) -> String {
-    format!(
-        "{} holds the choice {}: two files define the same function, so keep which one?",
-        safe_line(id),
-        safe_line(set)
-    )
+/// Accept's picker: its question for a decision between `files` files.
+pub fn keep_question(files: usize) -> String {
+    if files == 2 {
+        "Keep which file for the functions both define?".into()
+    } else {
+        "Keep which file for the functions they all define?".into()
+    }
 }
+
+/// The mark beside the file the model advises, in the card and the picker.
+pub const ADVISED: &str = "← the model advises this one";
 
 #[cfg(test)]
 pub(crate) mod tests {
@@ -1090,10 +1075,10 @@ pub(crate) mod tests {
         };
         reply("blake3:aa", "d1.2");
         let advice = read_advice(&p.0, &map);
+        assert_eq!(advice["d1"].keep, "d1.2");
         assert_eq!(
-            advice["d1"].words(),
-            "The model's advice (claude-x): keep d1.2, reason alternative-implementation — \
-             advice only, the choice is yours."
+            advice["d1"].why_line(),
+            "Why (claude-x): they are two implementations of the same thing."
         );
         for (root_hash, keep) in [("blake3:other", "d1.2"), ("blake3:aa", "d9.1")] {
             reply(root_hash, keep);
