@@ -380,16 +380,14 @@ impl App {
             );
         }
         if m.guessed {
-            // The chat's item is named only while the chat can be used.
-            let or_ask = if self.chat_unavailable().is_none() {
-                ", or Ask for a proposal in the chat"
+            // The chat's item is named only while the chat can be used
+            // (the line stays under 80 characters).
+            let key = if self.chat_unavailable().is_none() {
+                "Enter, or Ask for a proposal in the chat"
             } else {
-                ""
+                "Enter, it is the first item"
             };
-            return say(
-                format!("{write} — Enter, it is the first item{or_ask}"),
-                Some(Action::WriteBuildConfig),
-            );
+            return say(format!("{write} — {key}"), Some(Action::WriteBuildConfig));
         }
         let open = |o: &&Offered| o.acceptable() && !p.tools.contains(&o.id);
         if let Some(o) = m

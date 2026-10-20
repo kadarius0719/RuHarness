@@ -343,8 +343,7 @@ fn a_guessed_configuration_asks_for_the_build() {
     let screen = text(&render(&mut app, 220, 40));
     assert!(
         screen.contains(
-            "│Next: Write the build configuration — Enter, it is the first item, or Ask for a \
-             proposal in the chat "
+            "│Next: Write the build configuration — Enter, or Ask for a proposal in the chat "
         ),
         "{screen}"
     );
@@ -896,6 +895,152 @@ fn the_help_says_what_the_states_mean() {
     let (rows, _) = super::super::help_rows(1000, true, None, false);
     let help: String = rows.iter().map(|l| l.to_string() + "\n").collect();
     assert!(!help.contains("What the states mean"), "{help}");
+}
+
+/// The right pane's lines from its first: the card of each kind of row —
+/// a program that links (two lines, then what Enter does), a library, a
+/// library that did not compile (its first error in words, then what the
+/// state means) and a fuzzer (nothing to accept).
+#[test]
+fn the_card_of_each_selection() {
+    let (_tmp, root) = project("cards");
+    write_map(&root, &map_text("stated", false));
+    let mut app = cockpit(&root);
+    // The right pane's lines, from its first.
+    let card = |app: &mut App, sel: Selection| -> Vec<String> {
+        app.select(sel);
+        let screen = text(&render(app, 160, 40));
+        screen
+            .lines()
+            .skip(1)
+            .map(|l| l.split('│').nth(3).unwrap_or("").trim_end().to_string())
+            .collect()
+    };
+    let lines = card(&mut app, Selection::Program("t-lzg".into()));
+    assert!(
+        lines[2].starts_with("t-lzg  ") && lines[2].ends_with("  ✓ links"),
+        "{lines:#?}"
+    );
+    assert_eq!(
+        [&lines[..2], &lines[3..6]].concat(),
+        [
+            "Next: Accept t-unlzg — Enter on its row, it asks for the file",
+            "",
+            "tools/lzg.c · a tool, by its folder",
+            "",
+            "Enter: Accept t-lzg",
+        ],
+        "{lines:#?}"
+    );
+    let lines = card(&mut app, Selection::Program("l-checksum".into()));
+    assert_eq!(
+        lines[3],
+        "src/checksum.c · a library (compiled, never linked)"
+    );
+    assert_eq!(lines[5], "Enter: Accept l-checksum");
+    let lines = card(&mut app, Selection::Program("l-bad".into()));
+    assert!(lines[2].ends_with("✗ did not compile"), "{lines:#?}");
+    assert_eq!(lines[4], "✗ src/bad.c: a syntax error");
+    assert_eq!(
+        lines[6],
+        "Enter: Write the build configuration, then Map the project again"
+    );
+    assert_eq!(
+        lines[7],
+        "The build likely needs flags its build configuration does not give yet."
+    );
+    let lines = card(&mut app, Selection::Program("t-fuzz".into()));
+    assert!(lines[2].ends_with("· fuzzer, not a tool"), "{lines:#?}");
+    assert_eq!(lines[3], "fuzz/f.c · a fuzzer");
+    assert!(!lines.iter().any(|l| l.starts_with("Enter:")), "{lines:#?}");
+}
+
+/// The Next step is one short line, "<verb phrase> — <key>", for each of
+/// the project's rules (the rules unchanged, their words §9.3's).
+#[test]
+fn the_next_step_is_one_line_for_each_rule() {
+    let (_tmp, root) = project("next-lines");
+    let mut app = cockpit(&root);
+    let mut said = Vec::new();
+    let mut next = |app: &App| {
+        let text = app.project_next().unwrap().text;
+        assert!(text.chars().count() + "Next: ".len() < 80, "{text}");
+        said.push(text);
+    };
+    next(&app); // no map
+    guessed_map(&root);
+    app.reload_project();
+    next(&app); // a guess, the chat off
+    with_chat(&mut app);
+    next(&app); // a guess, the chat on
+    write_map(&root, &map_text("guessed", true));
+    app.reload_project();
+    next(&app); // proposed
+    write_map(&root, &map_text("stated", false));
+    app.reload_project();
+    next(&app); // a decision
+    let tool = |id: &str| {
+        let dir = harness_core::config::tool_dir(&root, id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("harness.toml"), "schema_version = 2\n").unwrap();
+    };
+    tool("t-unlzg");
+    app.reload_project();
+    next(&app); // links, no decision
+    tool("t-lzg");
+    tool("l-checksum");
+    app.reload_project();
+    next(&app); // a tool is left to open
+    app.project.as_mut().unwrap().just_accepted = Some("t-lzg".into());
+    next(&app); // just accepted
+    app.project.as_mut().unwrap().just_accepted = None;
+    std::fs::create_dir_all(root.join("migration/map")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    std::fs::write(root.join("migration/map/config.toml"), "").unwrap();
+    app.reload_project();
+    next(&app); // a configuration newer than the map
+    assert_eq!(
+        said,
+        [
+            "Map the project — Enter".to_string(),
+            "Write the build configuration — Enter, it is the first item".into(),
+            "Write the build configuration — Enter, or Ask for a proposal in the chat".into(),
+            "Write the build configuration — Enter (or harness project map --adopt)".into(),
+            "Accept t-unlzg — Enter on its row, it asks for the file".into(),
+            "Accept t-lzg — Enter on its row".into(),
+            "Open tool l-checksum — Enter on its row".into(),
+            "Open tool t-lzg — Enter on its row".into(),
+            "Map the project again — Enter".into(),
+        ]
+    );
+}
+
+/// Every program that can be a tool is one: nothing is left on the
+/// project; and a map without libraries has no Libraries group.
+#[test]
+fn every_program_a_tool_leaves_nothing_here() {
+    let (_tmp, root) = project("all-tools");
+    let text = map_text("stated", false);
+    let at = text.find("\"libraries\"").unwrap();
+    let no_libraries = format!("{}\"libraries\": []\n    }}", &text[..at]);
+    write_map(&root, &no_libraries);
+    for id in ["t-lzg", "t-unlzg"] {
+        let dir = harness_core::config::tool_dir(&root, id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("harness.toml"), "schema_version = 2\n").unwrap();
+    }
+    let mut app = cockpit(&root);
+    assert_eq!(
+        app.project_next().unwrap().text,
+        "nothing here — every program is a tool; open one"
+    );
+    let screen = text_of_render(&mut app);
+    assert!(screen.contains("│Programs (4) · 2 accepted "), "{screen}");
+    assert!(!screen.contains("Libraries"), "{screen}");
+}
+
+fn text_of_render(app: &mut App) -> String {
+    text(&render(app, 120, 30))
 }
 
 /// A run name of the person's, typed after the picks; a name the command
