@@ -191,8 +191,8 @@
 └──────────────────────┘└──────────────────────────────────────────────────────┘
   @0-23 fg 25 BOLD "└──────────────────────┘"
   @24-79 fg 244 NONE "└──────────────────────────────────────────────────────┘"
- Ready — ↑↓ to choose a row, Enter for what you can do
-  @0-53 fg 240 NONE "Ready — ↑↓ to choose a row, Enter for what you can do"
+ u-cache: one piece of the program; it has no test program yet.
+  @0-62 fg 240 NONE "u-cache: one piece of the program; it has no test program yet."
 
  ↑↓ move   ←→ fold/open   Enter actions   Tab pane   ? help   q quit
   @0-2 fg - BOLD "↑↓"

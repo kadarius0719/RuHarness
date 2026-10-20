@@ -961,6 +961,10 @@ pub struct App {
     held: Option<Held>,
     down: Option<Down>,
     last_mouse: Option<Instant>,
+    /// The selection has moved since the start: the first screen's how-to
+    /// (`Ready — ↑↓ …`) gives way to the selected row's sentence
+    /// (docs/COCKPIT-WRAPPER-DESIGN.md §9.5).
+    pub moved: bool,
 }
 
 fn os(s: impl Into<OsString>) -> OsString {
@@ -1167,6 +1171,7 @@ impl App {
             held: None,
             down: None,
             last_mouse: None,
+            moved: false,
         };
         app.rebuild_rows();
         app.refresh_view(true);
@@ -1267,6 +1272,7 @@ impl App {
         }
         tree::reveal(&mut self.expansion, &sel);
         self.selection = sel;
+        self.moved = true;
         // "Open the tool you just accepted" lasts until the selection
         // moves: then the rules fall through to what still waits.
         if let Some(p) = self.project.as_mut() {
@@ -1310,6 +1316,7 @@ impl App {
     }
 
     fn move_rows(&mut self, by: isize) {
+        self.moved = true;
         let selectable: Vec<usize> = self
             .rows
             .iter()

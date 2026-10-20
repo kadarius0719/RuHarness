@@ -29,6 +29,6 @@
 │                                      ││                                                                              │
 │                                      ││                                                                              │
 └──────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────┘
- Ready — ↑↓ to choose a row, Enter for what you can do
+ t-unlzg: a program the map found (tools/unlzg.c has a main); it needs a decision before it can be accepted.
 
  ↑↓ move   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit

@@ -25,6 +25,6 @@
 │                                      ││                                                                              │
 │                                      ││                                                                              │
 └──────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────┘
- Ready — ↑↓ to choose a row, Enter for what you can do
+ u-cache is one piece of the program: 5 functions that move to Rust together; it has no test program yet.
 
  ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit

@@ -35,6 +35,6 @@
 │                      ││                                                      │
 │                      ││                                                      │
 └──────────────────────┘└──────────────────────────────────────────────────────┘
- Ready — ↑↓ to choose a row, Enter for what you can do
+ Speed of the Rust against the C: 1 of the 1 pieces in Rust measured.
 
  ↑↓ move   ←→ fold/open   Enter actions   Tab pane   ? help   q quit

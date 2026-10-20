@@ -3355,8 +3355,38 @@ pub const NOTHING_RAN: &str = "Nothing has run yet. When a command runs, its out
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-/// Row 1: the running command in words, or "Ready. Last: …"; its buttons on
-/// the right.
+/// The hint line's words (docs/COCKPIT-WRAPPER-DESIGN.md §9.5): in the
+/// panes, what the selected row is, in one sentence; in a menu, the
+/// focused greyed item's reason. `None` elsewhere, and on the first screen
+/// until the first move (its how-to stands there). The longest form of the
+/// sentence that fits `width` columns.
+pub fn hint_words(app: &App, width: usize) -> Option<String> {
+    match &app.mode {
+        Mode::Menu(m) => m
+            .items
+            .get(m.focus)
+            .and_then(|it| it.greyed.as_ref().map(|why| format!("{}: {why}", it.label))),
+        Mode::Normal if app.moved || !first_screen(app) => {
+            Some(crate::explain::hint_in(app, &app.selection, width))
+        }
+        _ => None,
+    }
+}
+
+/// Nothing has run and the tree has the keys: the first screen's how-to
+/// is true.
+fn first_screen(app: &App) -> bool {
+    app.run.is_none() && app.focus == Focus::Files && matches!(app.mode, Mode::Normal)
+}
+
+/// Row 1 holds the hint: nothing runs, nothing waits on the chat, no
+/// `Last:` stands.
+fn hint_on_row_one(app: &App) -> bool {
+    !app.running && app.chat_waits_why(app.now).is_none() && app.last.is_none()
+}
+
+/// Row 1: the running command in words, or "Ready. Last: …", or the hint
+/// line; its buttons on the right.
 fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
     let width = area.width as usize;
     let mut buttons: Vec<(&'static str, &'static str)> = Vec::new();
@@ -3410,16 +3440,15 @@ fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
                     style = last_style(app);
                     format!("Ready. Last: {last}")
                 }
-                // The how-to only where it is true: the tree has the keys
-                // (not a dialog, a menu or the chat).
-                (None, None)
-                    if app.run.is_none()
-                        && app.focus == Focus::Files
-                        && matches!(app.mode, Mode::Normal) =>
-                {
-                    READY_FIRST.to_string()
+                // The how-to only where it is true (the tree has the keys:
+                // not a dialog, a menu or the chat), until the first move.
+                (None, None) if first_screen(app) && !app.moved => READY_FIRST.to_string(),
+                // Then what the selected row is (§9.5).
+                (None, None) => {
+                    let taken: usize = buttons.iter().map(|(b, _)| width_of(b) + 1).sum();
+                    hint_words(app, width.saturating_sub(taken + 1))
+                        .unwrap_or_else(|| "Ready.".to_string())
                 }
-                (None, None) => "Ready.".to_string(),
             };
             (text, style)
         }
@@ -3533,7 +3562,7 @@ fn notice_row(app: &App, width: usize) -> Line<'static> {
             notice(),
         ));
     }
-    // Last: a mapped tool's "project changed" notice stays in sight.
+    // A mapped tool's "project changed" notice stays in sight.
     if let Some(n) = app
         .snapshot
         .project_notice
@@ -3541,6 +3570,12 @@ fn notice_row(app: &App, width: usize) -> Line<'static> {
         .filter(|_| !app.in_project_view())
     {
         return Line::from(Span::styled(ellipsis(&format!(" {n}"), width), notice()));
+    }
+    // Last: the hint line, when row 1 holds a run or its `Last:` (§9.5).
+    if !hint_on_row_one(app) {
+        if let Some(h) = hint_words(app, width.saturating_sub(1)) {
+            return Line::from(Span::styled(fit_status(&format!(" {h}"), width), status()));
+        }
     }
     Line::from("")
 }
@@ -5796,8 +5831,10 @@ mod tests {
         assert!(screen.contains("⇄"));
         assert!(screen.contains("›"), "a cut code line ends with a dim ›");
         assert!(screen.contains("same outputs as C"));
-        // Before the first command: how to start (pass 1 of the 2026-10-18 critique).
-        assert!(row_with(&screen, "Ready —").starts_with(&format!(" {READY_FIRST}")));
+        // Once the selection moved, the status line says what the row is
+        // (§9.5; before that, how to start).
+        assert!(row_with(&screen, "lib.c is the C of the piece u-lib")
+            .starts_with(" lib.c is the C of the piece u-lib; "));
         assert!(screen.lines().last().is_some_and(|l| l.ends_with("q quit")));
     }
 
@@ -5834,9 +5871,13 @@ mod tests {
             !narrow.contains(" Files ") && narrow.contains("u-lib"),
             "{narrow}"
         );
-        // Activity stays at every width (the View has the keys: "Ready.",
-        // never the tree's how-to).
-        assert!(narrow.contains(" Ready.") && !narrow.contains("Ready —"));
+        // Activity stays at every width (the View has the keys: what the
+        // row is, never the tree's how-to).
+        assert!(
+            narrow.contains("\n u-lib: one piece of the program; done.\n")
+                && !narrow.contains("Ready —"),
+            "{narrow}"
+        );
     }
 
     /// Golden 3: a tree showing every glyph, each with its word.
@@ -7563,13 +7604,62 @@ mod tests {
             row_with(&screen, "Ready").starts_with(" Ready."),
             "{screen}"
         );
+        // With the View focused, the line says what the selected row is
+        // (§9.5): the tree's how-to would not be true there.
         app.mode = Mode::Normal;
         crate::app::tests::code(&mut app, KeyCode::Tab);
         let screen = text(&render(&mut app, 120, 30));
-        assert!(
-            row_with(&screen, "Ready").starts_with(" Ready."),
-            "{screen}"
-        );
+        assert!(!screen.contains("Ready"), "{screen}");
+        assert!(screen.contains(" harness-tui-ready-line-"), "{screen}");
+    }
+
+    /// The hint line (§9.5): the first screen's how-to until the first
+    /// move; then what the selected row is, in the longest form that fits;
+    /// a focused greyed menu item's reason; under a `Last:` line, the row
+    /// below it.
+    #[test]
+    fn the_hint_line_says_what_the_selected_row_is() {
+        let mut app = crate::app::tests::app("hint-line");
+        let screen = text(&render(&mut app, 120, 30));
+        assert!(screen.contains(READY_FIRST), "{screen}");
+        crate::app::tests::code(&mut app, KeyCode::Down);
+        let said = crate::explain::hint(&app, &app.selection);
+        assert!(app.moved);
+        let screen = text(&render(&mut app, 160, 30));
+        assert_eq!(row_with(&screen, &said).trim(), said, "{screen}");
+        assert!(!screen.contains(READY_FIRST), "{screen}");
+        // A narrow line takes a shorter form of the sentence, whole.
+        app.select(Selection::Unit("u-lib".into()));
+        let short = crate::explain::hint_in(&app, &app.selection, 79);
+        assert!(short.chars().count() <= 79, "{short}");
+        let screen = text(&render(&mut app, 80, 30));
+        assert!(screen.contains(&format!(" {short}")), "{screen}");
+        // A greyed item, focused in a menu: its reason, on the hint line.
+        let lib = app.config.target.join(LIB_C);
+        let c = std::fs::read_to_string(&lib).unwrap();
+        std::fs::write(&lib, format!("{c}\n")).unwrap();
+        assert!(app.reload(true));
+        app.select(Selection::Project);
+        app.open_menu();
+        let Mode::Menu(m) = &mut app.mode else {
+            panic!()
+        };
+        m.focus = m.items.iter().position(|i| i.greyed.is_some()).unwrap();
+        let it = m.items[m.focus].clone();
+        let screen = text(&render(&mut app, 160, 30));
+        let reason = format!("{}: {}", it.label, it.greyed.unwrap());
+        assert!(screen.contains(&format!(" {reason}")), "{screen}");
+        // Under a `Last:` line, the hint takes the row below it (a notice
+        // goes first).
+        app.mode = Mode::Normal;
+        app.notice = None;
+        app.last = Some("Re-check u-lib — GREEN — all 8 checks passed (41 s)".into());
+        let screen = text(&render(&mut app, 160, 30));
+        let said = crate::explain::hint(&app, &app.selection);
+        let last = row_with(&screen, "Ready. Last: Re-check u-lib");
+        let rows: Vec<&str> = screen.lines().collect();
+        let at = rows.iter().position(|r| *r == last).unwrap();
+        assert_eq!(rows[at + 1].trim(), said, "{screen}");
     }
 
     /// New files are listed with their own words; what to do is said once,

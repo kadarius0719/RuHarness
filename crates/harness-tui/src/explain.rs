@@ -28,6 +28,9 @@ pub struct Explained {
     pub title: String,
     /// One sentence: what the row is.
     pub hint: String,
+    /// Shorter forms of the same sentence, longest first, for a narrow
+    /// status line.
+    pub shorter: Vec<String>,
     /// Three to eight short lines: what it is, where it came from, why it
     /// is there, what to do next, where its files live.
     pub card: Vec<String>,
@@ -37,6 +40,19 @@ pub struct Explained {
 /// for it).
 pub fn hint(app: &App, sel: &Selection) -> String {
     explained(app, sel).hint
+}
+
+/// The selected row's hint sentence in `width` columns: the longest form
+/// that fits whole (the shortest when none does; the status line cuts it).
+pub fn hint_in(app: &App, sel: &Selection, width: usize) -> String {
+    let e = explained(app, sel);
+    let fits = |h: &String| h.chars().count() <= width;
+    std::iter::once(&e.hint)
+        .chain(e.shorter.iter())
+        .find(|h| fits(h))
+        .or(e.shorter.last())
+        .unwrap_or(&e.hint)
+        .clone()
 }
 
 /// What `sel` is, for its card: its own lines, then what Enter recommends
@@ -69,17 +85,29 @@ fn explained(app: &App, sel: &Selection) -> Explained {
         Selection::Tool(id) => tool(app, id),
         Selection::ProjectHome => home(app),
     };
+    // `fit` keeps its shorter forms behind the sentence.
+    let all = std::mem::take(&mut e.hint);
+    let mut forms = all.split(FORMS).map(str::to_string);
+    e.hint = forms.next().unwrap_or_default();
+    e.shorter = forms.collect();
     e.card.truncate(8);
     e
 }
 
-/// The first candidate that fits [`HINT_MAX`] (the last one, cut, when
-/// none does).
+/// Between a sentence and its shorter forms, inside `fit`'s result.
+const FORMS: char = '\u{1f}';
+
+/// The candidates that fit [`HINT_MAX`], longest first, joined by
+/// [`FORMS`] (the last one, cut, when none does): the sentence and its
+/// shorter forms.
 fn fit(candidates: &[String]) -> String {
-    for c in candidates {
-        if c.chars().count() <= HINT_MAX {
-            return c.clone();
-        }
+    let fitting: Vec<&str> = candidates
+        .iter()
+        .filter(|c| c.chars().count() <= HINT_MAX)
+        .map(String::as_str)
+        .collect();
+    if !fitting.is_empty() {
+        return fitting.join(&FORMS.to_string());
     }
     let last = candidates.last().cloned().unwrap_or_default();
     let mut cut: String = last.chars().take(HINT_MAX - 1).collect();
@@ -191,14 +219,11 @@ fn project(app: &App) -> Explained {
     let rust = if app.snapshot.units.is_empty() {
         "it is not cut into pieces yet (scan and plan it first)".to_string()
     } else {
-        format!(
-            "{done} of its {pieces} {} in Rust",
-            if pieces == 1 {
-                "piece is"
-            } else {
-                "pieces are"
-            }
-        )
+        match (pieces, done) {
+            (1, 1) => "its one piece is in Rust".to_string(),
+            (1, _) => "its one piece is not in Rust yet".to_string(),
+            _ => format!("{done} of its {pieces} pieces are in Rust"),
+        }
     };
     let hint = match &app.config.tool {
         Some(id) => fit(&[
@@ -207,10 +232,12 @@ fn project(app: &App) -> Explained {
                 folder(app)
             ),
             format!("{id} is one program of the project; {rust}."),
+            format!("{id}: {rust}."),
         ]),
         None => fit(&[
             format!("{name}: the C project moving to Rust, its files below; {rust}."),
             format!("The C project moving to Rust; {rust}."),
+            format!("The project: {rust}."),
         ]),
     };
     let ledger = app.snapshot.ledger_rel();
@@ -244,7 +271,12 @@ fn project(app: &App) -> Explained {
         ));
     }
     card.push(format!("Its records: {ledger}/"));
-    Explained { title, hint, card }
+    Explained {
+        title,
+        hint,
+        shorter: Vec::new(),
+        card,
+    }
 }
 
 fn dir(app: &App, d: &str) -> Explained {
@@ -285,7 +317,7 @@ fn dir(app: &App, d: &str) -> Explained {
     } else {
         fit(&[
             format!(
-                "{prefix}: a folder of {}; {owned} of them hold pieces that move to Rust.",
+                "{prefix}: a folder of {}; {owned} of them hold the C of a piece.",
                 plural(n, "file", "files")
             ),
             format!("A folder of {}.", plural(n, "file", "files")),
@@ -315,6 +347,7 @@ fn dir(app: &App, d: &str) -> Explained {
     Explained {
         title: prefix.clone(),
         hint,
+        shorter: Vec::new(),
         card,
     }
 }
@@ -336,6 +369,7 @@ fn file(app: &App, p: &str) -> Explained {
         return Explained {
             title,
             hint: format!("{name}: a file of the project."),
+            shorter: Vec::new(),
             card: vec![
                 format!("{p}: a file of the project."),
                 "It is not in the last read of the folder.".into(),
@@ -463,7 +497,12 @@ fn file(app: &App, p: &str) -> Explained {
     if card.len() < 3 {
         card.push("Enter shows what you can do with it.".into());
     }
-    Explained { title, hint, card }
+    Explained {
+        title,
+        hint,
+        shorter: Vec::new(),
+        card,
+    }
 }
 
 fn function(app: &App, p: &str, name: &str) -> Explained {
@@ -529,7 +568,12 @@ fn function(app: &App, p: &str, name: &str) -> Explained {
         ),
     };
     card.push("Enter on it shows its code.".into());
-    Explained { title, hint, card }
+    Explained {
+        title,
+        hint,
+        shorter: Vec::new(),
+        card,
+    }
 }
 
 fn units(app: &App) -> Explained {
@@ -554,6 +598,7 @@ fn units(app: &App) -> Explained {
     Explained {
         title: format!("Units ({n})"),
         hint,
+        shorter: Vec::new(),
         card,
     }
 }
@@ -612,6 +657,7 @@ fn unit(app: &App, id: &str) -> Explained {
         return Explained {
             title,
             hint: format!("{id}: a piece of the program."),
+            shorter: Vec::new(),
             card: vec![
                 format!("{id}: a piece of the program."),
                 "It is not in the last read of the plan.".into(),
@@ -647,6 +693,7 @@ fn unit(app: &App, id: &str) -> Explained {
                      {clause}."
                 ),
                 format!("{id}: one piece of the program; {clause}."),
+                format!("{id}: one piece of the program; {}.", s.word()),
             ])
         }
     };
@@ -692,7 +739,12 @@ fn unit(app: &App, id: &str) -> Explained {
             "Its test program: {driver}, a small C program the judge runs on the C and the Rust."
         ));
     }
-    Explained { title, hint, card }
+    Explained {
+        title,
+        hint,
+        shorter: Vec::new(),
+        card,
+    }
 }
 
 /// Where the unit's Rust came from, in words: "written by try a-fbbe
@@ -726,6 +778,7 @@ fn crate_row(app: &App, id: &str) -> Explained {
         return Explained {
             title,
             hint: format!("The Rust of {id}."),
+            shorter: Vec::new(),
             card: vec![
                 format!("The Rust of {id}."),
                 "It is not in the last read of the plan.".into(),
@@ -739,6 +792,7 @@ fn crate_row(app: &App, id: &str) -> Explained {
             hint: fit(&[format!(
                 "The Rust of {id}: none yet; it appears once a try of it is accepted."
             )]),
+            shorter: Vec::new(),
             card: vec![
                 format!("The Rust of {id}: none yet."),
                 "A try writes Rust in its own folder; Accept makes it this piece's Rust.".into(),
@@ -784,7 +838,12 @@ fn crate_row(app: &App, id: &str) -> Explained {
     if let Some(s) = state_of(app, id) {
         card.push(format!("Now: {}.", unit_state_clause(s)));
     }
-    Explained { title, hint, card }
+    Explained {
+        title,
+        hint,
+        shorter: Vec::new(),
+        card,
+    }
 }
 
 /// What a try's outcome means, as a clause.
@@ -810,6 +869,7 @@ fn attempt(app: &App, unit_id: &str, a: &str) -> Explained {
         return Explained {
             title,
             hint: format!("A try at {unit_id}'s Rust."),
+            shorter: Vec::new(),
             card: vec![
                 format!("A try at {unit_id}'s Rust."),
                 "It is not in the last read of the records.".into(),
@@ -876,7 +936,12 @@ fn attempt(app: &App, unit_id: &str, a: &str) -> Explained {
          Accept copies the one you choose into the piece's Rust.",
         rel(app, &dir)
     ));
-    Explained { title, hint, card }
+    Explained {
+        title,
+        hint,
+        shorter: Vec::new(),
+        card,
+    }
 }
 
 fn features(app: &App) -> Explained {
@@ -898,11 +963,17 @@ fn features(app: &App) -> Explained {
             let n = app.features.features.len();
             (
                 format!("Features ({n})"),
-                fit(&[format!(
-                    "Your own checks of what the program must keep doing: {}, run on every \
+                fit(&[
+                    format!(
+                        "Your own checks of what the program must keep doing: {}, run on every \
                      check of a piece.",
-                    plural(n, "feature", "features")
-                )]),
+                        plural(n, "feature", "features")
+                    ),
+                    format!(
+                        "Your own checks of the program: {}.",
+                        plural(n, "feature", "features")
+                    ),
+                ]),
             )
         }
     };
@@ -914,7 +985,12 @@ fn features(app: &App) -> Explained {
             .into(),
         format!("Their file: {path}"),
     ];
-    Explained { title, hint, card }
+    Explained {
+        title,
+        hint,
+        shorter: Vec::new(),
+        card,
+    }
 }
 
 fn feature(app: &App, id: &str) -> Explained {
@@ -922,6 +998,7 @@ fn feature(app: &App, id: &str) -> Explained {
         return Explained {
             title: id.to_string(),
             hint: format!("{id}: one of your features."),
+            shorter: Vec::new(),
             card: vec![
                 format!("{id}: one of your features."),
                 "It is not in the last read of the features file.".into(),
@@ -949,6 +1026,7 @@ fn feature(app: &App, id: &str) -> Explained {
     Explained {
         title: name,
         hint,
+        shorter: Vec::new(),
         card,
     }
 }
@@ -968,10 +1046,13 @@ fn speed(app: &App) -> Explained {
             format!("{measured} of the {of} pieces in Rust measured")
         }
     };
-    let hint = fit(&[format!(
-        "How fast the program runs with its Rust against the C, on workloads you name; \
+    let hint = fit(&[
+        format!(
+            "How fast the program runs with its Rust against the C, on workloads you name; \
          {state}."
-    )]);
+        ),
+        format!("Speed of the Rust against the C: {state}."),
+    ]);
     let card = vec![
         "Speed: the program's run time with its Rust, against the C alone.".into(),
         "You name the workloads: runs of the program with its flags and an input.".into(),
@@ -984,6 +1065,7 @@ fn speed(app: &App) -> Explained {
     Explained {
         title: app.speed.label(),
         hint,
+        shorter: Vec::new(),
         card,
     }
 }
@@ -1015,7 +1097,12 @@ fn map_row(app: &App) -> Explained {
             .into(),
         "Its map: migration/map/project-map.json; your files are not changed.".into(),
     ];
-    Explained { title, hint, card }
+    Explained {
+        title,
+        hint,
+        shorter: Vec::new(),
+        card,
+    }
 }
 
 fn program(app: &App, id: &str) -> Explained {
@@ -1024,6 +1111,7 @@ fn program(app: &App, id: &str) -> Explained {
         return Explained {
             title,
             hint: format!("{id}: a program of the project."),
+            shorter: Vec::new(),
             card: vec![
                 format!("{id}: a program of the project."),
                 "It is not in the last read of the map.".into(),
@@ -1070,7 +1158,12 @@ fn program(app: &App, id: &str) -> Explained {
         card.push(format!("Its progress: {}.", p.words()));
     }
     card.push("The project's map: migration/map/project-map.json".into());
-    Explained { title, hint, card }
+    Explained {
+        title,
+        hint,
+        shorter: Vec::new(),
+        card,
+    }
 }
 
 fn tool(app: &App, id: &str) -> Explained {
@@ -1100,6 +1193,7 @@ fn tool(app: &App, id: &str) -> Explained {
     Explained {
         title: id.to_string(),
         hint,
+        shorter: Vec::new(),
         card,
     }
 }
@@ -1113,6 +1207,7 @@ fn home(app: &App) -> Explained {
     Explained {
         title: "Back to the project view".into(),
         hint: "The project's other programs and their decisions.".into(),
+        shorter: Vec::new(),
         card: vec![
             format!("{tool} is one program of the project {}.", folder(app)),
             "The project view lists every program and library the map found.".into(),

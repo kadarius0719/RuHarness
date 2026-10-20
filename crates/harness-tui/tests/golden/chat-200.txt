@@ -19,6 +19,6 @@
 │                                           ││                                                                              ││About: the project                                                       │
 │                                           ││                                                                              ││› Enter reviews the request — or type                                    │
 └───────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────┘└─────────────────────────────────────────────────────────────────────────┘
- Ready.
+ harness-tui-chat-goldens-0000000000: the C project moving to Rust, its files below; its one piece is in Rust.
 
  Enter review   Esc decline   Ctrl-J new line   ↑↓ scroll   Tab pane   F1 help   Ctrl-C quit

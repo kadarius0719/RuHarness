@@ -25,6 +25,6 @@
 │                      ││25         7.56931807e-07f / 31,    6.00777173e-07f /›│
 │                      ││26         9.53674316e-07f / 63,    7.56931807e-07f /›│
 └──────────────────────┘└──────────────────────────────────────────────────────┘
- Ready — ↑↓ to choose a row, Enter for what you can do
+ u-lib: one piece of the program; its Rust is done and passed the judge's check.
 
  ↑↓ move   ←→ fold/open   Enter actions   Tab pane   ? help   q quit
