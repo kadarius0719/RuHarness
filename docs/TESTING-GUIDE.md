@@ -2640,7 +2640,7 @@ harness-tui --target targets/lzg
 
 - the **Files** pane on the left, with the project row `lzg`, then `Units (5)` with its five units under it, then `Features (none yet)`, `Speed — not set up`, and last the folder `src/`, folded (`▸`), its marks summed up at its right edge;
 - the **View** on the right, starting with a line that says where you are among the eight steps a program goes through: on a wide window `Map ✓ · Configure ✓ · Accept program ✓ · Scan ✓ · Plan ✓ · Test program 1/2 · Rust 0/2 ○ · Accept Rust 0/2` (two of the five pieces can move to Rust; one has its test program, from Part 3; the `○` sits on the step the Next line names), on a narrower one `Step 7 of 8: Rust 0/2`; then a line `Next: 2 of the 5 can move to Rust now — Migrate u-checksum: Enter`, then a summary such as `7 files scanned`, `Units (5): 1 ◈ test program ready · 3 · stays C · 1 ◇ no test program` and `Features: none yet — see Features`; its title says in words how many of the C files are in Rust (`0 of … C files in Rust`);
-- the line `Ready — ↑↓ to choose a row, Enter for what you can do` under the panes (it says only `Ready.` while a menu, a dialog, the View or the chat has the keys);
+- the line `Ready — ↑↓ to choose a row, Enter for what you can do` under the panes; once you move, that line says what the selected row is, in one sentence (press `i` for a card that says more, `Esc` to close it);
 - a key bar at the bottom, like `↑↓ move   ←→ fold/open   Enter actions   Tab pane   …   q quit`.
 
 **What it means.** The cockpit read the ledger. It changes nothing until you confirm an action.
@@ -2690,7 +2690,8 @@ The cockpit acts on whatever is selected, so you select the unit first.
 - first and highlighted, **Migrate — ask in chat**, with the line `↳ recommended: no Rust yet · uses a model` under it: the cockpit puts the View's Next step first;
 - `Re-check with the judge`, greyed out, because the unit has no Rust yet;
 - `Re-read the project`;
-- below the line `── Uses a model — can take minutes ──`: `Ask in chat…`.
+- below the line `── Uses a model — can take minutes ──`: `Ask in chat…`;
+- last, `What is this?`, which opens a card saying what the unit is.
 
 **Do.** Press `Enter`. **You should see** the menu close.
 
@@ -2732,17 +2733,16 @@ The cockpit acts on whatever is selected, so you select the unit first.
 
 **You should see** a dialog titled `The chat asks: Migrate u-checksum?` that contains:
 
-- `Asked in chat by <model>. Read what it does before you run it.`
-- `The chat answers its model turns (up to 4) here; each answer continues the run without asking again. Nothing is accepted without you.`
-- `A model call: provider external, model <model> (the chat's — it answers the hand-offs).`
-- `Records a new attempt of u-checksum; never promotes it. Can take minutes.`
+- `Asks a model for u-checksum's Rust: a new try, never accepted by itself.`
+- `Writes: a new try under migration/units/u-checksum/attempts/.`
+- `Asked in chat by <model>; it answers the model's turns here, up to 4.`
 - `Command:`, followed by the exact command, which looks like this:
 
 ```text
 /Users/<you>/.cargo/bin/harness --json migrate u-checksum --target=/Users/<you>/code/RuHarness/targets/lzg --no-promote --provider=external --model=<model> --requester=chat
 ```
 
-If the bottom of the dialog asks you to scroll, press `↓` until it says `ready: → then Enter` in green.
+If the bottom of the dialog asks you to scroll, press `↓` until it says `ready: → then Enter` in green. (Press `i` to read the rest — the provider and model, and that nothing is accepted without you — and `Esc` to come back; the dialog then waits for `ready` again.)
 
 **What it means.** This is exactly what will run. `--no-promote` means even a GREEN result waits for your Accept; `--requester=chat` records that the chat asked for it; `--json` makes the harness report to the cockpit in a form a program reads.
 
@@ -4730,7 +4730,7 @@ Ready. Last: Re-check u-checksum — GREEN — all 11 checks passed (<time>)
 
 | You see | Do this |
 |---|---|
-| a greyed-out menu item | It cannot run now; choose it anyway and the reason appears at the bottom. |
+| a greyed-out menu item | It cannot run now; highlight it and the line under the panes says why (choose it and the reason appears at the bottom of the menu too). |
 | `ready` never appears | The dialog wants you to read to its end: press `↓` until it does, or make the window larger. |
 | `RED` | Quit, run `harness verify u-checksum --target targets/lzg`, and read its `[FAIL]` lines; see ["Verify" in Troubleshooting](#verify-parts-5-6-8-10-12). |
 | `Re-check u-…: open u-… (or its crate) first …` | Select `u-checksum` again (Step 9.4) and repeat this step. |
@@ -6589,8 +6589,8 @@ Advice comes once the build configuration is written and the project mapped agai
 
 **Do.** One key at a time:
 
-1. Press `Enter` (the first program, `t-benchmark`, is selected). **You should see** a menu whose first item is `Write the build configuration (in nano)` with `↳ recommended: the configuration is a guess`, then `Accept this program — Accept waits for your build configuration: …` in grey, `Accept it under a run name of your own…` in grey, `Map the project again`, the line `── Uses a model — can take minutes ──`, and under it `Ask for a proposal — ask in chat` and `Ask in chat…`. (The editor's name is your own: `nano` unless you set another. Without Claude Code on this computer, the two chat items are grey with `Claude Code is not installed — choose Check the chat's connection to see how to fix it`, a `Check the chat's connection…` item sits above the line, and the Next step says `Enter, it is the first item` instead of naming the chat.)
-2. Press `↓` once (to `Accept this program`), then `Enter`. **You should see**, at the bottom of the menu:
+1. Press `Enter` (the first program, `t-benchmark`, is selected). **You should see** a menu whose first item is `Write the build configuration (in nano)` with `↳ recommended: the configuration is a guess`, then `Accept this program` in grey, `Accept it under a run name of your own…` in grey, `Map the project again`, the line `── Uses a model — can take minutes ──`, under it `Ask for a proposal — ask in chat` and `Ask in chat…`, and last `What is this?`. (The editor's name is your own: `nano` unless you set another. Without Claude Code on this computer, the two chat items are grey with `Claude Code is not installed — choose Check the chat's connection to see how to fix it`, a `Check the chat's connection…` item sits above the line, and the Next step says `Enter, it is the first item` instead of naming the chat.)
+2. Press `↓` once (to `Accept this program`): the line under the panes says `Accept this program: Accept waits for your build configuration: …`. Then press `Enter`. **You should see**, at the bottom of the menu:
 
    ```text
    Why not: Accept waits for your build configuration: this map's is a guess (or came with the project) — choose Write the build configuration (or Ask for a proposal — ask in chat), then Map the project again
@@ -6685,7 +6685,6 @@ and the card's last line says how advice comes: `No advice yet — Enter, then A
    ```text
    Accept t-unlzg: check the map still matches the project, apply your picks, link it once more, and make it a tool you can open, scan, plan and migrate.
    Keeps src/lib/decode.c for the functions both files define.
-   It takes: about as long as the map (it maps and link-checks the project again to check the map still says what it finds), then one more link.
    It writes: the tool's build configuration, migration/tools/t-unlzg/harness.toml (a tool accepted before keeps its results and what you added to that file).
    ```
 
@@ -6760,7 +6759,7 @@ and under `Units (4)`: `◇ u-checksum no test program`, `· u-encode stays C`, 
 
 **What it means.** The tool is cut into four pieces; two can move to Rust (the counts are of those two), and the two that call other pieces stay C, as Part 7 explained. The `○` sits on the step the `Next:` line names.
 
-**If you do not see that.** `Refresh the plan — nothing is scanned yet` greyed: the scan did not finish; look at `c` for its words and scan again.
+**If you do not see that.** `Refresh the plan` greyed (highlighted, the line under the panes says `nothing is scanned yet`): the scan did not finish; look at `c` for its words and scan again.
 
 #### Step 12.31 — See the test program's step
 
@@ -7000,7 +6999,7 @@ In Part 12 the paths and the flag differ from Parts 1–11: where a row says `ta
 | You see | What it means | Do this |
 |---|---|---|
 | You pressed a key and do not know where you are | The cockpit's attention moved to another area or a dialog. | Press `Esc` (once or twice) to go back to the Files list. |
-| A menu item is greyed out | It cannot run right now. | Choose it anyway: the reason appears at the bottom of the menu. |
+| A menu item is greyed out | It cannot run right now. | Highlight it: the line under the panes says why (choose it and the reason appears at the bottom of the menu too). |
 | A dialog never says `ready` | It is waiting for you to scroll to its end, or the window is too small. | Press `↓` until you reach the end. |
 | `Re-check u-…: open u-… (or its crate) first …` | Re-check runs only on code that is on the screen. | Select the unit's row first. |
 | A second `q` does nothing | The quit dialog ignores keys until it has settled. | Wait a moment, then press `q` again. |

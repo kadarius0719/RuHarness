@@ -433,8 +433,8 @@ fn a_live_migration_through_the_chat() {
     l.press(b"\r");
     l.wait("its dialog", "The chat asks: Migrate u001-katajainen?", 20);
     l.confirm();
-    l.wait("the hand-off", "awaiting the chat's answer", 180);
-    l.wait("the continuation", "continued, as you agreed", 600);
+    l.wait("the hand-off", "running — the chat answers turn", 180);
+    l.wait("the continuation", "continued with the chat's answer", 600);
     // A verdict, whichever: the translation is the model's, the round the
     // cockpit's (a plain run on haiku ended RED, 5 of 8 checks).
     let verdict = l.wait_any("a verdict", &["— GREEN", "— RED"], 600);

@@ -95,6 +95,14 @@ pub enum Action {
     /// A command was refused because the folder's results were made
     /// elsewhere: the adoption question again, as at the start.
     Adopt,
+    /// What is this?: the selected row's card (`i`,
+    /// docs/COCKPIT-WRAPPER-DESIGN.md §9.5).
+    Explain,
+}
+
+/// The last item of every Enter menu: the row's card.
+pub fn explain_item() -> Item {
+    item("What is this?", Action::Explain, Some("i"))
 }
 
 /// One menu item.

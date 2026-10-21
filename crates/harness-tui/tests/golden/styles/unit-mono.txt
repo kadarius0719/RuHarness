@@ -90,7 +90,7 @@
   @23-23 fg - BOLD "│"
 └──────────────────────┘└──────────────────────────────────────────────────────┘
   @0-23 fg - BOLD "└──────────────────────┘"
- Ready — ↑↓ to choose a row, Enter for what you can do
+ u-cache: one piece of the program; it has no test program yet.
 
  ↑↓ move   ←→ fold/open   Enter actions   Tab pane   ? help   q quit
   @0-2 fg - BOLD "↑↓"

@@ -62,6 +62,8 @@ pub struct ToolProgress {
     pub answer: usize,
     /// Of them, calling other pieces: they stay C in this version.
     pub stay_c: usize,
+    /// The person's features file is written.
+    pub features: bool,
 }
 
 impl ToolProgress {
@@ -74,6 +76,10 @@ impl ToolProgress {
         };
         let mut p = ToolProgress {
             planned: true,
+            features: dir
+                .join(harness_core::features::FEATURES_DIR)
+                .join(harness_core::features::FEATURES_FILE)
+                .is_file(),
             ..ToolProgress::default()
         };
         for u in plan.units.iter().filter(|u| u.status.as_str() != "blocked") {
@@ -107,6 +113,46 @@ impl ToolProgress {
     /// Something waits for the person in it.
     pub fn waiting(&self) -> bool {
         self.accept + self.answer > 0
+    }
+
+    /// Its pieces that can move (those that stay C left out).
+    pub fn movable(&self) -> usize {
+        self.pieces.saturating_sub(self.stay_c)
+    }
+
+    /// Every piece that can move is done.
+    pub fn moved(&self) -> bool {
+        self.planned && self.done >= self.movable()
+    }
+
+    /// Its progress in the state word's place on its row: `not scanned
+    /// yet`, `2/4 in Rust`, `done`.
+    pub fn row_word(&self) -> String {
+        if !self.planned {
+            "not scanned yet".into()
+        } else if self.moved() {
+            "done".into()
+        } else {
+            format!("{}/{} in Rust", self.done, self.movable())
+        }
+    }
+
+    /// What it still needs, most first, for the project's Next: `None`
+    /// when it is as far as this version goes (its features written).
+    pub fn to_do(&self) -> Option<(u8, String)> {
+        if !self.planned {
+            Some((0, "not scanned yet".into()))
+        } else if !self.moved() {
+            let left = self.movable() - self.done;
+            Some((
+                1,
+                format!("{left} piece{} to move", if left == 1 { "" } else { "s" }),
+            ))
+        } else if !self.features {
+            Some((2, "its features are not written".into()))
+        } else {
+            None
+        }
     }
 
     /// In words: "3 pieces · 1 done · 1 waits for your Accept".
@@ -561,22 +607,33 @@ impl App {
                 }),
             );
         }
-        if let Some(id) = p.tools.first() {
-            // Every program that can be a tool is one: nothing is left here.
-            let all = m
-                .offered
+        if let Some(first) = p.tools.first() {
+            // The tool with the most to do: not scanned yet, then pieces
+            // to move, then features not written (the person, 2026-10-20).
+            let most = p
+                .tools
                 .iter()
-                .filter(|o| o.acceptable())
-                .all(|o| p.tools.contains(&o.id));
-            return say(
-                if all {
-                    "nothing here — every program is a tool; open one".into()
-                } else {
-                    format!("Open tool {} — Enter on its row", safe_line(id))
-                },
-                "it is accepted",
-                Some(Action::OpenTool(id.clone())),
-            );
+                .filter_map(|id| {
+                    p.progress
+                        .get(id)
+                        .and_then(ToolProgress::to_do)
+                        .map(|(rank, why)| (rank, id, why))
+                })
+                .min_by_key(|(rank, _, _)| *rank);
+            return match most {
+                Some((_, id, why)) => say(
+                    format!("Open tool {} — Enter on its row ({why})", safe_line(id)),
+                    &why,
+                    Some(Action::OpenTool(id.clone())),
+                ),
+                None => say(
+                    "Every program is as far as this version goes — write features and \
+                     workloads for what matters"
+                        .into(),
+                    "every tool is done",
+                    Some(Action::OpenTool(first.clone())),
+                ),
+            };
         }
         say(
             format!("{write} — Enter, then Map the project again"),
@@ -695,6 +752,7 @@ impl App {
             let only = only.clone();
             return self.choose(&only);
         }
+        items.push(crate::menu::explain_item());
         self.mode = Mode::Menu(Menu {
             items,
             focus: 0,

@@ -53,6 +53,10 @@ use std::time::{Duration, Instant};
 /// The hand-off provider (a profile name or an adapter kind): its answers
 /// are written by whoever answers the request file.
 pub const EXTERNAL_PROVIDER: &str = "external";
+
+/// A dialog's warning when its act runs without the sandbox: always in the
+/// dialog itself, never only on its card.
+pub const UNSANDBOXED_WORDS: &str = "--allow-unsandboxed: runs code WITHOUT the sandbox.";
 /// Longest steer note accepted (the CLI's limit).
 pub const MAX_NOTE_BYTES: usize = 2000;
 /// Longest hand-edit note accepted (the CLI's limit).
@@ -539,6 +543,18 @@ pub enum Mode {
     },
     /// `Enter`: the action menu.
     Menu(Menu),
+    /// `i`, or What is this?: the card of the selected row — or, from a
+    /// dialog, of its act (docs/COCKPIT-WRAPPER-DESIGN.md §9.5).
+    Explain {
+        /// The row's (or the act's) name.
+        title: String,
+        /// Its lines.
+        lines: Vec<String>,
+        /// First row shown.
+        scroll: usize,
+        /// The dialog it was opened from: Esc or `i` goes back to it.
+        back: Option<Box<Mode>>,
+    },
     /// An armed confirmation.
     Dialog(Box<Confirm>),
     /// `c`: the activity details (today's run panel).
@@ -961,6 +977,10 @@ pub struct App {
     held: Option<Held>,
     down: Option<Down>,
     last_mouse: Option<Instant>,
+    /// The selection has moved since the start: the first screen's how-to
+    /// (`Ready — ↑↓ …`) gives way to the selected row's sentence
+    /// (docs/COCKPIT-WRAPPER-DESIGN.md §9.5).
+    pub moved: bool,
 }
 
 fn os(s: impl Into<OsString>) -> OsString {
@@ -1167,6 +1187,7 @@ impl App {
             held: None,
             down: None,
             last_mouse: None,
+            moved: false,
         };
         app.rebuild_rows();
         app.refresh_view(true);
@@ -1267,6 +1288,7 @@ impl App {
         }
         tree::reveal(&mut self.expansion, &sel);
         self.selection = sel;
+        self.moved = true;
         // "Open the tool you just accepted" lasts until the selection
         // moves: then the rules fall through to what still waits.
         if let Some(p) = self.project.as_mut() {
@@ -1310,6 +1332,7 @@ impl App {
     }
 
     fn move_rows(&mut self, by: isize) {
+        self.moved = true;
         let selectable: Vec<usize> = self
             .rows
             .iter()
@@ -1861,7 +1884,12 @@ impl App {
                 message,
                 holder,
             } => {
-                push(run, Tone::Bad, format!("error ({kind}): {message}"));
+                // A hand-off's pause is not an error (its words stay, plain).
+                if kind == "awaiting" {
+                    push(run, Tone::Dim, format!("awaiting: {message}"));
+                } else {
+                    push(run, Tone::Bad, format!("error ({kind}): {message}"));
+                }
                 if let Some(h) = holder {
                     push(
                         run,
@@ -2025,8 +2053,32 @@ impl App {
             if run.act.project().is_some() {
                 self.project_waiting = run.act.project().zip(waiting.clone());
             }
+            // The details end a pause in one plain line, never "failed".
+            let paused = match (status.code(), &signal) {
+                (Some(1), None) => run
+                    .narrator
+                    .awaited_path()
+                    .map(str::to_string)
+                    .or_else(|| awaiting_file(&run.lines))
+                    .map(|file| match &run.pending.chat {
+                        Some(_) => format!(
+                            "paused: waiting for the chat's answer to turn {} (the reply goes \
+                             to {file})",
+                            run.collect.turn.map_or("?".into(), |t| t.to_string())
+                        ),
+                        // The person's own hand-off: what to do with it too.
+                        None => format!(
+                            "paused: {}",
+                            waiting
+                                .clone()
+                                .unwrap_or_else(|| format!("waiting for your answer — {file}"))
+                        ),
+                    }),
+                _ => None,
+            };
             let text = match (status.code(), &signal) {
                 (_, Some(sig)) => format!("interrupted ({sig})"),
+                _ if paused.is_some() => paused.clone().unwrap_or_default(),
                 _ if waiting.is_some() => waiting.clone().unwrap_or_default(),
                 (Some(code), _) if !run.saw_result && run.act.project().is_none() => {
                     format!("exited without result (exit {code})")
@@ -2036,7 +2088,9 @@ impl App {
                 (Some(code), _) => with(format!("failed (exit {code})")),
                 (None, None) => "ended".into(),
             };
-            failed = waiting.is_none() && (status.code() != Some(0) || problem.is_some());
+            failed = waiting.is_none()
+                && paused.is_none()
+                && (status.code() != Some(0) || problem.is_some());
             run.exit = Some(text);
             self.last = Some(run.narrator.last(
                 status.code(),
@@ -2601,23 +2655,7 @@ impl App {
                     .map(str::to_string)
             })
             .unwrap_or_default();
-        let symbols: Vec<String> = self
-            .snapshot
-            .unit(unit)
-            .map(|u| u.unit.symbols.clone())
-            .unwrap_or_default();
-        let calls = match symbols.len() {
-            0 => "the unit's functions".to_string(),
-            1..=4 => {
-                let (last, rest) = symbols.split_last().expect("not empty");
-                if rest.is_empty() {
-                    last.clone()
-                } else {
-                    format!("{} and {last}", rest.join(", "))
-                }
-            }
-            n => format!("its {n} functions ({}, …)", symbols[..3].join(", ")),
-        };
+        let calls = self.driver_calls(unit);
         let mut body = vec![
             format!(
                 "The chat writes a small C program that calls {calls} with chosen inputs and \
@@ -2642,9 +2680,200 @@ impl App {
         (format!("Make {unit}'s test program?"), body)
     }
 
-    /// The words of an act's dialog: a question naming the object, and every
-    /// file it writes and what changes (§5.1).
+    /// The words of an act's dialog (§9.5, "in one breath"): its question,
+    /// and at most three lines before the command — what happens, what it
+    /// writes, and the chat's line or the cost when they apply. The rest is
+    /// on the act's card ([`App::act_words`], `i`).
     pub fn dialog_words(&self, p: &Pending) -> (String, Vec<String>) {
+        let (title, full) = self.act_words(p);
+        let mut short = self.short_words(p, &full);
+        if p.argv.iter().any(|a| a == "--allow-unsandboxed") {
+            short.retain(|l| l != UNSANDBOXED_WORDS);
+            short.truncate(2);
+            short.push(UNSANDBOXED_WORDS.into());
+        }
+        short.truncate(3);
+        (title, short)
+    }
+
+    /// The dialog's lines of an act, from its card's (`full`).
+    fn short_words(&self, p: &Pending, full: &[String]) -> Vec<String> {
+        let unit = p.unit.as_deref().unwrap_or("the unit");
+        let attempt = p.attempt.clone().unwrap_or_default();
+        let ledger = self.snapshot.ledger_rel();
+        let arg = |flag: &str| {
+            p.argv
+                .iter()
+                .find_map(|a| a.to_string_lossy().strip_prefix(flag).map(str::to_string))
+        };
+        // The third line: the chat's, or the cost of a model call.
+        let model_line = || match &p.chat {
+            Some(tag) => asks::chat_line(tag, self.migrate_turns),
+            None => match (arg("--provider="), arg("--model=")) {
+                (Some(pr), Some(m)) => {
+                    format!("A model call: provider {pr}, model {m}. Can take minutes.")
+                }
+                (_, Some(m)) => format!("A model call: model {m}. Can take minutes."),
+                _ => "A model call, as the paused run's. Can take minutes.".to_string(),
+            },
+        };
+        match p.act {
+            Act::ProjectMap | Act::ProjectAsk | Act::SaveFeatures | Act::SaveWorkloads => {
+                full.to_vec()
+            }
+            // What, each decision in words (one line), what it writes; how
+            // long it takes is on its card.
+            Act::ProjectAccept => {
+                let mut v = vec![full.first().cloned().unwrap_or_default()];
+                if full.len() > 3 {
+                    v.push(full[1..full.len() - 2].join(" "));
+                }
+                v.push(full.last().cloned().unwrap_or_default());
+                v
+            }
+            Act::Measure | Act::MeasureProgram | Act::MeasureMore => {
+                let mut v: Vec<String> = full.iter().take(2).cloned().collect();
+                v.push(
+                    full.iter()
+                        .find(|l| l.starts_with("perf will refuse"))
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            format!(
+                                "Writes: {ledger}/perf/; it only measures, nothing else changes."
+                            )
+                        }),
+                );
+                v
+            }
+            Act::Scan => vec![
+                format!(
+                    "Reads {} again and notes what changed.",
+                    match self.snapshot.target.source_dir() {
+                        Some(_) => "every C file",
+                        None => "the tool's C files",
+                    }
+                ),
+                format!("Writes: {ledger}/facts.jsonl."),
+            ],
+            Act::Plan => vec![
+                "Cuts the C into pieces again, as it is now; a changed piece needs its check \
+                 again."
+                    .into(),
+                format!("Writes: {ledger}/plan.toml (c shows the changes afterwards)."),
+            ],
+            Act::Detect => vec![
+                "Looks for risky patterns in the C, worth a look before it moves.".into(),
+                format!("Writes: its findings, under {ledger}/."),
+            ],
+            Act::MapFeatures => vec![
+                "Runs your scenarios on a copy of the C and notes which functions each runs."
+                    .into(),
+                format!("Writes: {ledger}/features/map.json; your C is not changed."),
+            ],
+            Act::Verify => vec![
+                full.first().cloned().unwrap_or_default(),
+                format!(
+                    "Writes: the judge's check of {unit} and its status in the plan; changes no \
+                     code."
+                ),
+            ],
+            Act::Accept => vec![
+                format!("Makes this try {unit}'s Rust and runs the judge on it once more."),
+                format!(
+                    "Writes: {unit}'s Rust and its check; if the judge does not pass it, the Rust \
+                     it had is put back."
+                ),
+            ],
+            Act::GenDriver => vec![
+                format!(
+                    "The chat writes a small C program that calls {}; the judge checks it against \
+                     the C, then keeps it{}.",
+                    self.driver_calls(unit),
+                    if p.argv.iter().any(|a| a == "--promote") {
+                        " in place of the out-of-date one"
+                    } else {
+                        ""
+                    }
+                ),
+                format!(
+                    "Writes: the test program under {ledger}/units/{unit}/ and the plan's entry."
+                ),
+                model_line(),
+            ],
+            Act::Migrate | Act::Retry | Act::Modify | Act::Resume | Act::Continue => {
+                let what = match p.act {
+                    Act::Migrate => {
+                        format!(
+                            "Asks a model for {unit}'s Rust: a new try, never accepted by itself."
+                        )
+                    }
+                    Act::Retry => format!(
+                        "Runs try {attempt} again as it was asked: a new try of {unit}, never \
+                         accepted by itself."
+                    ),
+                    Act::Modify => format!(
+                        "A new try of {unit} from {attempt}, steered by {} note: {}",
+                        if p.chat.is_some() {
+                            "the chat's"
+                        } else {
+                            "your"
+                        },
+                        p.note.as_deref().unwrap_or_default()
+                    ),
+                    Act::Resume => format!(
+                        "Resumes try {attempt} of {unit} with the hand-off's answer; never \
+                         accepts it."
+                    ),
+                    _ => full
+                        .iter()
+                        .find(|l| l.starts_with("Files the chat's answer"))
+                        .cloned()
+                        .unwrap_or_default(),
+                };
+                let writes = match p.act {
+                    Act::Resume | Act::Continue => {
+                        format!("Writes: the try's next turn, under {ledger}/units/{unit}/.")
+                    }
+                    _ => format!("Writes: a new try under {ledger}/units/{unit}/attempts/."),
+                };
+                vec![what, writes, model_line()]
+            }
+            Act::HandEdit => vec![
+                format!(
+                    "Records your edit as a try of {unit}, checked by the judge; never accepts it."
+                ),
+                "The edit is staged as exactly src/logic.rs + src/ffi.rs; Keep for later keeps it \
+                 (E offers it again)."
+                    .into(),
+            ],
+        }
+    }
+
+    /// What Make the test program's driver calls, in words.
+    fn driver_calls(&self, unit: &str) -> String {
+        let symbols: Vec<String> = self
+            .snapshot
+            .unit(unit)
+            .map(|u| u.unit.symbols.clone())
+            .unwrap_or_default();
+        match symbols.len() {
+            0 => "the unit's functions".to_string(),
+            1..=4 => {
+                let (last, rest) = symbols.split_last().expect("not empty");
+                if rest.is_empty() {
+                    last.clone()
+                } else {
+                    format!("{} and {last}", rest.join(", "))
+                }
+            }
+            n => format!("its {n} functions ({}, …)", symbols[..3].join(", ")),
+        }
+    }
+
+    /// The words of an act's card (`i` in its dialog): a question naming
+    /// the object, and every file it writes and what changes (§5.1), at
+    /// length.
+    pub fn act_words(&self, p: &Pending) -> (String, Vec<String>) {
         let unit = p.unit.as_deref().unwrap_or("the unit");
         // Full ids in the dialog: a short id may name two attempts (SAFE-13).
         let attempt = p.attempt.clone().unwrap_or_default();
@@ -2703,7 +2932,15 @@ impl App {
             ),
             Act::Detect => (
                 "Find risky patterns in the C?".into(),
-                vec!["Runs the detectors and rewrites the observer findings.".into()],
+                vec![
+                    "Runs the detectors over the C and writes their findings again: patterns \
+                     worth a look before a piece moves to Rust."
+                        .into(),
+                    format!(
+                        "Writes: the findings, under {}/; it changes no code.",
+                        self.snapshot.ledger_rel()
+                    ),
+                ],
             ),
             Act::MapFeatures => {
                 let n = match &self.snapshot.features {
@@ -2907,7 +3144,7 @@ impl App {
             ),
         };
         if p.argv.iter().any(|a| a == "--allow-unsandboxed") {
-            body.push("--allow-unsandboxed: runs code WITHOUT the sandbox.".into());
+            body.push(UNSANDBOXED_WORDS.into());
         }
         let title = match &p.chat {
             Some(_) => format!("The chat asks: {title}"),
@@ -3374,6 +3611,7 @@ impl App {
         let mut items = self.menu_items();
         let advice = self.advice(&self.selection);
         let reason = menu::recommend(&mut items, advice.as_ref());
+        items.push(menu::explain_item());
         self.mode = Mode::Menu(Menu {
             items,
             focus: 0,
@@ -3604,7 +3842,63 @@ impl App {
                 self.ask_adopt();
                 Command::None
             }
+            Action::Explain => {
+                self.open_explain(None);
+                Command::None
+            }
         }
+    }
+
+    /// `i`: the card of the selected row (§9.5); Esc or `i` goes back to
+    /// `back`, else to the panes.
+    pub fn open_explain(&mut self, back: Option<Box<Mode>>) {
+        let e = crate::explain::explain(self, &self.selection);
+        self.mode = Mode::Explain {
+            title: e.title,
+            lines: e.card,
+            scroll: 0,
+            back,
+        };
+    }
+
+    /// `i` in a dialog: the card of its act — what it does at length, what
+    /// it reads and writes, how long it takes.
+    pub fn act_card(&self, c: &Confirm) -> (String, Vec<String>) {
+        match &c.purpose {
+            Purpose::Act(p) => self.act_explained(p),
+            _ => (c.title.clone(), c.body.clone()),
+        }
+    }
+
+    /// An act's card: its words in full, what the dialog leaves out
+    /// included.
+    pub fn act_explained(&self, p: &Pending) -> (String, Vec<String>) {
+        let (title, short) = self.dialog_words(p);
+        let (_, mut card) = self.act_words(p);
+        // The full words, and what the dialog says that they do not: where
+        // it writes, when they never name it.
+        if !card.iter().any(|l| l.contains("rites")) {
+            card.extend(short.into_iter().filter(|l| l.starts_with("Writes:")));
+        }
+        (title, card)
+    }
+
+    /// Close the card: back to the dialog it was opened from — its latch
+    /// starting again, so nothing typed at the card presses a button — or
+    /// to the panes.
+    pub fn close_explain(&mut self, back: Option<Box<Mode>>) {
+        self.mode = match back.map(|b| *b) {
+            Some(Mode::Dialog(mut c)) => {
+                let mut fresh = Dialog::new(c.dialog.kind, self.now);
+                fresh.buttons = std::mem::take(&mut c.dialog.buttons);
+                fresh.chat_rules = c.dialog.chat_rules;
+                fresh.scroll = c.dialog.scroll;
+                c.dialog = fresh;
+                Mode::Dialog(c)
+            }
+            Some(other) => other,
+            None => Mode::Normal,
+        };
     }
 
     /// The accelerator `key`: the selection's menu item bound to it.
@@ -3802,33 +4096,35 @@ impl App {
         {
             return None;
         }
-        let done = if states
+        // One line, `verb — key` (2026-10-20): why the others stay C is
+        // the Units row's hint and card, not this line.
+        let stay = states
             .iter()
-            .all(|(_, s)| in_rust(s) || **s == UnitState::Blocked)
-        {
-            "Every unit is in Rust and checked"
-        } else {
-            "Every unit that can move to Rust is in Rust and checked (the others call other units)"
-        };
+            .filter(|(_, s)| !in_rust(s) && **s != UnitState::Blocked)
+            .count();
         if matches!(self.features.group, featmap::Group::NoFile)
             && !self.features.no_single_main
             && self.snapshot.facts.is_some()
         {
             return say(
-                format!(
-                    "{done} — write your features, to check what a person sees: press Enter \
-                     and choose Write your features file"
-                ),
+                "Write your features — Enter on the Features row".into(),
                 Some(Action::EditFeatures),
             );
         }
         if matches!(self.speed.group, crate::speed::Group::NoFile) {
             return say(
-                format!("{done} — measure its speed: choose Speed, under Features in the tree"),
+                "Name a workload for Speed — Enter on the Speed row".into(),
                 None,
             );
         }
-        say(format!("{done} — nothing to do"), None)
+        say(
+            match stay {
+                0 => "Done as far as this version goes — every piece is in Rust".into(),
+                1 => "Done as far as this version goes — 1 piece stays C".into(),
+                n => format!("Done as far as this version goes — {n} pieces stay C"),
+            },
+            None,
+        )
     }
 
     // ----- keys ---------------------------------------------------------------
@@ -4180,6 +4476,17 @@ impl App {
                     Command::None
                 }
             },
+            // The card: its keys answer; a click outside closes it, back to
+            // the dialog it came from.
+            Mode::Explain { back, .. } => match found {
+                Some((rect, hit @ Hit::Hint(_))) => hold(self, rect, hit, true),
+                Some((_, Hit::Overlay)) => Command::None,
+                _ => {
+                    let back = back.take();
+                    self.close_explain(back);
+                    Command::None
+                }
+            },
             // Read-only overlays: their keys answer; a click outside closes
             // them.
             Mode::Help { .. } | Mode::Verdict { .. } | Mode::Diff { .. } => match found {
@@ -4394,16 +4701,18 @@ impl App {
                     Mode::Dialog(_) if k == "←→" => {
                         "←→ are keys: they move between the buttons — or click one"
                     }
-                    Mode::Dialog(_) | Mode::Help { .. } | Mode::Diff { .. } => {
-                        "turn the wheel to scroll; ↑↓ are keys"
-                    }
+                    Mode::Dialog(_)
+                    | Mode::Help { .. }
+                    | Mode::Diff { .. }
+                    | Mode::Explain { .. } => "turn the wheel to scroll; ↑↓ are keys",
                     Mode::Verdict { .. } => "turn the wheel for the next check; ↑↓ are keys",
                     _ => "click a row, or turn the wheel; ↑↓ ←→ are keys",
                 });
                 return Command::None;
             }
             "Enter" => &[KeyCode::Enter],
-            "Esc" | "c/Esc" | "any other key" => &[KeyCode::Esc],
+            "Esc" | "c/Esc" | "any other key" | "i/Esc" => &[KeyCode::Esc],
+            "i" => &[KeyCode::Char('i')],
             "Tab" => &[KeyCode::Tab],
             "PgDn" => &[KeyCode::PageDown],
             "]f" => &[KeyCode::Char(']'), KeyCode::Char('f')],
@@ -4451,7 +4760,11 @@ impl App {
                 return Command::None;
             }
             Mode::Verdict { .. } => 1,
-            Mode::Dialog(_) | Mode::Help { .. } | Mode::Diff { .. } | Mode::Details { .. } => 3,
+            Mode::Dialog(_)
+            | Mode::Help { .. }
+            | Mode::Diff { .. }
+            | Mode::Details { .. }
+            | Mode::Explain { .. } => 3,
         };
         let mut command = Command::None;
         for _ in 0..repeat {
@@ -4511,6 +4824,42 @@ impl App {
             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
         match std::mem::replace(&mut self.mode, Mode::Normal) {
             Mode::Normal => {}
+            // `i`: the act's card; Esc or `i` comes back (§9.5).
+            Mode::Dialog(confirm) if key.code == KeyCode::Char('i') && plain => {
+                let (title, lines) = self.act_card(&confirm);
+                self.mode = Mode::Explain {
+                    title,
+                    lines,
+                    scroll: 0,
+                    back: Some(Box::new(Mode::Dialog(confirm))),
+                };
+                return Command::None;
+            }
+            Mode::Explain {
+                title,
+                lines,
+                scroll,
+                back,
+            } => {
+                let scroll = match key.code {
+                    KeyCode::Up | KeyCode::Char('k') => scroll.saturating_sub(1),
+                    KeyCode::Down | KeyCode::Char('j') => scroll.saturating_add(1),
+                    KeyCode::PageUp => scroll.saturating_sub(10),
+                    KeyCode::PageDown | KeyCode::Char(' ') => scroll.saturating_add(10),
+                    // Any other key closes it.
+                    _ => {
+                        self.close_explain(back);
+                        return Command::None;
+                    }
+                };
+                self.mode = Mode::Explain {
+                    title,
+                    lines,
+                    scroll,
+                    back,
+                };
+                return Command::None;
+            }
             Mode::Dialog(mut confirm) => {
                 return match confirm.dialog.on_key_in(key, now, self.asks.burst) {
                     Outcome::Stay => {
@@ -4897,6 +5246,7 @@ impl App {
         match key.code {
             KeyCode::Char('q') | KeyCode::Char('Q') => return self.quit(),
             KeyCode::Char('?') | KeyCode::F(1) => self.mode = Mode::Help { scroll: 0 },
+            KeyCode::Char('i') => self.open_explain(None),
             KeyCode::Char('c') => {
                 self.mode = Mode::Details {
                     scroll: usize::MAX / 2,
@@ -5185,14 +5535,24 @@ impl App {
         }
     }
 
+    /// An accepted tool's word on its row: its progress, read cheaply from
+    /// its plan and tries ("2/4 in Rust", "not scanned yet", "done").
+    fn tool_word(&self, id: &str) -> String {
+        self.project
+            .as_ref()
+            .and_then(|p| p.progress.get(id))
+            .map_or_else(|| "accepted".into(), |p| p.row_word())
+    }
+
     /// The glyph and word of the node `sel` (for rows, titles and tests).
     pub fn node_label(&self, sel: &Selection) -> (&'static str, String) {
         match sel {
             Selection::MapProject | Selection::ProjectHome => ("", String::new()),
             // A tool the map does not name.
-            Selection::Tool(_) => ("✓", "accepted".into()),
+            // An accepted tool's row carries its progress (2026-10-20).
+            Selection::Tool(id) => ("✓", self.tool_word(id)),
             Selection::Program(id) => match self.project_offered(id) {
-                Some(_) if self.project_tools().contains(id) => ("✓", "accepted".into()),
+                Some(_) if self.project_tools().contains(id) => ("✓", self.tool_word(id)),
                 Some(o) => (o.state.glyph(), o.state.words().into()),
                 None => ("", String::new()),
             },
@@ -5750,6 +6110,179 @@ pub(crate) mod tests {
         assert!(app.reload(true));
     }
 
+    /// §9.5, "dialogs in one breath": every act's dialog holds at most three
+    /// lines before its command — asked by the person or by the chat, in the
+    /// sandbox or not (the warning then always in the dialog) — and its
+    /// card (`i`) holds at least as much.
+    #[test]
+    fn every_acts_dialog_is_three_lines_at_most() {
+        let app = app("short-dialogs");
+        let all = [
+            Act::Scan,
+            Act::Plan,
+            Act::Detect,
+            Act::Verify,
+            Act::Accept,
+            Act::Modify,
+            Act::HandEdit,
+            Act::Retry,
+            Act::Resume,
+            Act::Migrate,
+            Act::GenDriver,
+            Act::Continue,
+            Act::MapFeatures,
+            Act::SaveFeatures,
+            Act::SaveWorkloads,
+            Act::Measure,
+            Act::MeasureProgram,
+            Act::MeasureMore,
+            Act::ProjectMap,
+            Act::ProjectAsk,
+            Act::ProjectAccept,
+        ];
+        // Every act is listed (a new one must be added here).
+        for act in all {
+            match act {
+                Act::Scan
+                | Act::Plan
+                | Act::Detect
+                | Act::Verify
+                | Act::Accept
+                | Act::Modify
+                | Act::HandEdit
+                | Act::Retry
+                | Act::Resume
+                | Act::Migrate
+                | Act::GenDriver
+                | Act::Continue
+                | Act::MapFeatures
+                | Act::SaveFeatures
+                | Act::SaveWorkloads
+                | Act::Measure
+                | Act::MeasureProgram
+                | Act::MeasureMore
+                | Act::ProjectMap
+                | Act::ProjectAsk
+                | Act::ProjectAccept => {}
+            }
+        }
+        for act in all {
+            for (chat, unsandboxed) in [(false, false), (true, false), (false, true)] {
+                let mut argv: Vec<OsString> = [HARNESS, "--json", "x", "u-lib"]
+                    .map(OsString::from)
+                    .to_vec();
+                argv.push("--provider=external".into());
+                argv.push("--model=claude-x".into());
+                if unsandboxed {
+                    argv.push("--allow-unsandboxed".into());
+                }
+                let mut p = pending(argv, act);
+                p.attempt = Some(PROVENANCE.into());
+                p.note = Some("keep the wrapping add".into());
+                if chat {
+                    p.chat = Some(Box::new(asks::ChatTag {
+                        gen: 1,
+                        request_id: "r".into(),
+                        tool: "harness_migrate".into(),
+                        model: "claude-x".into(),
+                        grant: true,
+                        answer: None,
+                        key: None,
+                        permitted: false,
+                        attempt: None,
+                        epoch: 0,
+                    }));
+                }
+                let (title, body) = app.dialog_words(&p);
+                assert!(
+                    body.len() <= 3,
+                    "{act:?} (chat {chat}, unsandboxed {unsandboxed}): {title}\n{body:#?}"
+                );
+                if unsandboxed && act.project().is_none() {
+                    assert_eq!(body.last().map(String::as_str), Some(UNSANDBOXED_WORDS));
+                }
+                if chat && act.model() && act != Act::Continue && act.project().is_none() {
+                    assert!(
+                        body.iter()
+                            .any(|l| l.starts_with("Asked in chat by claude-x")),
+                        "{act:?}: {body:#?}"
+                    );
+                }
+                let (card_title, card) = app.act_explained(&p);
+                assert_eq!(card_title, title);
+                assert!(card.len() >= body.len(), "{act:?}: {card:#?}");
+            }
+        }
+    }
+
+    /// §9.5: `i` opens the selected row's card, in the tree, the View and a
+    /// menu (its last item, What is this?); Esc or `i` closes it. In a
+    /// dialog `i` opens the act's card, and closing it goes back to the
+    /// dialog with its latch starting again — nothing typed at the card
+    /// presses a button.
+    #[test]
+    fn i_explains_the_row_and_the_act() {
+        let mut app = app("explain-keys");
+        app.select(Selection::Unit("u-lib".into()));
+        let want = crate::explain::explain(&app, &app.selection);
+        for focus in [Focus::Files, Focus::View] {
+            app.focus = focus;
+            key(&mut app, 'i');
+            let Mode::Explain {
+                title, lines, back, ..
+            } = &app.mode
+            else {
+                panic!("no card: {:?}", app.mode)
+            };
+            assert_eq!(title, "u-lib");
+            assert_eq!(lines, &want.card);
+            assert!(back.is_none());
+            let closer = if focus == Focus::Files { 'i' } else { 'x' };
+            key(&mut app, closer);
+            assert_eq!(app.mode, Mode::Normal);
+        }
+        app.focus = Focus::Files;
+        // The menu's last item, on the tool's screen; its accelerator is i.
+        app.open_menu();
+        let Mode::Menu(m) = &app.mode else { panic!() };
+        let last = m.items.last().unwrap();
+        assert_eq!(
+            (last.label.as_str(), last.accel),
+            ("What is this?", Some("i"))
+        );
+        code(&mut app, KeyCode::End);
+        code(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Explain { .. }), "{:?}", app.mode);
+        code(&mut app, KeyCode::Esc);
+        app.open_menu();
+        key(&mut app, 'i');
+        assert!(matches!(app.mode, Mode::Explain { .. }), "{:?}", app.mode);
+        code(&mut app, KeyCode::Esc);
+        // In a dialog: the act's card, then back to the dialog, unarmed.
+        attempt(&mut app, PROVENANCE);
+        key(&mut app, 'a');
+        arm(&mut app);
+        let Mode::Dialog(c) = &app.mode else {
+            panic!("no dialog: {:?}", app.mode)
+        };
+        let dialog_title = c.title.clone();
+        key(&mut app, 'i');
+        let Mode::Explain { title, back, .. } = &app.mode else {
+            panic!("no card: {:?}", app.mode)
+        };
+        assert_eq!(title, &dialog_title);
+        assert!(matches!(back.as_deref(), Some(Mode::Dialog(_))));
+        key(&mut app, 'i');
+        let Mode::Dialog(c) = &app.mode else {
+            panic!("not back in the dialog: {:?}", app.mode)
+        };
+        assert_eq!(c.title, dialog_title);
+        assert!(!c.dialog.armed && c.dialog.focus == 0);
+        // Unarmed again: `y` is dropped.
+        assert_eq!(key(&mut app, 'y'), Command::None);
+        assert!(matches!(app.mode, Mode::Dialog(_)));
+    }
+
     /// §4, §5: an act shows its exact argv in an armed dialog; Run spawns
     /// exactly that; the safe button spawns nothing.
     #[test]
@@ -6125,8 +6658,17 @@ pub(crate) mod tests {
         let Mode::Dialog(c) = &app.mode else {
             unreachable!()
         };
-        assert!(c.body[0].contains("provider local"), "{:?}", c.body);
-        assert!(c.body[0].contains("migrate routing"), "{:?}", c.body);
+        assert!(
+            c.body.iter().any(|l| l.contains("provider local")),
+            "{:?}",
+            c.body
+        );
+        // The model's routing is said on the act's card (`i`, §9.5).
+        let (_, card) = app.act_card(c);
+        assert!(
+            card.iter().any(|l| l.contains("migrate routing")),
+            "{card:?}"
+        );
         code(&mut app, KeyCode::Esc);
         key(&mut app, 'm');
         assert!(matches!(&app.mode, Mode::Note { input, .. } if input == "tighten the loop"));
@@ -6338,7 +6880,7 @@ pub(crate) mod tests {
             .as_ref()
             .and_then(|r| r.exit.clone())
             .unwrap_or_default();
-        assert!(exit.starts_with(&waits), "{exit}");
+        assert!(exit.starts_with(&format!("paused: {waits}")), "{exit}");
         attempt(&mut app, awaited);
         assert_eq!(
             app.node_label(&app.selection.clone()).1,
@@ -6731,9 +7273,16 @@ pub(crate) mod tests {
         let all_green = app.next_step().unwrap();
         assert_eq!(
             all_green.text,
-            "Every unit is in Rust and checked — measure its speed: choose Speed, under \
-             Features in the tree"
+            "Name a workload for Speed — Enter on the Speed row"
         );
+        // Speed set up too: one line, nothing left in this version.
+        let speed = app.speed.group.clone();
+        app.speed.group = crate::speed::Group::NotYetRun;
+        assert_eq!(
+            app.next_step().unwrap().text,
+            "Done as far as this version goes — every piece is in Rust"
+        );
+        app.speed.group = speed;
         assert_eq!(all_green.action, None);
         let lib = app.config.target.join(LIB_C);
         let c = std::fs::read_to_string(&lib).unwrap();

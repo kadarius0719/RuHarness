@@ -37,6 +37,8 @@ pub mod chooser;
 #[cfg(feature = "tui")]
 pub mod dialog;
 #[cfg(feature = "tui")]
+pub mod explain;
+#[cfg(feature = "tui")]
 pub mod handedit;
 #[cfg(feature = "tui")]
 pub mod highlight;

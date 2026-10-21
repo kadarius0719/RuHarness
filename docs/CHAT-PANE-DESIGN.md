@@ -683,9 +683,12 @@ docs/reviews/2026-10-18-cockpit-usability-critique.md.)
 Cells, in order, wrapped by display width, every string through the display filter:
 - **You** — the person's message (and "not delivered" if a Stop cancelled it);
 - **Claude** — one cell per assistant message, its text blocks streaming in place;
-- **tool lines**, indented: reads dim ("· read the project status"); requests and outcomes in
-  the tones of the activity panel, with a word and a glyph ("✓ you ran it — GREEN, 8 checks
-  passed", "✗ declined", "refused: …", "continued, as you agreed");
+- **tool lines**, indented: reads dim, consecutive ones folded into one line ("· read the
+  project's status and unit u-lzgmini — done"); an act in two lines (cockpit design §9.5,
+  2026-10-20): "asks: …" and its running line, updated in place through its turns ("running",
+  "running — the chat answers turn 1", "running — continued with the chat's answer to turn 1, as
+  you agreed") and ending in its outcome in the tones of the activity panel ("✓ Migrate u-x —
+  GREEN, 8 checks passed", "✗ declined", "refused: …");
 - **cockpit lines**: started and ended (why), the sign-in, errors, rate limits, the runtime's
   own messages, a message the cockpit did not send, the turn's time and plan usage, a quiet turn,
   "a new chat" separators.
@@ -773,7 +776,9 @@ given with `--append-system-prompt`. Not a plugin skill: that needs the `Skill` 
 are not permission requests (verified) and which would open the person's own skills unasked;
 and the brief is the text any other runtime can take. It says, briefly:
 - You are the chat inside the RuHarness cockpit. The pane is about 50 columns of plain text: write
-  short plain lines — no markdown, headings, tables or code fences.
+  short plain lines — no markdown, headings, tables or code fences. Say what you will do in one
+  line, not a paragraph, and answer in at most four short lines unless the person asks for more:
+  the tool lines already show the work (cockpit design §9.5, 2026-10-20).
 - You read the target through the harness tools and ask for model work (migrate, make the test
   program, steer, retry, answer). The person confirms every act in the cockpit, which runs it; the tool result is its
   outcome, marked as an error only because the cockpit, not the tool, ran it. Scanning,

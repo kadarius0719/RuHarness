@@ -3355,8 +3355,38 @@ pub const NOTHING_RAN: &str = "Nothing has run yet. When a command runs, its out
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-/// Row 1: the running command in words, or "Ready. Last: …"; its buttons on
-/// the right.
+/// The hint line's words (docs/COCKPIT-WRAPPER-DESIGN.md §9.5): in the
+/// panes, what the selected row is, in one sentence; in a menu, the
+/// focused greyed item's reason. `None` elsewhere, and on the first screen
+/// until the first move (its how-to stands there). The longest form of the
+/// sentence that fits `width` columns.
+pub fn hint_words(app: &App, width: usize) -> Option<String> {
+    match &app.mode {
+        Mode::Menu(m) => m
+            .items
+            .get(m.focus)
+            .and_then(|it| it.greyed.as_ref().map(|why| format!("{}: {why}", it.label))),
+        Mode::Normal if app.moved || !first_screen(app) => {
+            Some(crate::explain::hint_in(app, &app.selection, width))
+        }
+        _ => None,
+    }
+}
+
+/// Nothing has run and the tree has the keys: the first screen's how-to
+/// is true.
+fn first_screen(app: &App) -> bool {
+    app.run.is_none() && app.focus == Focus::Files && matches!(app.mode, Mode::Normal)
+}
+
+/// Row 1 holds the hint: nothing runs, nothing waits on the chat, no
+/// `Last:` stands.
+fn hint_on_row_one(app: &App) -> bool {
+    !app.running && app.chat_waits_why(app.now).is_none() && app.last.is_none()
+}
+
+/// Row 1: the running command in words, or "Ready. Last: …", or the hint
+/// line; its buttons on the right.
 fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
     let width = area.width as usize;
     let mut buttons: Vec<(&'static str, &'static str)> = Vec::new();
@@ -3410,16 +3440,15 @@ fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
                     style = last_style(app);
                     format!("Ready. Last: {last}")
                 }
-                // The how-to only where it is true: the tree has the keys
-                // (not a dialog, a menu or the chat).
-                (None, None)
-                    if app.run.is_none()
-                        && app.focus == Focus::Files
-                        && matches!(app.mode, Mode::Normal) =>
-                {
-                    READY_FIRST.to_string()
+                // The how-to only where it is true (the tree has the keys:
+                // not a dialog, a menu or the chat), until the first move.
+                (None, None) if first_screen(app) && !app.moved => READY_FIRST.to_string(),
+                // Then what the selected row is (§9.5).
+                (None, None) => {
+                    let taken: usize = buttons.iter().map(|(b, _)| width_of(b) + 1).sum();
+                    hint_words(app, width.saturating_sub(taken + 1))
+                        .unwrap_or_else(|| "Ready.".to_string())
                 }
-                (None, None) => "Ready.".to_string(),
             };
             (text, style)
         }
@@ -3533,7 +3562,7 @@ fn notice_row(app: &App, width: usize) -> Line<'static> {
             notice(),
         ));
     }
-    // Last: a mapped tool's "project changed" notice stays in sight.
+    // A mapped tool's "project changed" notice stays in sight.
     if let Some(n) = app
         .snapshot
         .project_notice
@@ -3541,6 +3570,12 @@ fn notice_row(app: &App, width: usize) -> Line<'static> {
         .filter(|_| !app.in_project_view())
     {
         return Line::from(Span::styled(ellipsis(&format!(" {n}"), width), notice()));
+    }
+    // Last: the hint line, when row 1 holds a run or its `Last:` (§9.5).
+    if !hint_on_row_one(app) {
+        if let Some(h) = hint_words(app, width.saturating_sub(1)) {
+            return Line::from(Span::styled(fit_status(&format!(" {h}"), width), status()));
+        }
     }
     Line::from("")
 }
@@ -3555,7 +3590,7 @@ fn overlay_hints(app: &App) -> Option<Vec<(&'static str, &'static str)>> {
         // N-C1-2) — and never sits under the panes' first entry, `x cancel`
         // while a command runs, which opens this very kind of dialog (N2-6).
         Mode::Dialog(c) => {
-            let mut h = vec![("↑↓", "scroll"), ("Esc", "cancel")];
+            let mut h = vec![("↑↓", "scroll"), ("Esc", "cancel"), ("i", "what it does")];
             if c.dialog.armed {
                 h.push(("←→", "button"));
                 h.push(("Enter", "press"));
@@ -3595,6 +3630,17 @@ fn overlay_hints(app: &App) -> Option<Vec<(&'static str, &'static str)>> {
         ],
         Mode::Verdict { .. } => vec![("↑↓", "check"), ("PgDn", "detail"), ("Esc", "close")],
         Mode::Diff { .. } => vec![("↑↓", "scroll"), ("Esc", "close")],
+        Mode::Explain { back, .. } => vec![
+            ("↑↓", "scroll"),
+            (
+                "i/Esc",
+                if back.is_some() {
+                    "back to the dialog"
+                } else {
+                    "close"
+                },
+            ),
+        ],
     })
 }
 
@@ -3641,6 +3687,7 @@ fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
         h.push(("]f", "next pair"));
     }
     h.push(("c", "details"));
+    h.push(("i", "what is this?"));
     h.push(("g", "re-read"));
     h
 }
@@ -3811,6 +3858,7 @@ const HELP_KEYS: &[(&str, &str)] = &[
     ("Backspace", "back along your jumps"),
     ("Tab", "the other pane (below 80 columns: Files ⇄ View)"),
     ("PgUp PgDn Home End", "page, or go to the ends"),
+    ("i", "what the selected row is, on a card (in a dialog: what the act does); also What is this? in every menu"),
     ("c", "the activity details: the command, every event, its exit"),
     ("g", "re-read the project"),
     ("t", "try again, after a refusal"),
@@ -4034,6 +4082,7 @@ pub const HELP_FIRST_KEYS: &[(&str, &str)] = &[
     ),
     ("Tab", "the next pane: Files, View, Chat"),
     ("Esc", "close, or step back"),
+    ("i", "what the selected row is"),
     ("?", "this help"),
     ("q", "quit"),
 ];
@@ -4066,6 +4115,7 @@ fn help_project_page(width: usize, chat: bool) -> Vec<Line<'static>> {
         ),
         ("Tab", tab),
         ("Esc", "close, or step back"),
+        ("i", "what the selected row is"),
         ("?", "this help"),
         ("q", "quit"),
     ] {
@@ -4242,12 +4292,16 @@ fn details_rows(app: &App, width: usize) -> Vec<Line<'static>> {
                 }
             }
             if let Some(exit) = &run.exit {
-                let t = if exit == "exit 0" {
-                    Tone::Good
+                // A pause is a state, said in the notice colour (§9.5,
+                // step 8): never a failure.
+                let style = if exit.starts_with("paused: ") {
+                    notice()
+                } else if exit == "exit 0" {
+                    tone(Tone::Good)
                 } else {
-                    Tone::Warn
+                    tone(Tone::Warn)
                 };
-                lines.extend(wrapped(exit, width, tone(t)));
+                lines.extend(wrapped(exit, width, style));
             }
         }
     }
@@ -4270,18 +4324,13 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect, m: &Menu) {
         .reason
         .as_ref()
         .map_or(0, |r| width_of(&display::line(r)) as u16 + 36);
-    // As wide as its longest item (a greyed one with its reason), up to the
-    // screen less 4 (fix pass, item 16).
+    // As wide as its longest label (§9.5: a greyed item's reason is on the
+    // hint line while it is focused, not in the menu), up to the screen
+    // less 4.
     let longest = m
         .items
         .iter()
-        .map(|it| {
-            let why = it
-                .greyed
-                .as_ref()
-                .map_or(0, |w| 3 + width_of(&display::line(w)));
-            width_of(&display::line(&it.label)) + why + it.accel.map_or(0, |a| a.len() + 1) + 4
-        })
+        .map(|it| width_of(&display::line(&it.label)) + it.accel.map_or(0, |a| a.len() + 1) + 4)
         .max()
         .unwrap_or(0);
     let longest = u16::try_from(longest).unwrap_or(u16::MAX);
@@ -4315,23 +4364,7 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect, m: &Menu) {
         }
         let accel = it.accel.map(|a| format!(" {a}")).unwrap_or_default();
         let aw = width_of(&accel);
-        let name = display::line(&it.label);
-        let mut label = name.clone();
-        // A reason that still does not fit goes on the next lines,
-        // indented, whole.
-        let mut why_rows: Vec<String> = Vec::new();
-        if let Some(why) = &it.greyed {
-            let whole = format!("{label} — {}", display::line(why));
-            if width_of(&whole) <= inner_w.saturating_sub(aw + 2) {
-                label = whole;
-            } else {
-                why_rows = word_wrap(
-                    &format!("— {}", display::line(why)),
-                    inner_w.saturating_sub(6).max(8),
-                );
-            }
-        }
-        let label = ellipsis(&label, inner_w.saturating_sub(aw + 2));
+        let label = ellipsis(&display::line(&it.label), inner_w.saturating_sub(aw + 2));
         let pad = inner_w.saturating_sub(2 + width_of(&label) + aw);
         let mut style = if it.greyed.is_some() {
             disabled()
@@ -4340,25 +4373,14 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect, m: &Menu) {
         } else {
             Style::default()
         };
-        // A greyed item's reason, after its name, reads muted.
-        let mut why_style = muted();
         if i == m.focus {
             style = style.patch(selected_row());
-            why_style = why_style.patch(selected_row());
         }
         item_rows.push((i, rows.len()));
-        let (head, why) = match label.strip_prefix(name.as_str()) {
-            Some(rest) if it.greyed.is_some() => (name.clone(), rest.to_string()),
-            _ => (label.clone(), String::new()),
-        };
         rows.push(Line::from(vec![
-            Span::styled(format!("  {head}"), style),
-            Span::styled(why, why_style),
+            Span::styled(format!("  {label}"), style),
             Span::styled(format!("{}{accel}", " ".repeat(pad)), style),
         ]));
-        for row in why_rows {
-            rows.push(Line::from(Span::styled(format!("    {row}"), muted())));
-        }
         if let (true, Some(reason)) = (recommended, &m.reason) {
             let mut why = format!("recommended: {}", display::line(reason));
             if it.model {
@@ -4694,6 +4716,42 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
             );
             app.hits.push((rect, Hit::Overlay));
         }
+        Mode::Explain {
+            title,
+            lines,
+            scroll,
+            back,
+        } => {
+            // Drawn like a dialog (its panel, its frame), without buttons.
+            let width = DIALOG_COLUMNS.min(area.width.saturating_sub(2));
+            let inner_w = width.saturating_sub(2) as usize;
+            let mut rows: Vec<Line<'static>> = Vec::new();
+            for l in &lines {
+                rows.extend(wrapped(l, inner_w, Style::default()));
+            }
+            let height = (rows.len() as u16 + 2)
+                .min(area.height.saturating_sub(2))
+                .max(5);
+            let rect = centered(area, width, height);
+            let close = if back.is_some() {
+                "Esc or i: back to the dialog"
+            } else {
+                "Esc or i closes"
+            };
+            let shown = overlay(
+                frame,
+                rect,
+                &format!(" {} ", display::line(&title)),
+                &rows,
+                scroll,
+                Some(close),
+                Some("↓"),
+            );
+            if let Mode::Explain { scroll, .. } = &mut app.mode {
+                *scroll = shown;
+            }
+            app.hits.push((rect, Hit::Overlay));
+        }
         Mode::Help { scroll } => {
             let rect = centered(
                 area,
@@ -5014,7 +5072,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // key bar (which names the box's own keys) in the backdrop (§9.4).
     if matches!(
         app.mode,
-        Mode::Dialog(_) | Mode::Menu(_) | Mode::Help { .. }
+        Mode::Dialog(_) | Mode::Menu(_) | Mode::Help { .. } | Mode::Explain { .. }
     ) {
         backdrop(
             frame,
@@ -5597,22 +5655,41 @@ mod tests {
         assert_eq!(UnitState::RustGreen.short_word(), "accept?");
     }
 
-    /// Fix pass, item 16: a menu widens to its longest greyed reason, and
-    /// wraps what still does not fit onto indented lines.
+    /// §9.5: menus stay narrow — a greyed item shows its label only, as
+    /// wide as the longest label; its reason is on the hint line while it
+    /// is focused (and in the menu's "Why not:" after Enter on it).
     #[test]
-    fn a_menu_shows_its_greyed_reasons_whole() {
-        let mut app = app_of("targets/zopfli", "menu-wide");
+    fn a_menus_greyed_reason_is_on_the_hint_line() {
+        let mut app = app_of("targets/zopfli", "menu-narrow");
         app.chat_on = false;
         app.select(Selection::Unit("u-cache".into()));
         app.open_menu();
-        let wide = text(&render(&mut app, 200, 40));
+        let reason = "the chat is off — run harness gen-driver u-cache, or start the cockpit \
+                      without --no-chat";
+        let screen = text(&render(&mut app, 200, 40));
+        assert!(!screen.contains(reason), "{screen}");
+        // The menu is as wide as its longest label, well under 100 columns.
+        let widest = screen
+            .lines()
+            .filter_map(|l| l.find("┌ u-cache ─").map(|at| (at, l)))
+            .map(|(at, l)| l[at..].chars().take_while(|c| *c != '┐').count() + 1)
+            .next()
+            .unwrap();
+        assert!(widest <= 80, "{widest}\n{screen}");
+        let Mode::Menu(m) = &mut app.mode else {
+            panic!()
+        };
+        m.focus = m
+            .items
+            .iter()
+            .position(|i| i.greyed.as_deref() == Some(reason))
+            .unwrap();
+        let label = m.items[m.focus].label.clone();
+        let screen = text(&render(&mut app, 200, 40));
         assert!(
-            wide.contains("the chat is off — run harness gen-driver u-cache, or start the cockpit without --no-chat"),
-            "{wide}"
+            screen.contains(&format!("\n {label}: {reason}")),
+            "{screen}"
         );
-        let narrow = text(&render(&mut app, 80, 40));
-        assert!(narrow.contains("    — the chat is off"), "{narrow}");
-        assert!(narrow.contains("without --no-chat"), "{narrow}");
     }
 
     /// Panes that fit (§9.4): the Files pane as wide as its longest row
@@ -5796,8 +5873,10 @@ mod tests {
         assert!(screen.contains("⇄"));
         assert!(screen.contains("›"), "a cut code line ends with a dim ›");
         assert!(screen.contains("same outputs as C"));
-        // Before the first command: how to start (pass 1 of the 2026-10-18 critique).
-        assert!(row_with(&screen, "Ready —").starts_with(&format!(" {READY_FIRST}")));
+        // Once the selection moved, the status line says what the row is
+        // (§9.5; before that, how to start).
+        assert!(row_with(&screen, "lib.c is the C of the piece u-lib")
+            .starts_with(" lib.c is the C of the piece u-lib; "));
         assert!(screen.lines().last().is_some_and(|l| l.ends_with("q quit")));
     }
 
@@ -5834,9 +5913,13 @@ mod tests {
             !narrow.contains(" Files ") && narrow.contains("u-lib"),
             "{narrow}"
         );
-        // Activity stays at every width (the View has the keys: "Ready.",
-        // never the tree's how-to).
-        assert!(narrow.contains(" Ready.") && !narrow.contains("Ready —"));
+        // Activity stays at every width (the View has the keys: what the
+        // row is, never the tree's how-to).
+        assert!(
+            narrow.contains("\n u-lib: one piece of the program; done.\n")
+                && !narrow.contains("Ready —"),
+            "{narrow}"
+        );
     }
 
     /// Golden 3: a tree showing every glyph, each with its word.
@@ -6113,7 +6196,7 @@ mod tests {
             for (k, v) in hints(&app) {
                 let entry = format!("{k} {v}");
                 assert!(
-                    bar.contains(&entry) || !bar.contains(&format!("{k} ")) || k == "Enter",
+                    bar.contains(&entry) || !bar.contains(&format!(" {k} ")) || k == "Enter",
                     "{width}: {bar}"
                 );
             }
@@ -6143,11 +6226,14 @@ mod tests {
         key(&mut app, 'a');
         // Esc where arming never moves it (review N-C1-2), not first — under
         // the panes' `x cancel` (N2-6).
-        assert_eq!(bar(&mut app).trim(), "↑↓ scroll   Esc cancel");
+        assert_eq!(
+            bar(&mut app).trim(),
+            "↑↓ scroll   Esc cancel   i what it does"
+        );
         arm(&mut app);
         assert_eq!(
             bar(&mut app).trim(),
-            "↑↓ scroll   Esc cancel   ←→ button   Enter press"
+            "↑↓ scroll   Esc cancel   i what it does   ←→ button   Enter press"
         );
     }
 
@@ -7311,13 +7397,13 @@ mod tests {
         assert_ne!(said(&app).as_deref(), Some(DRAG_HINT));
     }
 
-    /// Pass 1 of the 2026-10-18 critique: Help opens on a first page of six
-    /// keys and three marks, under twelve lines; ↓ opens the rest, ↑ at its
-    /// top goes back.
+    /// Pass 1 of the 2026-10-18 critique: Help opens on a first page of
+    /// seven keys (`i` since §9.5) and three marks, under fourteen lines; ↓
+    /// opens the rest, ↑ at its top goes back.
     #[test]
     fn help_opens_on_a_short_first_page() {
         let page = help_first_page(100, true);
-        assert!(page.len() < 13, "{} lines", page.len());
+        assert!(page.len() < 14, "{} lines", page.len());
         let words: Vec<String> = page
             .iter()
             .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
@@ -7329,6 +7415,7 @@ mod tests {
                 "Enter   what you can do with it — the first item is the next step",
                 "Tab     the next pane: Files, View, Chat",
                 "Esc     close, or step back",
+                "i       what the selected row is",
                 "?       this help",
                 "q       quit",
                 "◇       no test program yet: make it first (◈: it is ready)",
@@ -7563,13 +7650,77 @@ mod tests {
             row_with(&screen, "Ready").starts_with(" Ready."),
             "{screen}"
         );
+        // With the View focused, the line says what the selected row is
+        // (§9.5): the tree's how-to would not be true there.
         app.mode = Mode::Normal;
         crate::app::tests::code(&mut app, KeyCode::Tab);
         let screen = text(&render(&mut app, 120, 30));
-        assert!(
-            row_with(&screen, "Ready").starts_with(" Ready."),
-            "{screen}"
-        );
+        assert!(!screen.contains("Ready"), "{screen}");
+        assert!(screen.contains(" harness-tui-ready-line-"), "{screen}");
+    }
+
+    /// The hint line (§9.5): the first screen's how-to until the first
+    /// move; then what the selected row is, in the longest form that fits;
+    /// a focused greyed menu item's reason; under a `Last:` line, the row
+    /// below it.
+    #[test]
+    fn the_hint_line_says_what_the_selected_row_is() {
+        let mut app = crate::app::tests::app("hint-line");
+        let screen = text(&render(&mut app, 120, 30));
+        assert!(screen.contains(READY_FIRST), "{screen}");
+        crate::app::tests::code(&mut app, KeyCode::Down);
+        let said = crate::explain::hint(&app, &app.selection);
+        assert!(app.moved);
+        let screen = text(&render(&mut app, 160, 30));
+        assert_eq!(row_with(&screen, &said).trim(), said, "{screen}");
+        assert!(!screen.contains(READY_FIRST), "{screen}");
+        // The card of a unit's Rust, drawn like a dialog without buttons.
+        app.select(Selection::Crate("u-lib".into()));
+        crate::app::tests::key(&mut app, 'i');
+        let buffer = render(&mut app, 120, 30);
+        golden("explain-card.txt", &app, &buffer);
+        assert!(text(&buffer).contains(" u-lib's Rust "));
+        crate::app::tests::key(&mut app, 'i');
+        app.select(Selection::Project);
+        let screen = text(&render(&mut app, 160, 30));
+        // The key bar and the help name `i`.
+        assert!(screen.contains(" i what is this? "), "{screen}");
+        app.mode = Mode::Help { scroll: 0 };
+        let help = text(&render(&mut app, 160, 40));
+        assert!(help.contains("i       what the selected row is"), "{help}");
+        app.mode = Mode::Normal;
+        // A narrow line takes a shorter form of the sentence, whole.
+        app.select(Selection::Unit("u-lib".into()));
+        let short = crate::explain::hint_in(&app, &app.selection, 79);
+        assert!(short.chars().count() <= 79, "{short}");
+        let screen = text(&render(&mut app, 80, 30));
+        assert!(screen.contains(&format!(" {short}")), "{screen}");
+        // A greyed item, focused in a menu: its reason, on the hint line.
+        let lib = app.config.target.join(LIB_C);
+        let c = std::fs::read_to_string(&lib).unwrap();
+        std::fs::write(&lib, format!("{c}\n")).unwrap();
+        assert!(app.reload(true));
+        app.select(Selection::Project);
+        app.open_menu();
+        let Mode::Menu(m) = &mut app.mode else {
+            panic!()
+        };
+        m.focus = m.items.iter().position(|i| i.greyed.is_some()).unwrap();
+        let it = m.items[m.focus].clone();
+        let screen = text(&render(&mut app, 160, 30));
+        let reason = format!("{}: {}", it.label, it.greyed.unwrap());
+        assert!(screen.contains(&format!(" {reason}")), "{screen}");
+        // Under a `Last:` line, the hint takes the row below it (a notice
+        // goes first).
+        app.mode = Mode::Normal;
+        app.notice = None;
+        app.last = Some("Re-check u-lib — GREEN — all 8 checks passed (41 s)".into());
+        let screen = text(&render(&mut app, 160, 30));
+        let said = crate::explain::hint(&app, &app.selection);
+        let last = row_with(&screen, "Ready. Last: Re-check u-lib");
+        let rows: Vec<&str> = screen.lines().collect();
+        let at = rows.iter().position(|r| *r == last).unwrap();
+        assert_eq!(rows[at + 1].trim(), said, "{screen}");
     }
 
     /// New files are listed with their own words; what to do is said once,
@@ -8809,7 +8960,10 @@ mod tests {
             find(&items, "Measure the program as it stands").is_none(),
             "one measurable unit: {items:?}"
         );
-        let (title, body) = app.dialog_words(&p);
+        let (_, short) = app.dialog_words(&p);
+        assert!(short.len() <= 3, "{short:#?}");
+        assert_eq!(short[0..2], app.act_words(&p).1[0..2]);
+        let (title, body) = app.act_words(&p);
         assert_eq!(title, "Measure speed?");
         assert_eq!(
             body[0],
@@ -10214,10 +10368,11 @@ mod tests {
         );
         assert!(screen.contains("1 unit not re-checked"), "{screen}");
 
-        // §8.4/§8.5: the dialogs say what the features do.
+        // §8.4/§8.5: the acts' cards (`i` in their dialogs, §9.5) say what
+        // the features do.
         let words = |app: &App, act, unit, attempt| {
             let p = app.act_argv(act, unit, attempt, None).expect("pending");
-            app.dialog_words(&p).1.join("\n")
+            app.act_words(&p).1.join("\n")
         };
         let recheck = words(&app, crate::app::Act::Verify, Some("u001-katajainen"), None);
         assert!(
@@ -10237,7 +10392,7 @@ mod tests {
                     Some("keep it"),
                 )
                 .expect("pending");
-            app.dialog_words(&p).1.join("\n")
+            app.act_words(&p).1.join("\n")
         };
         assert!(
             migrate.contains("Each judged turn also runs your 2 feature scenarios."),

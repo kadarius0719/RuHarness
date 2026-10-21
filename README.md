@@ -112,7 +112,8 @@ harness-tui --target targets/zopfli
 ```
 
 Files and units on the left, the selection on the right, a chat pane; `Enter` opens a menu of what
-can be done now. On a ledger not yet adopted it first asks `Adopt this folder? Type y and Enter to
+can be done now, and `i` a card saying what the selected row is (the line under the panes says it
+in one sentence). On a ledger not yet adopted it first asks `Adopt this folder? Type y and Enter to
 adopt`. Keys, menus and symbols: [docs/TUTORIAL.md](docs/TUTORIAL.md); the walk: guide Parts 4 and 9.
 Flags (`harness-tui --help`): `--target DIR` (default `.`), `--tool ID`, `--harness PATH` (default
 on PATH, else next to the cockpit), `--provider NAME` (repeatable, default `external`; the target

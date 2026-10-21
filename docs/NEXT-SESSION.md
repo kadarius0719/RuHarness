@@ -121,6 +121,19 @@ the newcomer check"): pieces that stay C, a waiting try as a state, the chat-off
 commands, the project's Next preferring a tool with work waiting, plainer words, a guide section
 12D walking the journey in the cockpit.
 
+## Done (2026-10-20): explain anything
+
+Built from COCKPIT-WRAPPER-DESIGN §9.5 (DECISIONS 2026-10-20, "Explain anything"), after the
+person asked to get quickly to what something means: the line under the panes says what the
+selected row is, in one sentence, once the first move is made; `i` (or **What is this?**, last in
+every menu) opens a card that says what it is, where it came from, why it is there — why a unit's
+Rust is a copy beside its C, why a try has its own folder, why a file is not part of a tool — and
+where its files are. An act's dialog says what happens in at most three lines before its command;
+`i` there opens the rest. Menus are as narrow as their labels (a greyed item's reason is on the hint
+line). The chat folds its reads into one line and an act into two. Open from it: the live chat
+tests once (the brief and the chat's lines changed); a look at the hint line and the cards in the
+person's own terminal.
+
 ## The work, in order
 
 1. **The person's own cold-start run.** docs/FIRST-HOUR.md as written (liblzg), then lz4 through

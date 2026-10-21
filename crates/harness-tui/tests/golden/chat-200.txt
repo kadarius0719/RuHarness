@@ -1,10 +1,10 @@
 ┌ Files ────────────────────────────────────┐┌ harness-tui-chat-goldens-0000000000 · 1 of 1 C file in Rus…──────────────────┐┌ Chat — waiting for you · haiku-4-5 ────────────────────────[New]─[?]─[×]┐
 │▾ harness-tui-chat-goldens-0000000000  ✓1/1││All 8 steps done ✓                                                            ││› Please migrate u-lib.                                                  │
-│  ▾ Units (1)                              ││Next: Every unit is in Rust and checked — measure its speed: choose Speed,    ││                                                                         │
-│    ▸ ✓ u-lib                          done││under Features in the tree                                                    ││I will ask to migrate u-lib.                                             │
-│    Features (none yet)                    ││                                                                              ││                                                                         │
-│    Speed — not set up                     ││2 files scanned                                                               ││  · read the project's status — done                                     │
-│  ▸ test_case/                         ✓1/1││Units (1): 1 ✓ done                                                           ││                                                                         │
+│  ▾ Units (1)                              ││Next: Name a workload for Speed — Enter on the Speed row                      ││                                                                         │
+│    ▸ ✓ u-lib                          done││                                                                              ││I will ask to migrate u-lib.                                             │
+│    Features (none yet)                    ││2 files scanned                                                               ││                                                                         │
+│    Speed — not set up                     ││Units (1): 1 ✓ done                                                           ││  · read the project's status — done                                     │
+│  ▸ test_case/                         ✓1/1││                                                                              ││                                                                         │
 │                                           ││                                                                              ││                                                                         │
 │                                           ││                                                                              ││                                                                         │
 │                                           ││                                                                              ││                                                                         │
@@ -19,6 +19,6 @@
 │                                           ││                                                                              ││About: the project                                                       │
 │                                           ││                                                                              ││› Enter reviews the request — or type                                    │
 └───────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────┘└─────────────────────────────────────────────────────────────────────────┘
- Ready.
+ harness-tui-chat-goldens-0000000000: the C project moving to Rust, its files below; its one piece is in Rust.
 
  Enter review   Esc decline   Ctrl-J new line   ↑↓ scroll   Tab pane   F1 help   Ctrl-C quit

@@ -10,38 +10,28 @@
   @0-99 fg 243 NONE "│    Features (none yet)     ││                                                                    │"
 │    Speed — not set up      ││1 exported function: read_scalefactors (44 lines)                   │
   @0-99 fg 243 NONE "│    Speed — not set up      ││1 exported function: read_scalefactors (44 lines)                   │"
-│  ▸ test_ca┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐           │
-  @0-11 fg 243 NONE "│  ▸ test_ca"
+│  ▸ test_case/          ✓1/1││Its C: 1 file — test_case/src/lib.c                                 │
+  @0-99 fg 243 NONE "│  ▸ test_case/          ✓1/1││Its C: 1 file — test_case/src/lib.c                                 │"
+│           ┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐ate        │
+  @0-11 fg 243 NONE "│"
   @12-87 fg 75 bg 237 BOLD "┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐"
-  @88-99 fg 243 NONE "│"
-│           │Builds u-lib's Rust and runs it against the C in the sandbox.             │ate        │
+  @88-99 fg 243 NONE "ate        │"
+│           │Builds u-lib's Rust and runs it against the C in the sandbox.             │ tree)     │
   @0-11 fg 243 NONE "│"
   @12-12 fg 75 bg 237 BOLD "│"
   @13-86 fg - bg 237 NONE "Builds u-lib's Rust and runs it against the C in the sandbox."
   @87-87 fg 75 bg 237 BOLD "│"
-  @88-99 fg 243 NONE "ate        │"
-│           │Writes units/u-lib/oracle-latest.json and .md (and oracle-last-green.json │ tree)     │
-  @0-11 fg 243 NONE "│"
-  @12-12 fg 75 bg 237 BOLD "│"
-  @13-86 fg - bg 237 NONE "Writes units/u-lib/oracle-latest.json and .md (and oracle-last-green.json"
-  @87-87 fg 75 bg 237 BOLD "│"
   @88-99 fg 243 NONE "tree)     │"
-│           │when green) and u-lib's status in plan.toml: green → verified; red → a    │           │
+│           │Writes: the judge's check of u-lib and its status in the plan; changes no │           │
   @0-11 fg 243 NONE "│"
   @12-12 fg 75 bg 237 BOLD "│"
-  @13-86 fg - bg 237 NONE "when green) and u-lib's status in plan.toml: green → verified; red → a"
+  @13-86 fg - bg 237 NONE "Writes: the judge's check of u-lib and its status in the plan; changes no"
   @87-87 fg 75 bg 237 BOLD "│"
   @88-99 fg 243 NONE "│"
-│           │verified unit becomes "in progress" (a merged one keeps its status).      │           │
+│           │code.                                                                     │           │
   @0-11 fg 243 NONE "│"
   @12-12 fg 75 bg 237 BOLD "│"
-  @13-86 fg - bg 237 NONE "verified unit becomes \"in progress\" (a merged one keeps its status)."
-  @87-87 fg 75 bg 237 BOLD "│"
-  @88-99 fg 243 NONE "│"
-│           │Changes no code. The crate is unchanged since the cockpit last showed it. │           │
-  @0-11 fg 243 NONE "│"
-  @12-12 fg 75 bg 237 BOLD "│"
-  @13-86 fg - bg 237 NONE "Changes no code. The crate is unchanged since the cockpit last showed it."
+  @13-86 fg - bg 237 NONE "code."
   @87-87 fg 75 bg 237 BOLD "│"
   @88-99 fg 243 NONE "│"
 │           │                                                                          │           │
@@ -82,17 +72,21 @@
   @0-99 fg 243 NONE "│                            ││                                                                    │"
 │                            ││                                                                    │
   @0-99 fg 243 NONE "│                            ││                                                                    │"
+│                            ││                                                                    │
+  @0-99 fg 243 NONE "│                            ││                                                                    │"
 └────────────────────────────┘└────────────────────────────────────────────────────────────────────┘
   @0-99 fg 243 NONE "└────────────────────────────┘└────────────────────────────────────────────────────────────────────┘"
  Ready.
   @0-99 fg 243 NONE "Ready."
 
- ↑↓ scroll   Esc cancel   ←→ button   Enter press
+ ↑↓ scroll   Esc cancel   i what it does   ←→ button   Enter press
   @0-2 fg - BOLD "↑↓"
   @3-10 fg 248 NONE "scroll"
   @12-15 fg - BOLD "Esc"
   @16-23 fg 248 NONE "cancel"
-  @25-27 fg - BOLD "←→"
-  @28-35 fg 248 NONE "button"
-  @37-42 fg - BOLD "Enter"
-  @43-49 fg 248 NONE "press"
+  @25-26 fg - BOLD "i"
+  @27-40 fg 248 NONE "what it does"
+  @42-44 fg - BOLD "←→"
+  @45-52 fg 248 NONE "button"
+  @54-59 fg - BOLD "Enter"
+  @60-66 fg 248 NONE "press"

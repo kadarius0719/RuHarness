@@ -364,6 +364,7 @@ fn a_guessed_configuration_asks_for_the_build() {
             "Map the project again".into(),
             "Ask for a proposal — ask in chat".into(),
             "Ask in chat…".into(),
+            "What is this?".into(),
         ]
     );
     assert!(write_item(&app).starts_with("Write the build configuration (in "));
@@ -458,7 +459,10 @@ fn a_hand_off_pause_waits_for_the_answer_and_never_fails() {
         Some(&*format!("Ask a model — {words}"))
     );
     assert!(app.last_waiting);
-    assert_eq!(app.run.as_ref().unwrap().exit.as_deref(), Some(&*words));
+    assert_eq!(
+        app.run.as_ref().unwrap().exit.as_deref(),
+        Some(&*format!("paused: {words}"))
+    );
     let next = app.project_next().unwrap();
     assert_eq!(next.text, words);
     assert_eq!(
@@ -717,6 +721,7 @@ fn the_project_view_after_a_map_with_a_held_choice() {
             write_item(&app),
             "Map the project again".into(),
             "Ask for advice — ask in chat".into(),
+            "What is this?".into(),
         ]
     );
     assert_eq!(menu(&app).reason.as_deref(), Some("it needs a decision"));
@@ -767,17 +772,16 @@ fn the_project_view_after_a_map_with_a_held_choice() {
     let Mode::Dialog(c) = &app.mode else { panic!() };
     assert_eq!(c.title, "Accept t-unlzg?");
     assert!(c.body[0].starts_with("Accept t-unlzg: check the map still matches the project"));
-    // The decisions in words, before the command's --keep flags.
+    // The decisions in words, before the command's --keep flags: one line
+    // (§9.5, at most three before the command).
     assert_eq!(
-        c.body[1..3],
-        [
-            "Keeps src/decode.c for the functions both files define (the model advised \
-             src/mini.c instead).",
-            "Keeps src/check_b.c for the functions both files define.",
-        ]
+        c.body[1],
+        "Keeps src/decode.c for the functions both files define (the model advised \
+         src/mini.c instead). Keeps src/check_b.c for the functions both files define."
     );
+    assert_eq!(c.body.len(), 3, "{:#?}", c.body);
     assert_eq!(
-        c.body[4],
+        c.body[2],
         "It writes: the tool's build configuration, migration/tools/t-unlzg/harness.toml (a tool \
          accepted before keeps its results and what you added to that file)."
     );
@@ -1049,15 +1053,18 @@ fn the_next_step_is_one_line_for_each_rule() {
             "Write the build configuration — Enter (or harness project map --adopt)".into(),
             "Accept t-lzg — Enter on its row".into(),
             "Accept t-lzg — Enter on its row".into(),
-            "Open tool l-checksum — Enter on its row".into(),
+            "Open tool l-checksum — Enter on its row (not scanned yet)".into(),
             "Open tool t-lzg — Enter on its row".into(),
             "Map the project again — Enter".into(),
         ]
     );
 }
 
-/// Every program that can be a tool is one: nothing is left on the
-/// project; and a map without libraries has no Libraries group.
+/// Every program that can be a tool is one: the Next names the tool with
+/// the most to do (not scanned yet, then pieces to move, then features not
+/// written), each tool's row says its progress; only when every tool is as
+/// far as this version goes does the line say so. A map without libraries
+/// has no Libraries group.
 #[test]
 fn every_program_a_tool_leaves_nothing_here() {
     let (_tmp, root) = project("all-tools");
@@ -1073,11 +1080,60 @@ fn every_program_a_tool_leaves_nothing_here() {
     let mut app = cockpit(&root);
     assert_eq!(
         app.project_next().unwrap().text,
-        "nothing here — every program is a tool; open one"
+        "Open tool t-lzg — Enter on its row (not scanned yet)"
     );
     let screen = text_of_render(&mut app);
     assert!(screen.contains("│Programs (4) "), "{screen}");
     assert!(!screen.contains("Libraries"), "{screen}");
+    assert!(
+        row_with(&screen, "✓ t-lzg").contains("not scanned yet"),
+        "{screen}"
+    );
+    // Planned, its one piece still to move: that tool comes before one
+    // whose features are not written.
+    let plan = |id: &str, status: &str| {
+        let dir = harness_core::config::tool_dir(&root, id);
+        std::fs::write(
+            dir.join("plan.toml"),
+            format!(
+                "schema_version = 1\ntarget = \"{id}\"\n\n[[unit]]\nid = \"u-a\"\nstatus = \
+                 \"{status}\"\nfiles = [\"a.c\"]\nsource_hash = \"blake3:00\"\nsymbols = \
+                 [\"a\"]\ninterface = []\ndepends_on = []\ntest_strategy = \"\"\n\
+                 done_criteria = \"\"\n"
+            ),
+        )
+        .unwrap();
+    };
+    plan("t-lzg", "verified");
+    plan("t-unlzg", "pending");
+    app.reload_project();
+    assert_eq!(
+        app.project_next().unwrap().text,
+        "Open tool t-unlzg — Enter on its row (1 piece to move)"
+    );
+    let screen = text_of_render(&mut app);
+    assert!(
+        row_with(&screen, "✓ t-unlzg").contains("0/1 in Rust"),
+        "{screen}"
+    );
+    assert!(row_with(&screen, "✓ t-lzg").contains("done"), "{screen}");
+    plan("t-unlzg", "verified");
+    app.reload_project();
+    assert_eq!(
+        app.project_next().unwrap().text,
+        "Open tool t-lzg — Enter on its row (its features are not written)"
+    );
+    for id in ["t-lzg", "t-unlzg"] {
+        let dir = harness_core::config::tool_dir(&root, id).join("features");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("features.toml"), "schema_version = 1\n").unwrap();
+    }
+    app.reload_project();
+    assert_eq!(
+        app.project_next().unwrap().text,
+        "Every program is as far as this version goes — write features and workloads for what \
+         matters"
+    );
 }
 
 fn text_of_render(app: &mut App) -> String {
@@ -1230,6 +1286,28 @@ fn after_an_accept_the_next_step_is_the_new_tool() {
     }
 }
 
+/// §9.5: every Project view menu ends with What is this?, which opens the
+/// row's card; a menu that would hold only the Next step's item is still
+/// skipped (Enter does it).
+#[test]
+fn project_menus_end_with_what_is_this() {
+    let (_tmp, root) = project("explain-menu");
+    write_map(&root, &map_text("stated", false));
+    let mut app = cockpit(&root);
+    app.select(Selection::Program("t-unlzg".into()));
+    code(&mut app, KeyCode::Enter);
+    assert_eq!(menu_labels(&app).last().unwrap(), "What is this?");
+    choose(&mut app, "What is this?");
+    let Mode::Explain { title, lines, .. } = &app.mode else {
+        panic!("no card: {:?}", app.mode)
+    };
+    assert_eq!(title, "t-unlzg");
+    assert!(lines[0].starts_with("tools/unlzg.c · "), "{lines:?}");
+    let screen = text(&render(&mut app, 120, 34));
+    assert!(screen.contains(" t-unlzg "), "{screen}");
+    assert!(screen.contains("Esc or i closes"), "{screen}");
+}
+
 /// A conversation in the chat never blocks the move between the Project
 /// view and a tool (the person's loop, 2026-10-19): Open tool asks — the
 /// conversation ends and a new chat starts for the tool — and `y` opens it;
@@ -1353,7 +1431,8 @@ fn the_project_view_after_an_accept() {
             "Accept again…".into(),
             write_item(&app),
             "Map the project again".into(),
-            "Ask for advice — ask in chat".into()
+            "Ask for advice — ask in chat".into(),
+            "What is this?".into(),
         ]
     );
     assert_eq!(

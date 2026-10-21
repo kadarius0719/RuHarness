@@ -88,6 +88,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-10-19 — **The Project view, revision 2: one list, one card, one line** — the left pane the only list; the right pane a card with the decision and the model's why; the Next step one line; the reply's optional `why`.
 - 2026-10-20 — **The guided path: the journey on every screen, the test program in the cockpit, dialogs that stand out, panes that fit** — the stage words and the journey line; Make the test program asked in chat; migrate's refusal in words; the backdrop and panel roles; panes as wide as their rows.
 - 2026-10-20 — **The chat can read a test program's hand-off; the terminal theme's sections are bright blue** — the first-request check knows driver attempts; plain blue was navy on black.
+- 2026-10-20 — **Explain anything: the hint line, the explanation card, dialogs in one breath, the chat as a conversation** — every row says what it is in a sentence and a card (`i`); dialogs hold three lines; menus stay narrow; the chat folds its reads.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -3766,3 +3767,88 @@ Nothing else in the path was wrong: the cockpit's answer re-runs the hand-off's 
 **Also.** The terminal theme drew sections, pane titles, dialog frames and the menu's separator in
 the terminal's plain blue, which is navy on a black terminal (the person: "that blue is hard to
 read"). It is the terminal's bright blue now; the designed themes are unchanged.
+
+## 2026-10-20 — Explain anything: the hint line, the explanation card, dialogs in one breath, the chat as a conversation
+
+**Built** (docs/COCKPIT-WRAPPER-DESIGN.md §9.5, after the person asked for "tooltips … on what
+something means — like how that new file for checksum was created, why a duplicate is created"):
+
+- **explain.rs**: one function per row kind — the tool's screen (the project, folders, files in
+  each state, functions, the units group, a unit in each state, its Rust, its tries, Features, a
+  feature, Speed) and the Project view (Map, a program in each state, a tool, the row back) —
+  writes both the hint sentence and the card from the same facts. A unit's Rust says where it
+  lives (`migration/…/units/<unit>/<crate>/`), which try wrote it, that Accept copied it there
+  from the try's own folder, and why the C stays: the judge builds both and compares, the C files
+  are never changed, and the Rust is linked in the C's place only in the judge's, the features'
+  and Speed's own builds. Tests walk every row of zopfli, the tractor case, a file-list tool and
+  the Project view: a sentence under 160 characters, a card of 3 to 8 lines, none of the banned
+  names.
+- **The hint line**: the first screen's how-to until the first move; then, with nothing running
+  and no `Last:`, the selected row's sentence in the longest form that fits; under a run or a
+  `Last:` it takes the row below, after any notice; in a menu, a focused greyed item's reason.
+- **The card**: `i` in the tree or the View, and **What is this?** (accelerator `i`) last in every
+  Enter menu; drawn like a dialog without buttons; Esc or `i` closes. In a dialog `i` opens the
+  act's card; closing it goes back to the dialog with a fresh latch (it must arm again). The key
+  bar (`i what is this?`, in a dialog `i what it does`) and the help name `i`.
+- **Dialogs in one breath**: at most three lines before `Command:` (what happens; `Writes: …`;
+  the chat's line or a model call's cost). The full words are the act's card. A test walks every
+  `Act`, asked by the person and by the chat, sandboxed or not.
+- **Menus stay narrow**: a greyed item shows its label only; the widening and wrapping go.
+- **The chat**: consecutive reads fold into one line; an act is `asks: …` plus one running line
+  updated in place through its turns until its outcome; the brief asks for one line before acting
+  and answers of at most four short lines.
+
+**Decided where §9.5 left it open or could not be followed as written:**
+- The `Last:` line keeps row 1 as before; the hint then takes row 2 (the notice row) when it is
+  free, so the sentence is never gone for good after the first command. Row 1 shows the hint only
+  where it said `Ready.`.
+- A hint has shorter forms (the longest that fits the line is shown); a narrow line no longer cuts
+  a sentence in its middle.
+- The card's last line is `Next: Enter, then <the menu's recommended item>` for the selected row,
+  else the Next step's own words.
+- "A check row under a unit": the tree has no check rows (checks are in the View and the `v`
+  overlay), so there is no card for one.
+- Running without the sandbox is always said in the dialog itself, taking the third line; it is
+  never only on the card.
+- Project Accept's decisions in words are joined into one line, so its dialog stays three lines;
+  "It takes:" moved to its card. Map and Ask keep their three lines (what, takes, writes).
+- The act's card is the dialog's lines first, then every line of the full words they leave out.
+- The features lines of Re-check and of the model acts (§8.4 of the features design) are now on
+  the card, not the dialog.
+- In a menu `i` is What is this?'s accelerator; the key bar keeps `c details` before `i` so a
+  running command's details are never the entry dropped.
+- The help's first page grew to seven keys (`i` added); its test now allows 13 lines.
+- The chat act's continuation line reads `running — continued with the chat's answer to turn N, as
+  you agreed` (the old separate "continued, as you agreed" line), so the live chat test can still
+  see the continuation; that test now waits for the new words.
+- The project dialogs say "decision", not "held choice".
+
+**Two more, from the person's screenshots the same day:**
+- **A pause is not a failure in the details either.** A run that paused for an answer ended its
+  details with `error (awaiting): …` in red and `failed (exit 1): awaiting response: …` while the
+  status line said `Paused: the chat answers turn 1`. The `awaiting` error event is now a plain
+  line (`awaiting: …`), and the details end in one line in the notice colour: `paused: waiting
+  for the chat's answer to turn 1 (the reply goes to <response file>)` for a chat's run, `paused:
+  waiting for your answer: <file> — write the reply there, then …` for the person's own (the
+  how-to kept). The command's own lines above it are unchanged.
+- **A unit's crate row only once its Rust exists.** `crate  no Rust yet` under every unit, a
+  piece that stays C included, read as a promise never kept. The row (and its selection) exists
+  only when the unit's crate folder does.
+
+**And two more, from the person's screenshots of a tool whose movable pieces are all done:**
+- **The Project view with every program a tool** said `nothing here — every program is a tool;
+  open one`, its rows only `accepted`. The Next now names the tool with the most to do — not
+  scanned yet, then pieces to move, then features not written — as `Open tool t-lzg — Enter on
+  its row (not scanned yet)`; only when every tool is that far: `Every program is as far as this
+  version goes — write features and workloads for what matters` (over the 80 characters of §9.3:
+  the person's words, kept whole). Each accepted tool's row says its progress where the state word
+  is (`not scanned yet`, `2/4 in Rust`, `done`), read from its plan as its card already did; the
+  features file's presence is read the same cheap way.
+- **The tool's Next with every movable piece done** was two lines of prose. It is one line in the
+  `verb — key` form: `Write your features — Enter on the Features row`, then `Name a workload for
+  Speed — Enter on the Speed row`, then `Done as far as this version goes — 2 pieces stay C`
+  (`— every piece is in Rust` when none stays C). Why the others stay C moved to the Units row's
+  hint and card ("… 7 call other pieces, so in this version they stay C").
+
+**Not done here; the person's to run once:** the live chat tests (the brief and the chat's lines
+changed).
