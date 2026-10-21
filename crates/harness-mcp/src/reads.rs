@@ -911,6 +911,7 @@ mod tests {
             features: None,
             made_elsewhere: false,
             changed_callees: vec![],
+            holds_main: false,
         };
         assert!(report(&r).get("features").is_none());
         r.features = Some(Coverage::Current);

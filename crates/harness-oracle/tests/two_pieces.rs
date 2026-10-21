@@ -180,9 +180,15 @@ fn accepting_the_callees_rust_makes_the_callers_verdict_out_of_date() {
     two::set_plan(tmp.path(), "verified", "verified", "\"u-callee\"");
     let stale = report("u-caller");
     assert_eq!(stale.verdict.stale, ["dependencies"]);
-    assert!(stale
-        .render_line()
-        .contains("verdict=green (STALE: dependencies)"));
+    // In the cockpit's words, and no contradiction marker: the caller is
+    // out of date, not in contradiction (the live proof's fourth gap).
+    let line = stale.render_line();
+    assert!(
+        line.contains("verdict=green (out of date: a piece it calls changed)"),
+        "{line}"
+    );
+    assert!(!line.contains("CONTRADICTION"), "{line}");
+    assert_eq!(stale.changed_callees, ["u-callee"]);
 
     // Re-checked: against the callee's Rust, green and fresh.
     let unit = two::unit(tmp.path(), "u-caller");
@@ -305,5 +311,66 @@ fn an_import_of_a_program_function_outside_the_dependencies_fails_capabilities()
     assert_eq!(
         verdict.checks.last().map(|c| c.name.as_str()),
         Some("capabilities")
+    );
+}
+
+/// The live proof's second gap: the features ran on the program as it
+/// stands, so the caller's verdict records a program digest that folds in
+/// the accepted callee's Rust — a change there makes the caller's features
+/// behind (`program`), though the caller's own verdict is only out of date
+/// for its dependency.
+#[test]
+fn a_changed_accepted_rust_puts_the_other_pieces_features_behind() {
+    use harness_core::features::{Coverage, FeatureSnapshot, FeaturesNow};
+    let tmp = TempDir::new("two-features");
+    let target = two::lay_out(tmp.path());
+    let ledger = harness_core::ledger::Ledger::of(&target);
+    // The facts as a scan records them (their hashes), so the program's
+    // digest is a digest, not "facts-stale".
+    let mut facts = harness_core::Facts::load(&ledger.facts_path()).expect("facts");
+    for f in &mut facts.files {
+        f.hash = harness_core::hash::file_hash(&tmp.path().join(&f.path)).expect("hash");
+    }
+    facts.store(&ledger.facts_path()).expect("stored");
+    common::write(
+        &tmp.path().join("migration/features/features.toml"),
+        "schema_version = 1\n\n[[feature]]\nid = \"count\"\nname = \"Count a file\"\n\n\
+         [[scenario]]\nfeature = \"count\"\nid = \"text\"\nargs = [\"-c\", \"{input}\"]\n\
+         input = \"sample:text\"\n",
+    );
+    two::write_crate(tmp.path(), "u-callee", "callee_rs", two::CALLEE_RS);
+    two::set_plan(tmp.path(), "verified", "pending", "\"u-callee\"");
+    let unit = two::unit(tmp.path(), "u-caller");
+    let verdict = CAbiDifferential
+        .verify(&target, &unit)
+        .expect("oracle runs");
+    assert!(verdict.green, "{}", describe(&verdict));
+    assert!(
+        verdict
+            .checks
+            .iter()
+            .any(|c| c.name == "feature:count/text"),
+        "{}",
+        describe(&verdict)
+    );
+    let now =
+        || FeaturesNow::compute(&target, &facts, &FeatureSnapshot::load(&target)).expect("a file");
+    // Not the C program's digest: the callee's Rust is folded in.
+    assert_ne!(verdict.inputs.program, now().program);
+    assert_eq!(verdict.inputs.program, now().program_for("u-caller"));
+    assert_eq!(
+        now().coverage("u-caller", &verdict.inputs),
+        Coverage::Current
+    );
+    // The callee's accepted Rust changed: the caller's features are behind.
+    two::write_crate(
+        tmp.path(),
+        "u-callee",
+        "callee_rs",
+        &format!("{}// edited\n", two::CALLEE_RS),
+    );
+    assert_eq!(
+        now().coverage("u-caller", &verdict.inputs),
+        Coverage::Behind(vec!["program".into()])
     );
 }

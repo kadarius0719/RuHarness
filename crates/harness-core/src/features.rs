@@ -1624,8 +1624,56 @@ pub fn starter(config: &TargetConfig) -> String {
 pub struct FeaturesNow {
     /// The snapshot's digest ([`FeatureSnapshot::digest`]; never empty).
     pub features: String,
-    /// The program digest of the tree as it is.
+    /// The program digest of the tree as it is: its C
+    /// ([`program_digest_now`]), what the features map and perf compare.
     pub program: String,
+    /// Every accepted piece's Rust, as (unit id, crate digest), in the
+    /// plan's execution order ([`accepted_rust`]): what the program as it
+    /// stands links in place of their C. A verdict's `program` folds in
+    /// all of them but its own unit's ([`FeaturesNow::program_for`]).
+    pub accepted: Vec<(String, String)>,
+}
+
+/// Every accepted piece of the target's plan (verified or merged, its crate
+/// present — [`crate::deps::accepted_crate`]) with its crate's digest
+/// ([`crate::deps::rust_digest`]), in the plan's execution order. Empty
+/// when the plan cannot be read or ordered.
+pub fn accepted_rust(ctx: &crate::config::TargetContext) -> Vec<(String, String)> {
+    let ledger = crate::ledger::Ledger::of(ctx);
+    let Ok(plan) = crate::Plan::load(&ledger.plan_path()) else {
+        return Vec::new();
+    };
+    let Ok(order) = plan.execution_order() else {
+        return Vec::new();
+    };
+    order
+        .into_iter()
+        .filter_map(|u| {
+            crate::deps::accepted_crate(&ledger, u)
+                .map(|dir| (u.id.clone(), crate::deps::rust_digest(ctx, &dir)))
+        })
+        .collect()
+}
+
+/// The `program` digest a verdict of `unit` records (the live proof's
+/// second gap): `base` (the C program's, [`program_digest_now`]) with the
+/// Rust of every OTHER accepted piece folded in — the program the features
+/// ran on links it, so a changed accepted Rust, or a piece accepted since,
+/// makes the other pieces' features behind. `base` itself when no other
+/// piece is accepted (a verdict made before then keeps its bytes) or when
+/// it is [`STALE_PROGRAM`]. The unit's own Rust is its verdict's
+/// `rust_crate`.
+pub fn program_as_it_stands(base: &str, accepted: &[(String, String)], unit: &str) -> String {
+    let others: Vec<&(String, String)> = accepted.iter().filter(|(id, _)| id != unit).collect();
+    if others.is_empty() || base == STALE_PROGRAM {
+        return base.to_string();
+    }
+    let doc = serde_json::json!({
+        "v": 1,
+        "program": base,
+        "rust": others,
+    });
+    hash::bytes_hash(doc.to_string().as_bytes())
 }
 
 impl FeaturesNow {
@@ -1644,11 +1692,19 @@ impl FeaturesNow {
         Some(FeaturesNow {
             features: snapshot.digest().to_string(),
             program: program_digest_now(ctx, facts),
+            accepted: accepted_rust(ctx),
         })
     }
 
-    /// How a verdict with `inputs` covers the features as they are now.
-    pub fn coverage(&self, inputs: &crate::verdict::VerdictInputs) -> Coverage {
+    /// The program digest a current verdict of `unit` records
+    /// ([`program_as_it_stands`]).
+    pub fn program_for(&self, unit: &str) -> String {
+        program_as_it_stands(&self.program, &self.accepted, unit)
+    }
+
+    /// How a verdict of `unit` with `inputs` covers the features as they
+    /// are now.
+    pub fn coverage(&self, unit: &str, inputs: &crate::verdict::VerdictInputs) -> Coverage {
         let mut reasons: Vec<&'static str> = Vec::new();
         if inputs.features.is_empty() {
             reasons.push("not-yet");
@@ -1657,7 +1713,7 @@ impl FeaturesNow {
         } else if inputs.features != self.features {
             reasons.push("changed");
         }
-        if !inputs.features.is_empty() && !same_program(&inputs.program, &self.program) {
+        if !inputs.features.is_empty() && !same_program(&inputs.program, &self.program_for(unit)) {
             reasons.push("program");
         }
         if !inputs.features_skipped.is_empty() {
@@ -2673,6 +2729,7 @@ args = ["-h"]
         let now = FeaturesNow {
             features: "blake3:f".into(),
             program: "blake3:p".into(),
+            accepted: Vec::new(),
         };
         let inputs = |features: &str, program: &str, skipped: &[&str]| VerdictInputs {
             features: features.into(),
@@ -2682,37 +2739,86 @@ args = ["-h"]
         };
         let behind = |r: &[&str]| Coverage::Behind(r.iter().map(|s| s.to_string()).collect());
         assert_eq!(
-            now.coverage(&inputs("blake3:f", "blake3:p", &[])),
+            now.coverage("u", &inputs("blake3:f", "blake3:p", &[])),
             Coverage::Current
         );
-        assert_eq!(now.coverage(&inputs("", "", &[])), behind(&["not-yet"]));
         assert_eq!(
-            now.coverage(&inputs("blake3:g", "blake3:p", &[])),
+            now.coverage("u", &inputs("", "", &[])),
+            behind(&["not-yet"])
+        );
+        assert_eq!(
+            now.coverage("u", &inputs("blake3:g", "blake3:p", &[])),
             behind(&["changed"])
         );
         assert_eq!(
-            now.coverage(&inputs("blake3:f", "blake3:q", &[])),
+            now.coverage("u", &inputs("blake3:f", "blake3:q", &[])),
             behind(&["program"])
         );
         assert_eq!(
-            now.coverage(&inputs("blake3:f", "blake3:p", &["zlib/text: budget"])),
+            now.coverage("u", &inputs("blake3:f", "blake3:p", &["zlib/text: budget"])),
             behind(&["skipped"])
         );
         assert_eq!(
-            now.coverage(&inputs(INVALID_DIGEST, "blake3:p", &[])),
+            now.coverage("u", &inputs(INVALID_DIGEST, "blake3:p", &[])),
             behind(&["invalid"])
         );
         let broken = FeaturesNow {
             features: INVALID_DIGEST.into(),
             program: "blake3:p".into(),
+            accepted: Vec::new(),
         };
         assert_eq!(
-            broken.coverage(&inputs("blake3:f", "blake3:p", &[])),
+            broken.coverage("u", &inputs("blake3:f", "blake3:p", &[])),
             behind(&["invalid"])
         );
         assert_eq!(
-            now.coverage(&inputs("blake3:g", "blake3:q", &["a/b: budget"])),
+            now.coverage("u", &inputs("blake3:g", "blake3:q", &["a/b: budget"])),
             behind(&["changed", "program", "skipped"])
+        );
+    }
+
+    /// The live proof's second gap: the program a verdict's features ran on
+    /// links every other accepted piece's Rust, so a change there (or a
+    /// piece accepted since) makes the features behind; the unit's own
+    /// Rust is not folded in, and with no other piece accepted the digest
+    /// keeps its bytes.
+    #[test]
+    fn the_program_folds_in_the_other_pieces_rust() {
+        use crate::verdict::VerdictInputs;
+        let one = vec![("u-checksum".to_string(), "blake3:c1".to_string())];
+        assert_eq!(
+            program_as_it_stands("blake3:p", &[], "u-encode"),
+            "blake3:p"
+        );
+        assert_eq!(
+            program_as_it_stands("blake3:p", &one, "u-checksum"),
+            "blake3:p"
+        );
+        let with = program_as_it_stands("blake3:p", &one, "u-encode");
+        assert_ne!(with, "blake3:p");
+        let changed = vec![("u-checksum".to_string(), "blake3:c2".to_string())];
+        assert_ne!(program_as_it_stands("blake3:p", &changed, "u-encode"), with);
+        assert_eq!(
+            program_as_it_stands(STALE_PROGRAM, &one, "u-encode"),
+            STALE_PROGRAM
+        );
+        let now = |accepted: Vec<(String, String)>| FeaturesNow {
+            features: "blake3:f".into(),
+            program: "blake3:p".into(),
+            accepted,
+        };
+        let inputs = VerdictInputs {
+            features: "blake3:f".into(),
+            program: with.clone(),
+            ..VerdictInputs::default()
+        };
+        assert_eq!(
+            now(one.clone()).coverage("u-encode", &inputs),
+            Coverage::Current
+        );
+        assert_eq!(
+            now(changed).coverage("u-encode", &inputs),
+            Coverage::Behind(vec!["program".into()])
         );
     }
 

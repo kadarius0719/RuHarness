@@ -432,11 +432,15 @@ pub fn build(
             (features, digest.clone())
         }
     };
-    let now_program = snapshot
-        .features_now
-        .as_ref()
-        .map(|n| n.program.clone())
-        .unwrap_or_default();
+    // A verdict's program is the program as it stands for its unit: the
+    // other accepted pieces' Rust folded in (the live proof's second gap).
+    let program_of = |u: &UnitView| {
+        snapshot
+            .features_now
+            .as_ref()
+            .map(|n| n.program_for(&u.unit.id))
+            .unwrap_or_default()
+    };
     let target = &snapshot.target;
 
     // The map, and whether it is current.
@@ -516,7 +520,7 @@ pub fn build(
         let Some(v) = &u.verdict else { continue };
         if !u.report.verdict.stale.is_empty()
             || v.inputs.features != now_features
-            || !features::same_program(&v.inputs.program, &now_program)
+            || !features::same_program(&v.inputs.program, &program_of(u))
         {
             continue;
         }
@@ -578,7 +582,16 @@ pub fn build(
         let results: Vec<UnitResult> = snapshot
             .units
             .iter()
-            .map(|u| result(u, &f.id, &scenario_ids, &now_features, &now_program, target))
+            .map(|u| {
+                result(
+                    u,
+                    &f.id,
+                    &scenario_ids,
+                    &now_features,
+                    &program_of(u),
+                    target,
+                )
+            })
             .collect();
         // Which units its functions touch.
         let mut ran_in: BTreeMap<usize, usize> = BTreeMap::new();
@@ -766,7 +779,7 @@ pub fn build(
     for (i, u) in snapshot.units.iter().enumerate() {
         // The verdict first, as for the results (fix check N4).
         let mut entry = UnitFeatures {
-            outside: verdict_outside(u, &now_features, &now_program)
+            outside: verdict_outside(u, &now_features, &program_of(u))
                 .unwrap_or_else(|| outside(u, target)),
             ..UnitFeatures::default()
         };

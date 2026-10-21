@@ -1434,6 +1434,12 @@ fn cmd_status(target: TargetArg) -> Result<u8> {
     if let Some(line) = made_elsewhere_line(&ctx, &elsewhere) {
         out(line);
     }
+    // How much of the program as it stands is Rust, and which piece holds
+    // main (the live proof's third gap).
+    out(format!(
+        "status: {}",
+        harness_core::status::program_line(&ledger, &plan_doc)
+    ));
     Ok(0)
 }
 

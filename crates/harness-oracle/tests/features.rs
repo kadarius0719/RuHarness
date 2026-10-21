@@ -497,7 +497,7 @@ fn a_program_changed_since_the_scan_is_never_current() {
     let now = harness_core::features::FeaturesNow::compute(&target, &facts, &snapshot).unwrap();
     assert_eq!(now.program, harness_core::features::STALE_PROGRAM);
     assert!(matches!(
-        now.coverage(&verdict.inputs),
+        now.coverage(&unit.id, &verdict.inputs),
         harness_core::features::Coverage::Behind(r) if r.contains(&"program".to_string())
     ));
 }

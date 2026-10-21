@@ -1009,6 +1009,20 @@ impl CAbiDifferential {
         } else {
             Vec::new()
         };
+        // The program as it stands: every other accepted piece's Rust is
+        // linked, so it is part of what the features ran on (the live
+        // proof's second gap). Folded in once the crates are built, so a
+        // freshly made Cargo.lock is in their digests, as `state status`
+        // reads them.
+        let program_now = if program_now.is_empty() {
+            program_now
+        } else {
+            harness_core::features::program_as_it_stands(
+                &program_now,
+                &harness_core::features::accepted_rust(target),
+                &unit.id,
+            )
+        };
 
         let rust_lib = match build_result {
             Ok(lib) => lib,

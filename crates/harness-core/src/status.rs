@@ -167,7 +167,18 @@ pub struct UnitReport {
     /// today's list cannot be computed (a broken plan).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changed_callees: Vec<String>,
+    /// The piece defines the program's `main`: it stays C in this version
+    /// (docs/BEYOND-LEAVES-DESIGN.md §1), which its line says.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub holds_main: bool,
 }
+
+/// What the line says of a verdict out of date only because a piece the
+/// unit calls changed — the cockpit's words (the live proof's fourth gap).
+pub const CALLEE_CHANGED_WORDS: &str = "out of date: a piece it calls changed";
+
+/// What the line says after the status of the piece holding `main`.
+pub const HOLDS_MAIN_WORDS: &str = "holds main — stays C in this version";
 
 impl UnitReport {
     /// The verdict is present, green and fresh.
@@ -175,6 +186,13 @@ impl UnitReport {
         self.verdict.state == VerdictState::Present
             && self.verdict.green == Some(true)
             && self.verdict.stale.is_empty()
+    }
+
+    /// Its verdict is out of date only because a piece it calls changed.
+    pub fn only_callees_changed(&self) -> bool {
+        self.verdict.state == VerdictState::Present
+            && !self.verdict.stale.is_empty()
+            && self.verdict.stale.iter().all(|s| s == "dependencies")
     }
 
     /// The human status line, exactly as `harness state status` prints it.
@@ -188,8 +206,24 @@ impl UnitReport {
                 };
                 if self.verdict.stale.is_empty() {
                     format!("{color} (fresh)")
+                } else if self.only_callees_changed() {
+                    format!("{color} ({CALLEE_CHANGED_WORDS})")
                 } else {
-                    format!("{color} (STALE: {})", self.verdict.stale.join(", "))
+                    // With other reasons, the dependency change is named in
+                    // the same words among them.
+                    let reasons: Vec<&str> = self
+                        .verdict
+                        .stale
+                        .iter()
+                        .map(|s| {
+                            if s == "dependencies" {
+                                "a piece it calls changed"
+                            } else {
+                                s.as_str()
+                            }
+                        })
+                        .collect();
+                    format!("{color} (STALE: {})", reasons.join(", "))
                 }
             }
             VerdictState::Missing => "no verdict".to_string(),
@@ -204,7 +238,9 @@ impl UnitReport {
                 Some(id) => format!(
                     "  << promotion of {id} interrupted — the next writing command recovers it"
                 ),
-                None if self.contradiction => {
+                // A verified piece whose callee changed is out of date, not
+                // in contradiction: its words already say what to do.
+                None if self.contradiction && !self.only_callees_changed() => {
                     "  << CONTRADICTION: status and verdict evidence disagree".to_string()
                 }
                 None => String::new(),
@@ -222,8 +258,13 @@ impl UnitReport {
         } else {
             desc
         };
+        let main = if self.holds_main {
+            format!(" {HOLDS_MAIN_WORDS}")
+        } else {
+            String::new()
+        };
         format!(
-            "status: {} [{}] plan={} verdict={desc}{tail}",
+            "status: {} [{}]{main} plan={} verdict={desc}{tail}",
             self.id,
             self.status,
             if self.source_fresh {
@@ -376,7 +417,7 @@ fn compute(
     let verdict_path = ledger.verdict_latest_path(&unit.id);
     let verdict = match Verdict::load(&verdict_path) {
         Ok(v) => {
-            coverage = features.map(|now| now.coverage(&v.inputs));
+            coverage = features.map(|now| now.coverage(&unit.id, &v.inputs));
             made_elsewhere = crate::adopt::made_before_adoption(&ctx.root, &verdict_path);
             let mut stale: Vec<String> = Vec::new();
             if v.inputs.unit_source != source_now {
@@ -475,7 +516,41 @@ fn compute(
         features: coverage,
         made_elsewhere,
         changed_callees,
+        holds_main: unit.holds_main(),
     })
+}
+
+/// The line under the units (the live proof's third gap): how much of the
+/// program as it stands is Rust — "the program as it stands: 3 of 4 pieces
+/// in Rust (u-lzg holds main)". A piece is in Rust when its Rust is
+/// accepted (verified or merged, its crate present — what every build
+/// links); blocked pieces are not counted.
+pub fn program_line(ledger: &Ledger, plan: &Plan) -> String {
+    let pieces: Vec<&Unit> = plan
+        .units
+        .iter()
+        .filter(|u| u.status != UnitStatus::Blocked)
+        .collect();
+    let rust = pieces
+        .iter()
+        .filter(|u| crate::deps::accepted_crate(ledger, u).is_some())
+        .count();
+    let main: Vec<&str> = pieces
+        .iter()
+        .filter(|u| u.holds_main())
+        .map(|u| u.id.as_str())
+        .collect();
+    let n = pieces.len();
+    let mut line = format!(
+        "the program as it stands: {rust} of {n} piece{} in Rust",
+        if n == 1 { "" } else { "s" }
+    );
+    match main.as_slice() {
+        [] => {}
+        [one] => line.push_str(&format!(" ({one} holds main)")),
+        many => line.push_str(&format!(" ({} hold main)", many.join(", "))),
+    }
+    line
 }
 
 /// The pieces whose entry differs between today's list (`now`, `None` when
@@ -729,7 +804,74 @@ mod tests {
             features: None,
             made_elsewhere: false,
             changed_callees: Vec::new(),
+            holds_main: false,
         }
+    }
+
+    /// The live proof's fourth gap: the command line says a dependency
+    /// change in the cockpit's words, and a verified piece out of date
+    /// only for it carries no contradiction marker; the piece holding main
+    /// says so after its status.
+    #[test]
+    fn a_callee_change_and_the_main_holder_are_said_in_words() {
+        let mut r = report(VerdictState::Present, Some(true), &["dependencies"]);
+        r.contradiction = true;
+        r.changed_callees = vec!["u-checksum".into()];
+        assert_eq!(
+            r.render_line(),
+            "status: u1 [verified] plan=fresh verdict=green (out of date: a piece it calls \
+             changed)"
+        );
+        let mut r = report(
+            VerdictState::Present,
+            Some(true),
+            &["rust-crate", "dependencies"],
+        );
+        r.contradiction = true;
+        assert_eq!(
+            r.render_line(),
+            "status: u1 [verified] plan=fresh verdict=green (STALE: rust-crate, a piece it calls \
+             changed)  << CONTRADICTION: status and verdict evidence disagree"
+        );
+        let mut r = report(VerdictState::Missing, None, &[]);
+        r.status = "pending".into();
+        r.holds_main = true;
+        assert_eq!(
+            r.render_line(),
+            "status: u1 [pending] holds main — stays C in this version plan=fresh verdict=no \
+             verdict"
+        );
+        assert!(serde_json::to_string(&r)
+            .unwrap()
+            .ends_with(",\"holds_main\":true}"));
+    }
+
+    #[test]
+    fn the_program_line_counts_the_accepted_pieces() {
+        let root = std::env::temp_dir().join(format!(
+            "ruharness-status-program-{}-{}",
+            std::process::id(),
+            crate::hash::random_hex(4)
+        ));
+        let ledger = Ledger::new(&root);
+        let plan = Plan::parse(
+            std::path::Path::new("plan.toml"),
+            "schema_version = 1\n\n\
+             [[unit]]\nid = \"u-a\"\nstatus = \"verified\"\nsymbols = [\"a\"]\n\n\
+             [unit.oracle]\nkind = \"c-abi-differential\"\nrust_crate = \"u_a_rs\"\n\n\
+             [[unit]]\nid = \"u-b\"\nstatus = \"verified\"\nsymbols = [\"b\"]\n\n\
+             [unit.oracle]\nkind = \"c-abi-differential\"\nrust_crate = \"u_b_rs\"\n\n\
+             [[unit]]\nid = \"u-old\"\nstatus = \"blocked\"\nsymbols = [\"o\"]\n\n\
+             [[unit]]\nid = \"u-main\"\nstatus = \"pending\"\nsymbols = [\"main\"]\n",
+        )
+        .expect("plan");
+        // u-b says verified but its crate is gone: not linked as Rust.
+        std::fs::create_dir_all(ledger.unit_dir("u-a").join("u_a_rs")).expect("crate");
+        assert_eq!(
+            program_line(&ledger, &plan),
+            "the program as it stands: 1 of 3 pieces in Rust (u-main holds main)"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
