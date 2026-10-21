@@ -123,7 +123,9 @@ features.toml, the rules:
   absolute path or reach a parent directory. The run's directory holds only the input, so a
   plain word names a file that does not exist: an easy wrong-input scenario.
 - input: optional; sample:text (about 30 000 bytes of English text), sample:rand (16 KiB of
-  pseudo-random bytes) or sample:empty.
+  pseudo-random bytes), sample:empty, or a small file in the project: written relative, no
+  component starting with . or -, not under migration/, at most 8 MiB, its own name plain
+  (^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$); "{input}" is then that name.
 - Limits: at most 16 features; at most 8 scenarios per feature and 16 in all; every feature has
   at least one scenario. An unknown key, a wrong type, a duplicate or unknown id is refused.
 Example:
@@ -164,3 +166,26 @@ id = "big-c"
 args = ["-c", "{input}"]
 input = "src/deflate.c"
 runs = 15
+
+Scenarios that cannot be checks. A scenario is compared byte for byte between two runs of the C
+program before it is ever a check: never propose one whose output carries timings, dates,
+random values, process ids or paths, unless the program has an option that silences them (then
+use it). When the program's whole output is such (a benchmark), say so in one sentence, propose
+only its usage and wrong-input scenarios, and point the person at a workload (Speed) instead.
+
+Real inputs. When a scenario needs a real input (a decoder needs data it can decode), name a
+small file in the project if the unit's pairs show one. Otherwise write the scenario with the
+file name it would need (for example tests/small.lzg) and tell the person, in your reply, that
+they must put that file there before the scenario can run (until then the map says "its input
+... is not here"). The file is committed with the project, so a fresh clone can run it.
+
+Fixing the features file (a question typed from a feature row: "Scenario x/y cannot be a
+check: ... Change or remove it, and propose the corrected features file"). First read the file
+as it is with harness_features_file. Change only the scenarios the question names, by the
+rules above (a scenario whose input is not here: point it at a file that is, or say the person
+must add it); keep everything else as the person wrote it. Then propose the whole corrected
+file with harness_features_propose, as in step 2, and tell the person, one sentence per change,
+what you changed and why.
+The same for the workloads file ("Workload x cannot be measured: ... propose the corrected
+workloads file"): read it with harness_workloads_file, change only those workloads, propose the
+whole file with harness_workloads_propose.

@@ -10,7 +10,11 @@
 //!   file (`harness_core::perf::workloads::parse`), to
 //!   `perf/workloads.proposed.toml`.
 //!
-//! Each writes that one file and nothing else, atomically. Never the
+//! - `harness_features_file {}` and `harness_workloads_file {}` read the
+//!   person's file as it is, so the chat can fix the file it is asked to
+//!   fix (docs/FEATURES-DESIGN.md §14.3): read-only, the file's own cap.
+//!
+//! Each proposal writes that one file and nothing else, atomically. Never the
 //! person's own file: the cockpit opens the proposal in their editor as
 //! the draft, and their save writes it. A proposal that does not validate
 //! is refused with the loader's message and nothing is written; the chat
@@ -180,7 +184,122 @@ pub fn tools() -> Vec<Tool> {
             ],
             output,
         },
+        file_tool(Which::Features),
+        file_tool(Which::Workloads),
     ]
+}
+
+/// `harness_features_file` or `harness_workloads_file`: the person's file
+/// as it is, for the chat's fix (docs/FEATURES-DESIGN.md §14.3).
+fn file_tool(which: Which) -> Tool {
+    let untrusted = crate::tools::UNTRUSTED_RULE;
+    let (name, title, at) = match which {
+        Which::Features => (
+            "harness_features_file",
+            "Read the person's features file",
+            "features/features.toml",
+        ),
+        Which::Workloads => (
+            "harness_workloads_file",
+            "Read the person's workloads file",
+            "perf/workloads.toml",
+        ),
+    };
+    let noun = which.noun();
+    Tool {
+        name,
+        title,
+        description: format!(
+            "The person's {noun} file as it is now ({at}): its text, or that there is none \
+             yet. Read it before you propose a fix of it with harness_{noun}_propose — change \
+             only what the question names, keep the rest as the person wrote it, and send the \
+             whole corrected file. Read-only. {untrusted}"
+        ),
+        read_only: true,
+        destructive: false,
+        open_world: false,
+        params: Vec::new(),
+        output: vec![
+            ("kind", &["string"]),
+            ("file", &["string"]),
+            ("exists", &["boolean"]),
+            ("text", &["string"]),
+            ("next", &["string"]),
+            ("error", &["object", "null"]),
+        ],
+    }
+}
+
+/// The tool that reads the person's file of `which`.
+pub fn reads(name: &str) -> Option<Which> {
+    match name {
+        "harness_features_file" => Some(Which::Features),
+        "harness_workloads_file" => Some(Which::Workloads),
+        _ => None,
+    }
+}
+
+/// The person's `which` file in `ledger` as it is now, for
+/// `harness_features_file` / `harness_workloads_file`: read through the
+/// ledger's regular-file read (no link, the file's own 64 KiB cap), never
+/// parsed — a file that does not validate is what a fix is for. `Err` says
+/// why it cannot be read.
+pub fn person_file(root: &Path, ledger: &Ledger, which: Which) -> Result<Value, String> {
+    let noun = which.noun();
+    let path = which.file(ledger);
+    let shown = path
+        .strip_prefix(root)
+        .unwrap_or(&path)
+        .display()
+        .to_string();
+    let missing = || {
+        json!({
+            "kind": noun,
+            "file": shown,
+            "exists": false,
+            "text": "",
+            "next": format!(
+                "there is no {noun} file yet: propose the whole file with harness_{noun}_propose"
+            ),
+        })
+    };
+    // Its folder first: a link there is never followed.
+    let dir = ledger.dir().join(which.folder());
+    match std::fs::symlink_metadata(&dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(missing()),
+        Ok(m) if !m.file_type().is_dir() => {
+            return Err(format!(
+                "{} is not a real folder (a link, or a file): the person fixes it first",
+                dir.strip_prefix(root).unwrap_or(&dir).display()
+            ))
+        }
+        Err(e) => return Err(format!("{shown} cannot be inspected ({e})")),
+        Ok(_) => {}
+    }
+    match std::fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(missing()),
+        Err(e) => return Err(format!("{shown} cannot be inspected ({e})")),
+        Ok(_) => {}
+    }
+    let bytes = harness_core::ledger::read_regular(&path, which.cap()).map_err(|e| {
+        format!(
+            "{shown} cannot be read: {}",
+            features::one_line(&e.to_string())
+        )
+    })?;
+    let text = String::from_utf8(bytes)
+        .map_err(|_| format!("{shown} is not UTF-8 text: the person fixes it in their editor"))?;
+    Ok(json!({
+        "kind": noun,
+        "file": shown,
+        "exists": true,
+        "text": text,
+        "next": format!(
+            "this is the person's file as it is: to fix it, change only what you were asked \
+             about, keep the rest as written, and propose the whole corrected file with \
+             harness_{noun}_propose"
+        ),
+    }))
 }
 
 /// The comment the proposal starts with: whose it is, when, and what

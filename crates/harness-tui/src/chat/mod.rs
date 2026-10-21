@@ -57,6 +57,8 @@ pub const COCKPIT_TOOLS: &[&str] = &[
     "mcp__harness__harness_map_answer",
     "mcp__harness__harness_features_propose",
     "mcp__harness__harness_workloads_propose",
+    "mcp__harness__harness_features_file",
+    "mcp__harness__harness_workloads_file",
 ];
 
 /// Why the chat cannot be used now (docs/CHAT-PANE-DESIGN.md §1.6): the
@@ -1454,6 +1456,10 @@ impl Chat {
         };
         let words = match short {
             "harness_status" => Some("· read the project's status".to_string()),
+            // Read-only: the person's features file as it is, for the
+            // chat's fix (docs/FEATURES-DESIGN.md §14.3).
+            "harness_features_file" => Some("· read the features file".to_string()),
+            "harness_workloads_file" => Some("· read the workloads file".to_string()),
             "harness_unit" => Some(match input.get("attempt").and_then(Value::as_str) {
                 Some(a) => format!("· read {} of {}", short_attempt(a), arg(&input, "unit")),
                 None => format!("· read unit {}", arg(&input, "unit")),
