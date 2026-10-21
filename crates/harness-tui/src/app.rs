@@ -3605,6 +3605,12 @@ impl App {
                 self.ask_adopt();
                 Command::None
             }
+            Action::Propose { workloads } => {
+                if self.chat_connected() {
+                    self.chat_ask_proposal(*workloads);
+                }
+                Command::None
+            }
         }
     }
 

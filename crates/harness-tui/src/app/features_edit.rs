@@ -96,6 +96,17 @@ impl DraftKind {
         }
     }
 
+    /// The chat's proposal of the file, beside it
+    /// (docs/COCKPIT-WRAPPER-DESIGN.md §9.6); the build configuration's is
+    /// the map's own, read on the Project view.
+    pub fn proposed_path(self, config: &crate::app::Config) -> Option<PathBuf> {
+        match self {
+            DraftKind::Features => Some(features::proposed_path(&config.ledger())),
+            DraftKind::Workloads => Some(workloads::proposed_path(&config.ledger())),
+            DraftKind::BuildConfig => None,
+        }
+    }
+
     /// The name every such draft's private dir starts with (named on quit).
     pub fn prefix(self) -> &'static str {
         match self {

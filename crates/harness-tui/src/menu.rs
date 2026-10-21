@@ -95,6 +95,12 @@ pub enum Action {
     /// A command was refused because the folder's results were made
     /// elsewhere: the adoption question again, as at the start.
     Adopt,
+    /// Propose features (or a workload) — ask in chat: the question typed
+    /// into the chat's input (docs/COCKPIT-WRAPPER-DESIGN.md §9.6).
+    Propose {
+        /// A workload, not features.
+        workloads: bool,
+    },
 }
 
 /// One menu item.
@@ -679,6 +685,8 @@ impl App {
             _ => None,
         };
         // With the chat off, the reason names the command line's way.
+        // The chat proposes the features or a workload (§9.6).
+        self.proposal_items(sel, &mut items);
         let chat_off = |gen_driver: bool| {
             self.chat_off_way(gen_driver)
                 .or_else(|| self.chat_unavailable())

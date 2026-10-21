@@ -354,10 +354,14 @@ impl App {
             return None;
         }
         Some(match &model.group {
-            featmap::Group::NoFile => advice(
-                "no features yet — press Enter and choose Write your features file",
-                Some(Action::EditFeatures),
-            ),
+            featmap::Group::NoFile => self
+                .proposal_advice(crate::app::features_edit::DraftKind::Features)
+                .unwrap_or_else(|| {
+                    advice(
+                        "no features yet — press Enter and choose Write your features file",
+                        Some(Action::EditFeatures),
+                    )
+                }),
             featmap::Group::Invalid(_) => advice(
                 "the features file has an error — press Enter and choose Edit the features file",
                 Some(Action::EditFeatures),
@@ -436,10 +440,14 @@ impl App {
         use crate::speed::{Group, SideKey};
         let model = &self.speed;
         Some(match &model.group {
-            Group::NoFile => advice(
-                "no workloads file yet — press Enter and choose Write your workloads file",
-                Some(Action::EditWorkloads),
-            ),
+            Group::NoFile => self
+                .proposal_advice(crate::app::features_edit::DraftKind::Workloads)
+                .unwrap_or_else(|| {
+                    advice(
+                        "no workloads file yet — press Enter and choose Write your workloads file",
+                        Some(Action::EditWorkloads),
+                    )
+                }),
             Group::NoWorkload => advice(
                 "no workload yet — press Enter and choose Edit the workloads file",
                 Some(Action::EditWorkloads),
