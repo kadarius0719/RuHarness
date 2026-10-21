@@ -256,6 +256,15 @@ pub(crate) fn build_program(
             link_inputs.push(input.clone());
         }
     }
+    // Several staticlibs (a unit's and the pieces it calls,
+    // docs/BEYOND-LEAVES-DESIGN.md §2) are grouped where the linker is GNU
+    // ld's kind, as perf's program as it stands is.
+    let (link_inputs, mut tail) = if cfg!(target_os = "macos") {
+        (link_inputs, Vec::new())
+    } else {
+        split_staticlibs(link_inputs)?
+    };
+    tail.extend(link_args.iter().cloned());
     let args = base.link_file_args();
     let linked = compile.cc(&CcInvocation {
         args: &args,
@@ -263,7 +272,7 @@ pub(crate) fn build_program(
         quiet: true,
         out,
         inputs: &link_inputs,
-        libs: link_args,
+        libs: &tail,
     })?;
     // The objects served their one link: a successful build leaves no copy
     // of the program's objects behind (a failed one keeps them to look at).
@@ -271,6 +280,28 @@ pub(crate) fn build_program(
         std::fs::remove_dir_all(dir).map_err(|e| Error::io(dir, e))?;
     }
     Ok(linked)
+}
+
+/// `-Wl,--start-group <libs…> -Wl,--end-group`: GNU ld then searches the
+/// staticlibs again until nothing new resolves, whatever their order.
+fn group_args(libs: &[PathBuf]) -> Result<Vec<String>, Error> {
+    let mut tail = vec!["-Wl,--start-group".to_string()];
+    for lib in libs {
+        tail.push(crate::path_str(lib)?.to_string());
+    }
+    tail.push("-Wl,--end-group".into());
+    Ok(tail)
+}
+
+/// `inputs` without its staticlibs, and the staticlibs grouped
+/// ([`group_args`]) — when there are two or more; else as they were.
+fn split_staticlibs(inputs: Vec<PathBuf>) -> Result<(Vec<PathBuf>, Vec<String>), Error> {
+    let is_lib = |p: &PathBuf| p.extension().and_then(|e| e.to_str()) == Some("a");
+    if inputs.iter().filter(|p| is_lib(p)).count() < 2 {
+        return Ok((inputs, Vec::new()));
+    }
+    let (libs, rest): (Vec<PathBuf>, Vec<PathBuf>) = inputs.into_iter().partition(is_lib);
+    Ok((rest, group_args(&libs)?))
 }
 
 /// A C source the build compiles to an object first.
@@ -355,14 +386,11 @@ pub(crate) fn link_side(
     }
     let mut inputs: Vec<PathBuf> = objects.iter().map(|h| h.path.clone()).collect();
     let mut tail: Vec<String> = Vec::new();
+    let lib_paths: Vec<PathBuf> = libs.iter().map(|h| h.path.clone()).collect();
     if group && libs.len() > 1 {
-        tail.push("-Wl,--start-group".into());
-        for lib in libs {
-            tail.push(crate::path_str(&lib.path)?.to_string());
-        }
-        tail.push("-Wl,--end-group".into());
+        tail = group_args(&lib_paths)?;
     } else {
-        inputs.extend(libs.iter().map(|h| h.path.clone()));
+        inputs.extend(lib_paths);
     }
     tail.extend(link_args.iter().cloned());
     let args = base.link_file_args();
@@ -585,6 +613,33 @@ mod tests {
         let run = |p: &Path| std::process::Command::new(p).output().expect("runs").stdout;
         assert_eq!(run(&c.path), b"3\n");
         assert_eq!(run(&c.path), run(&whole));
+    }
+
+    /// Two staticlibs or more leave the inputs for a group in the tail
+    /// (GNU ld); one stays in place.
+    #[test]
+    fn several_staticlibs_are_grouped() {
+        let p = |s: &str| PathBuf::from(s);
+        let (rest, tail) = split_staticlibs(vec![
+            p("drv.o"),
+            p("libcaller.a"),
+            p("x.o"),
+            p("libcallee.a"),
+        ])
+        .expect("split");
+        assert_eq!(rest, [p("drv.o"), p("x.o")]);
+        assert_eq!(
+            tail,
+            [
+                "-Wl,--start-group",
+                "libcaller.a",
+                "libcallee.a",
+                "-Wl,--end-group"
+            ]
+        );
+        let (rest, tail) = split_staticlibs(vec![p("drv.o"), p("libone.a")]).expect("split");
+        assert_eq!(rest, [p("drv.o"), p("libone.a")]);
+        assert!(tail.is_empty());
     }
 
     #[test]

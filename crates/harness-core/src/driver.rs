@@ -301,6 +301,12 @@ pub struct DriverValidationInputs {
     pub driver: String,
     /// Toolchain + sandbox + cflags identity strings.
     pub toolchain: Vec<String>,
+    /// The pieces the unit calls, transitively, as validation linked them:
+    /// always their C (validation holds the driver to the original C
+    /// program); absent for a unit that calls none
+    /// (docs/BEYOND-LEAVES-DESIGN.md §4).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependencies: Vec<crate::deps::Dependency>,
 }
 
 /// `units/<id>/driver-validation.json` (and `validation.json` per driver
@@ -349,9 +355,19 @@ impl DriverValidation {
         }
     }
 
-    /// Whether this record is green AND bound to exactly these digests.
-    pub fn is_fresh_green(&self, unit_source: &str, driver: &str) -> bool {
-        self.green && self.inputs.unit_source == unit_source && self.inputs.driver == driver
+    /// Whether this record is green AND bound to exactly these digests:
+    /// the unit's source, its driver and the pieces it calls (`None` when
+    /// they cannot be computed today — then never fresh).
+    pub fn is_fresh_green(
+        &self,
+        unit_source: &str,
+        driver: &str,
+        dependencies: Option<&[crate::deps::Dependency]>,
+    ) -> bool {
+        self.green
+            && self.inputs.unit_source == unit_source
+            && self.inputs.driver == driver
+            && dependencies == Some(self.inputs.dependencies.as_slice())
     }
 
     /// Atomic pretty-JSON write (trailing newline).

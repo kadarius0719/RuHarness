@@ -291,6 +291,41 @@ pub(crate) fn unit_classes(facts: &Facts, unit: &Unit) -> BTreeSet<&'static str>
     out
 }
 
+/// The program's own functions a candidate may and may not import
+/// (docs/BEYOND-LEAVES-DESIGN.md §3, the import rule): an undefined symbol
+/// of the candidate's own members that is a function defined in the
+/// program's C must be one of the pieces the unit depends on.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ProgramFns {
+    /// Every public function the facts know in the program's C, but the
+    /// unit's own.
+    pub defined: BTreeSet<String>,
+    /// The symbols of the pieces the unit depends on, transitively.
+    pub callable: BTreeSet<String>,
+}
+
+impl ProgramFns {
+    /// From the facts (`symbol` records of kind `function`, public — a
+    /// file-local static has no linkable name) and the dependencies'
+    /// symbols.
+    pub(crate) fn of(facts: &Facts, unit: &Unit, callable: &[String]) -> ProgramFns {
+        ProgramFns {
+            defined: facts
+                .symbols
+                .iter()
+                .filter(|s| {
+                    s.kind == "function"
+                        && s.visibility == "public"
+                        && !s.name.contains("::")
+                        && !unit.symbols.contains(&s.name)
+                })
+                .map(|s| s.name.clone())
+                .collect(),
+            callable: callable.iter().cloned().collect(),
+        }
+    }
+}
+
 /// The `_kernelrpc_*` Mach traps and the `*_trap` entry points reach the
 /// kernel without the named stubs: they are `signal`-class for every candidate.
 fn is_mach_trap(name: &str) -> bool {
@@ -501,6 +536,7 @@ pub(crate) fn capabilities_check(
     staticlib: &Path,
     crate_dir: &Path,
     allowed: &BTreeSet<&'static str>,
+    program: &ProgramFns,
 ) -> Result<Check, Error> {
     let crate_name = staticlib
         .file_stem()
@@ -523,12 +559,17 @@ pub(crate) fn capabilities_check(
 
     let mut own_members = BTreeSet::new();
     let mut offending: BTreeMap<String, &'static str> = BTreeMap::new();
+    let mut foreign_calls: BTreeSet<String> = BTreeSet::new();
     for (member, raw) in &pairs {
         if !member.starts_with(&own_prefix) {
             continue;
         }
         own_members.insert(member.clone());
         let name = normalize(raw, macos);
+        if program.defined.contains(name) && !program.callable.contains(name) {
+            foreign_calls.insert(name.to_string());
+            continue;
+        }
         if is_runtime_name(name) {
             offending.insert(name.to_string(), "boundary-runtime");
             continue;
@@ -573,6 +614,18 @@ pub(crate) fn capabilities_check(
         ));
     }
     problems.extend(asm);
+    problems.extend(
+        foreign_calls
+            .iter()
+            .take(DETAIL_LIMIT)
+            .map(|name| format!("calls {name}, which belongs to a piece it does not depend on")),
+    );
+    if foreign_calls.len() > DETAIL_LIMIT {
+        problems.push(format!(
+            "+{} more such calls",
+            foreign_calls.len() - DETAIL_LIMIT
+        ));
+    }
 
     let allowed_note = if allowed.is_empty() {
         "none".to_string()
@@ -818,7 +871,8 @@ mod tests {
             FFI,
         );
         let lib = bench.build(&clean);
-        let check = capabilities_check(bench.runner(), &lib, &clean, &none).expect("runs");
+        let check = capabilities_check(bench.runner(), &lib, &clean, &none, &ProgramFns::default())
+            .expect("runs");
         assert!(check.passed, "{}", check.detail);
 
         let reads = candidate(
@@ -828,13 +882,16 @@ mod tests {
             FFI,
         );
         let lib = bench.build(&reads);
-        let check = capabilities_check(bench.runner(), &lib, &reads, &none).expect("runs");
+        let check = capabilities_check(bench.runner(), &lib, &reads, &none, &ProgramFns::default())
+            .expect("runs");
         assert!(!check.passed, "{}", check.detail);
         assert!(check.detail.contains("_ZN3std2fs"), "{}", check.detail);
         assert!(check.detail.contains("(fs)"), "{}", check.detail);
 
         let fs_ok: BTreeSet<&'static str> = ["fs", "os"].into_iter().collect();
-        let check = capabilities_check(bench.runner(), &lib, &reads, &fs_ok).expect("runs");
+        let check =
+            capabilities_check(bench.runner(), &lib, &reads, &fs_ok, &ProgramFns::default())
+                .expect("runs");
         assert!(check.passed, "{}", check.detail);
 
         let clock = candidate(
@@ -844,7 +901,9 @@ mod tests {
             FFI,
         );
         let lib = bench.build(&clock);
-        let check = capabilities_check(bench.runner(), &lib, &clock, &fs_ok).expect("runs");
+        let check =
+            capabilities_check(bench.runner(), &lib, &clock, &fs_ok, &ProgramFns::default())
+                .expect("runs");
         assert!(!check.passed, "{}", check.detail);
         assert!(check.detail.contains("(time)"), "{}", check.detail);
     }
@@ -868,11 +927,13 @@ mod tests {
         );
         let lib = bench.build(&dir);
         let none = BTreeSet::new();
-        let check = capabilities_check(bench.runner(), &lib, &dir, &none).expect("runs");
+        let check = capabilities_check(bench.runner(), &lib, &dir, &none, &ProgramFns::default())
+            .expect("runs");
         assert!(!check.passed, "{}", check.detail);
         assert!(check.detail.contains("mprotect (mem)"), "{}", check.detail);
         let mem_ok: BTreeSet<&'static str> = ["mem"].into_iter().collect();
-        let check = capabilities_check(bench.runner(), &lib, &dir, &mem_ok).expect("runs");
+        let check = capabilities_check(bench.runner(), &lib, &dir, &mem_ok, &ProgramFns::default())
+            .expect("runs");
         assert!(check.passed, "{}", check.detail);
     }
 
@@ -893,7 +954,8 @@ mod tests {
         );
         let lib = bench.build(&dir);
         let all: BTreeSet<&'static str> = CLASSES.iter().map(|c| c.name).collect();
-        let check = capabilities_check(bench.runner(), &lib, &dir, &all).expect("runs");
+        let check = capabilities_check(bench.runner(), &lib, &dir, &all, &ProgramFns::default())
+            .expect("runs");
         assert!(!check.passed, "{}", check.detail);
         assert!(
             check.detail.contains("ruharness_exit (boundary-runtime)"),

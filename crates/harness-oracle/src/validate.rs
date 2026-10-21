@@ -131,6 +131,18 @@ fn run(
     };
     let runner = Runner::new(&root, base.allowlist.clone(), base.timeout, tool_profile)?;
     let cc_version = crate::tool_first_line(&runner, &["cc", "--version"])?;
+    // The pieces the unit calls, as their ORIGINAL C (validation holds the
+    // driver to the C program; docs/BEYOND-LEAVES-DESIGN.md §2): linked into
+    // every build, never mutated.
+    let dep_plan = crate::deps::plan(
+        target,
+        &root,
+        &facts,
+        unit,
+        harness_core::deps::Stand::OriginalC,
+    )?;
+    let dep_inputs = crate::deps::inputs(target, &runner, &dep_plan)?;
+    let dep_c = crate::deps::link_paths(&dep_inputs);
     let inputs = DriverValidationInputs {
         unit_source,
         driver: driver_digest,
@@ -140,6 +152,7 @@ fn run(
             crate::CFLAGS_TOOLCHAIN_ENTRY.to_string(),
             crate::OBSERVABLE_TOOLCHAIN_ENTRY.to_string(),
         ],
+        dependencies: crate::deps::records(&dep_inputs),
     };
     let driver_args = base.unit_args(target, &facts, unit)?;
     let ctx = Ctx {
@@ -149,6 +162,7 @@ fn run(
         driver_args: &driver_args,
         driver: &driver,
         unit_c: &unit_c,
+        dep_c: &dep_c,
         dv: &dv,
         runner: &runner,
         confined: Confinement {
@@ -181,6 +195,9 @@ struct Ctx<'a> {
     driver: &'a Path,
     /// `(repo-relative, canonical)` of the unit's `.c` files.
     unit_c: &'a [(String, PathBuf)],
+    /// The C files of the pieces the unit calls (canonical): linked into
+    /// every build, never mutated.
+    dep_c: &'a [PathBuf],
     /// Canonical artifact dir `migration/build/<unit>/dv`.
     dv: &'a Path,
     runner: &'a Runner,
@@ -205,8 +222,13 @@ fn fail(name: &str, detail: String) -> Check {
 }
 
 impl Ctx<'_> {
+    /// The unit's C files, then the C of the pieces it calls.
     fn unit_paths(&self) -> Vec<PathBuf> {
-        self.unit_c.iter().map(|(_, p)| p.clone()).collect()
+        self.unit_c
+            .iter()
+            .map(|(_, p)| p.clone())
+            .chain(self.dep_c.iter().cloned())
+            .collect()
     }
 
     /// Compile the driver alone with its arguments; a compiler failure is
@@ -295,9 +317,14 @@ impl Ctx<'_> {
                 Ok(()) => pass(
                     "driver-build",
                     format!(
-                        "compiles with -Wall {}; links against {} unit file(s)",
+                        "compiles with -Wall {}; links against {} unit file(s){}",
                         STRICT_FLAGS[1..].join(" "),
-                        self.unit_c.len()
+                        self.unit_c.len(),
+                        if self.dep_c.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" and {} C file(s) of the pieces it calls", self.dep_c.len())
+                        }
                     ),
                 ),
             },
@@ -471,15 +498,37 @@ impl Ctx<'_> {
                 object: obj,
             });
         }
+        // The pieces the unit calls: compiled once, linked into every
+        // mutant's program, never mutated.
+        let mut dep_objects: Vec<PathBuf> = Vec::new();
+        for (i, path) in self.dep_c.iter().enumerate() {
+            let dir = self.dv.join(format!("dep-{i}"));
+            std::fs::create_dir_all(&dir).map_err(|e| Error::io(&dir, e))?;
+            dep_objects.push(self.compile_object(path, &dir)?.ok_or_else(|| {
+                Error::Invariant(format!(
+                    "mutation: {} (a piece the unit calls) does not compile to an object on \
+                     its own",
+                    path.display()
+                ))
+            })?);
+        }
         let mut results = Vec::with_capacity(sampled.len());
         for (index, mutant) in sampled.into_iter().enumerate() {
-            let outcome =
-                self.run_mutant(index, &mutant, driver_obj, pinned, &confined, &originals)?;
+            let outcome = self.run_mutant(
+                index,
+                &mutant,
+                driver_obj,
+                pinned,
+                &confined,
+                &originals,
+                &dep_objects,
+            )?;
             results.push((mutant, outcome));
         }
         evaluate_mutation(sites, &results, &self.unit.symbols, policy)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn run_mutant(
         &self,
         index: usize,
@@ -488,6 +537,7 @@ impl Ctx<'_> {
         pinned: &RunOutput,
         confined: &Confinement<'_>,
         originals: &[Original],
+        dep_objects: &[PathBuf],
     ) -> Result<MutantOutcome, Error> {
         let (_, original) = self
             .unit_c
@@ -531,6 +581,7 @@ impl Ctx<'_> {
                 .filter(|o| o.rel != mutant.file)
                 .map(|o| o.object.clone()),
         );
+        inputs.extend(dep_objects.iter().cloned());
         let bin = dir.join("bin");
         let link_args = self.base.link_file_args();
         let built = crate::cc_outcome(

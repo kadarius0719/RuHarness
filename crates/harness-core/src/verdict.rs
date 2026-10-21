@@ -16,6 +16,11 @@ pub const VERDICT_SCHEMA_NAME: &str = "ruharness-verdict";
 /// measured (docs/ORACLE-HARDENING.md §B.R-5): never candidate evidence.
 pub const BOUNDARY_C_SIDE_LEAD_IN: &str = "boundary driver invalid (C side): ";
 
+/// Lead-in of a failed `differential-driver` check's detail when the C
+/// side's test program does not link (docs/BEYOND-LEAVES-DESIGN.md §2): a
+/// build problem on the harness's side, never the Rust's.
+pub const DIFFERENTIAL_C_SIDE_LEAD_IN: &str = "the C side does not link: ";
+
 /// One oracle check's outcome.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Check {
@@ -57,6 +62,11 @@ pub struct VerdictInputs {
     /// <reason>` with the reason from a closed set (§3).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub features_skipped: Vec<String>,
+    /// The pieces the unit calls, transitively, as the builds linked them —
+    /// each one's Rust once accepted, else its C
+    /// (docs/BEYOND-LEAVES-DESIGN.md §4); absent for a unit that calls none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependencies: Vec<crate::deps::Dependency>,
 }
 
 /// A complete oracle verdict for one unit.
@@ -129,6 +139,17 @@ impl Verdict {
             self.inputs.driver,
             self.inputs.toolchain.join("; "),
         );
+        for dep in &self.inputs.dependencies {
+            md.push_str(&format!(
+                "- dependency: {} ({}) `{}`\n",
+                dep.unit,
+                match dep.kind {
+                    crate::deps::DependencyKind::C => "c",
+                    crate::deps::DependencyKind::Rust => "rust",
+                },
+                dep.digest
+            ));
+        }
         if !self.inputs.features.is_empty() {
             md.push_str(&format!(
                 "- features: `{}`\n- program: `{}`\n",

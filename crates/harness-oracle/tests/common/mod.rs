@@ -1,6 +1,8 @@
 //! Shared helpers for the oracle's integration tests.
 #![allow(dead_code)]
 
+pub mod two;
+
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 

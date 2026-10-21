@@ -74,6 +74,10 @@ pub(crate) struct BoundaryCtx<'a> {
     pub driver: &'a Path,
     /// The candidate staticlib.
     pub rust_lib: &'a Path,
+    /// The pieces the unit calls, as the program stands
+    /// (docs/BEYOND-LEAVES-DESIGN.md §2): C files, compiled here as the
+    /// unit's own are, and staticlibs; every link takes them.
+    pub deps: &'a [PathBuf],
     /// The unit build dir (`bd/` is created inside it).
     pub build: &'a Path,
     /// The unit (interface lines, symbols).
@@ -408,12 +412,33 @@ fn run_inner(ctx: &BoundaryCtx<'_>, report: &mut Option<BoundaryReport>) -> Resu
             &["-O0", "-c"]
         ));
     }
+    // The pieces the unit calls: their C compiled once with its own
+    // arguments, their staticlibs as they are; appended to every link.
+    let mut dep_links: Vec<PathBuf> = Vec::new();
+    for (i, d) in ctx.deps.iter().enumerate() {
+        if d.extension().and_then(|e| e.to_str()) == Some("c") {
+            let own = ctx.base.file_args(d)?;
+            let dep_cc = |out: &Path, inputs: &[PathBuf], cflags: &[&str]| {
+                cc_with(&own, out, inputs, cflags)
+            };
+            dep_links.push(build!(
+                dep_cc;
+                "a piece it calls",
+                bd.join(format!("dep_{i}.o")),
+                std::slice::from_ref(d),
+                &["-O0", "-c"]
+            ));
+        } else {
+            dep_links.push(d.clone());
+        }
+    }
     let link = |what: &str,
                 out: &str,
-                inputs: Vec<PathBuf>,
+                mut inputs: Vec<PathBuf>,
                 flags: &[&str]|
      -> Result<Result<PathBuf, Check>, Error> {
         let out_path = bd.join(out);
+        inputs.extend(dep_links.iter().cloned());
         Ok(match cc(&out_path, &inputs, flags)? {
             Ok(()) => Ok(out_path),
             Err(stderr) => Err(c_side(format!("{what} does not link: {}", cap(&stderr)))),

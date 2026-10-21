@@ -34,7 +34,9 @@ pub struct VerdictReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub green: Option<bool>,
     /// Which of its inputs no longer match the tree: `source`, `rust-crate`,
-    /// `driver`, `configuration` (present only; empty = fresh).
+    /// `driver`, `configuration`, `dependencies` (a piece it calls changed,
+    /// or its accepted Rust replaced its C — docs/BEYOND-LEAVES-DESIGN.md
+    /// §4) (present only; empty = fresh).
     pub stale: Vec<String>,
 }
 
@@ -400,6 +402,13 @@ fn compute(
                 .find(|t| t.starts_with(CONFIGURATION_ENTRY_PREFIX));
             if recorded.map(String::as_str) != configuration_entry(ctx, unit).as_deref() {
                 stale.push("configuration".into());
+            }
+            // The pieces it calls, as the program stands today: a callee
+            // whose Rust was accepted since, or whose C or Rust changed.
+            let deps_now =
+                crate::deps::now_or_none(ctx, facts, unit, crate::deps::Stand::AsItStands);
+            if deps_now.as_deref() != Some(v.inputs.dependencies.as_slice()) {
+                stale.push("dependencies".into());
             }
             VerdictReport {
                 state: VerdictState::Present,

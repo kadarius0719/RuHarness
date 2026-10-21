@@ -725,6 +725,7 @@ return 0;\n}\n";
                 unit_source: "blake3:unit".into(),
                 driver: "blake3:driver".into(),
                 toolchain: vec!["cc test".into(), "sandbox: test".into()],
+                dependencies: Vec::new(),
             },
             DriverPolicy {
                 max_mutants: 24,

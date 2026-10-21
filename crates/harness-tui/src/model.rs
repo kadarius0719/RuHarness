@@ -190,8 +190,17 @@ impl DriverState {
 }
 
 /// The driver state of `unit` (see [`DriverState`]), with `unit_source` and
-/// `driver` its current binding (`driver` empty when the file is missing).
-pub fn driver_state(ledger: &Ledger, unit: &Unit, unit_source: &str, driver: &str) -> DriverState {
+/// `driver` its current binding (`driver` empty when the file is missing)
+/// and `dependencies` the C of the pieces it calls today
+/// ([`harness_core::deps::Stand::OriginalC`]; `None` when they cannot be
+/// computed).
+pub fn driver_state(
+    ledger: &Ledger,
+    unit: &Unit,
+    unit_source: &str,
+    driver: &str,
+    dependencies: Option<&[harness_core::deps::Dependency]>,
+) -> DriverState {
     let complete = unit.oracle_kind() == Some("c-abi-differential")
         && unit.oracle_param_str("driver").is_some()
         && unit.oracle_param_str("rust_crate").is_some();
@@ -204,7 +213,7 @@ pub fn driver_state(ledger: &Ledger, unit: &Unit, unit_source: &str, driver: &st
         return DriverState::Validated;
     }
     match harness_core::driver::DriverValidation::load(&record) {
-        Ok(v) if v.is_fresh_green(unit_source, driver) => DriverState::Validated,
+        Ok(v) if v.is_fresh_green(unit_source, driver, dependencies) => DriverState::Validated,
         _ => DriverState::Stale,
     }
 }
@@ -511,7 +520,14 @@ fn unit_view(
         crate_dir,
         verdict: Verdict::load(&ledger.verdict_latest_path(&unit.id)).ok(),
         crate_digest,
-        driver: driver_state(ledger, unit, &unit_source, &driver),
+        driver: driver_state(
+            ledger,
+            unit,
+            &unit_source,
+            &driver,
+            harness_core::deps::now_or_none(ctx, facts, unit, harness_core::deps::Stand::OriginalC)
+                .as_deref(),
+        ),
         // A driver attempt that cannot be read is not shown, as a malformed
         // superseded.jsonl is not: `bench check` reports it.
         driver_attempts: attempts::load_unit_driver_attempts(ledger, &unit.id).unwrap_or_default(),

@@ -24,6 +24,9 @@ pub(crate) struct FeatureStepCtx<'a> {
     pub runner: &'a Runner,
     pub confined: &'a Confinement<'a>,
     pub rust_lib: &'a Path,
+    /// Every other accepted piece, as the program stands: the mixed
+    /// program links their staticlibs too.
+    pub others: &'a [crate::deps::Input],
     /// The programs the whole-program check built, when it ran.
     pub whole: Option<&'a WholePrograms>,
     pub features: &'a FeatureSnapshot,
@@ -104,7 +107,7 @@ pub(crate) fn feature_step(ctx: &mut FeatureStepCtx<'_>) -> Result<(), Error> {
             Ok(c) => (
                 c.clone(),
                 harness_core::hash::file_hash(&c)?,
-                build_whole_mixed(ctx.prep, ctx.runner, &c_files, ctx.rust_lib),
+                build_whole_mixed(ctx.prep, ctx.runner, &c_files, ctx.rust_lib, ctx.others),
             ),
         },
     };
@@ -391,6 +394,7 @@ mod tests {
             runner: &runner,
             confined: &confined,
             rust_lib: Path::new("/nonexistent"),
+            others: &[],
             whole: Some(&whole),
             features: &snapshot,
             program: "",
@@ -425,6 +429,7 @@ mod tests {
             runner: &runner,
             confined: &confined,
             rust_lib: Path::new("/nonexistent"),
+            others: &[],
             whole: Some(&whole),
             features: &snapshot,
             program: "",

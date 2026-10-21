@@ -155,8 +155,9 @@ pub(crate) fn symbol_set_check(
     expected: &[String],
 ) -> Result<Check, Error> {
     let baseline = baseline_table(ctx, panic_abort)?;
-    let candidate = defined_unmangled(ctx.runner, staticlib)?;
-    let candidate_ctors = scan_ctor_sections(ctx.runner, staticlib)?;
+    let mut candidate = defined_unmangled(ctx.runner, staticlib)?;
+    let (candidate_ctors, hidden) = scan_ctor_sections_and_hidden(ctx.runner, staticlib)?;
+    drop_promoted_constants(&mut candidate, hidden.as_ref());
     Ok(combine(
         compare(&candidate, &baseline.symbols, expected),
         ctor_finding(&candidate_ctors, &baseline.ctors),
@@ -198,6 +199,65 @@ pub(crate) fn nm_m_argv(lib: &str) -> Vec<String> {
 /// constructor sections when `objdump` is allowlisted and runnable.
 pub(crate) fn objdump_h_argv(lib: &str) -> Vec<String> {
     vec!["objdump".to_string(), "-h".to_string(), lib.to_string()]
+}
+
+/// LLVM's promoted constants (docs/BEYOND-LEAVES-DESIGN.md §3): a constant
+/// LLVM made (`anon.<hex>.<n>`) that ThinLTO promoted so another codegen
+/// unit of the same crate can reach it gets the suffix `.llvm.<n>` and
+/// hidden visibility. Compiler-made, never an export: any large piece can
+/// produce one. Tested on the NORMALIZED name. (A candidate cannot spell such
+/// a name itself: `#[no_mangle]` takes an identifier, and `export_name` is
+/// refused by the source rule check.)
+pub(crate) fn is_promoted_constant(name: &str) -> bool {
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let Some(rest) = name.strip_prefix("anon.") else {
+        return false;
+    };
+    match rest.split('.').collect::<Vec<_>>().as_slice() {
+        [hex, n, "llvm", m] => {
+            !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()) && digits(n) && digits(m)
+        }
+        _ => false,
+    }
+}
+
+/// Remove LLVM's promoted constants ([`is_promoted_constant`]) from a
+/// candidate's table: those `hidden` lists as hidden (private external, on
+/// macOS), or every one by name where the platform's `nm` does not show
+/// visibility (`hidden` is `None`, ELF).
+pub(crate) fn drop_promoted_constants(table: &mut SymbolTable, hidden: Option<&BTreeSet<String>>) {
+    let keep =
+        |name: &String| !(is_promoted_constant(name) && hidden.is_none_or(|h| h.contains(name)));
+    table.strong.retain(|name, _| keep(name));
+    table.weak.retain(keep);
+}
+
+/// The normalized names `nm -m` shows as `private external` (Mach-O's
+/// hidden visibility).
+pub(crate) fn private_externals(nm_m_output: &str) -> BTreeSet<String> {
+    nm_m_output
+        .lines()
+        .filter(|l| l.contains(") private external "))
+        .filter_map(|l| l.split_whitespace().last())
+        .map(|raw| normalize(raw, true).to_string())
+        .collect()
+}
+
+/// [`scan_ctor_sections`], and on macOS the hidden names of the same `nm -m`
+/// listing ([`private_externals`]); `None` on ELF.
+fn scan_ctor_sections_and_hidden(
+    runner: &Runner,
+    lib: &Path,
+) -> Result<(CtorScan, Option<BTreeSet<String>>), Error> {
+    if !cfg!(target_os = "macos") {
+        return Ok((scan_ctor_sections(runner, lib)?, None));
+    }
+    let lib_str = lib
+        .to_str()
+        .ok_or_else(|| Error::Invariant(format!("non-UTF-8 path: {}", lib.display())))?;
+    let stdout = runner.tool(&nm_m_argv(lib_str))?;
+    let text = String::from_utf8_lossy(&stdout);
+    Ok((ctor_scan_from_macho(&text), Some(private_externals(&text))))
 }
 
 /// Scan `lib` for constructor sections. On macOS this always runs (`nm` is a
@@ -987,6 +1047,84 @@ katajainen_rs-d4e5.katajainen_rs.cgu.1.rcgu.o:\n\
             .expect("write cache");
         assert!(read_cache(&path, "rustc 1.0.0").is_none());
         assert!(read_cache(&tmp.path().join("absent.txt"), "rustc 1.0.0").is_none());
+    }
+
+    /// The name rule: `anon.<hex>.<n>.llvm.<n>` and nothing like it.
+    #[test]
+    fn promoted_constants_are_known_by_their_shape() {
+        assert!(is_promoted_constant(
+            "anon.e2e7fcb3191fd94831a72d8733b0646d.0.llvm.4036727559829619722"
+        ));
+        for not in [
+            "anon.e2e7.0",
+            "anon.e2e7.0.llvm.",
+            "anon.xyz.0.llvm.12",
+            "anon..0.llvm.12",
+            "anon.e2e7.0.llvm.12.extra",
+            "ranon.e2e7.0.llvm.12",
+            "unit_add",
+        ] {
+            assert!(!is_promoted_constant(not), "{not}");
+        }
+        // Dropped when hidden (or where nm cannot tell), kept when exported.
+        let name = "anon.ab12.3.llvm.99".to_string();
+        let mut table = SymbolTable::default();
+        table.add(false, &name);
+        table.add(false, "unit_add");
+        let mut kept = table.clone();
+        drop_promoted_constants(&mut kept, Some(&BTreeSet::new()));
+        assert!(kept.defines(&name), "an exported one stays reported");
+        let mut elf = table.clone();
+        drop_promoted_constants(&mut elf, None);
+        assert!(!elf.defines(&name) && elf.defines("unit_add"));
+        let hidden: BTreeSet<String> = [name.clone()].into_iter().collect();
+        drop_promoted_constants(&mut table, Some(&hidden));
+        assert!(!table.defines(&name) && table.defines("unit_add"));
+        // nm -m's spelling of hidden visibility, normalized.
+        let nm_m = "0000000000000050 (__TEXT,__const) private external _anon.ab12.3.llvm.99\n\
+                    0000000000000024 (__TEXT,__text) external _tune_a\n";
+        assert_eq!(private_externals(nm_m), hidden);
+    }
+
+    /// The spike's side finding (DECISIONS 2026-10-21): a table one function
+    /// reads, imported by ThinLTO into another codegen unit of the crate,
+    /// becomes a hidden `anon.….llvm.…` symbol. The check must not call it
+    /// an export. (`codegen-units` is set so the tiny crate splits as a
+    /// large unit crate does under the template's default.)
+    #[test]
+    fn a_promoted_constant_is_not_an_export() {
+        let bench = ToolBench::new("symanon");
+        let ctx = bench.symbol_ctx();
+        let dir = fixture_crate(
+            bench.root(),
+            "tuning_rs",
+            true,
+            "mod a {\n    const TUNING: [u32; 32] = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, \
+             3, 2, 3, 8, 4, 6, 2, 6, 4, 3, 3, 8, 3, 2, 7, 9, 5];\n    #[inline(never)]\n    \
+             fn mix(x: u32) -> u32 { x.rotate_left(5) ^ 0x9e37_79b9 }\n    \
+             pub(crate) fn tuned(i: usize) -> u32 { let t: &[u32] = &TUNING; mix(t[i % 32]) }\n    \
+             #[no_mangle]\n    pub extern \"C\" fn tune_a(i: usize) -> u32 { \
+             tuned(i).wrapping_mul(7) }\n}\nmod b {\n    #[no_mangle]\n    \
+             pub extern \"C\" fn tune_b(i: usize) -> u32 { crate::a::tuned(i * 3) ^ 0x55 }\n}\n",
+        );
+        let manifest = dir.join("Cargo.toml");
+        let text = std::fs::read_to_string(&manifest).expect("manifest");
+        std::fs::write(&manifest, format!("{text}codegen-units = 16\n")).expect("manifest");
+        let lib = bench.build(&dir);
+        let raw = defined_unmangled(bench.runner(), &lib).expect("nm");
+        assert!(
+            raw.strong.keys().any(|n| is_promoted_constant(n)),
+            "this toolchain no longer promotes the table: {:?}",
+            raw.strong.keys().collect::<Vec<_>>()
+        );
+        let check = symbol_set_check(
+            &ctx,
+            &lib,
+            true,
+            &["tune_a".to_string(), "tune_b".to_string()],
+        )
+        .expect("check runs");
+        assert!(check.passed, "{}", check.detail);
     }
 
     /// Real toolchain, tiny fixture crates: the matching crate passes; an

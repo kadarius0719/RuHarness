@@ -75,6 +75,7 @@ mod boundary;
 mod boundary_run;
 mod capabilities;
 mod confine;
+mod deps;
 mod exec;
 mod featuremap;
 mod features;
@@ -859,6 +860,20 @@ impl CAbiDifferential {
         }
         let facts = load_facts(target)?;
         let root = &prep.base.root;
+        // The pieces it calls, as the program stands (decided before the
+        // sandbox profile, which must let cargo build their crates).
+        let dep_plan = deps::plan(
+            target,
+            root,
+            &facts,
+            unit,
+            harness_core::deps::Stand::AsItStands,
+        )?;
+        // Every other accepted piece: the whole program links them as the
+        // program stands (built only when a whole program is).
+        let program_plan = deps::accepted(target, root, &facts, unit)?;
+        let whole_built =
+            prep.whole_program.is_some() || !matches!(features, FeatureSnapshot::None);
 
         // The crate's target dir is created by the harness, so the sandboxed
         // cargo needs no write access to the crate dir itself.
@@ -881,11 +896,20 @@ impl CAbiDifferential {
             Some(host) => {
                 let mut write_dirs = vec![prep.build.clone()];
                 write_dirs.extend(crate_target_dir.iter().cloned());
-                let write_files: Vec<PathBuf> = prep
+                let mut write_files: Vec<PathBuf> = prep
                     .crate_dir
                     .iter()
                     .map(|d| d.join("Cargo.lock"))
                     .collect();
+                for plan in [&dep_plan, &program_plan] {
+                    let (dirs, files) = plan.writes();
+                    write_dirs.extend(dirs);
+                    write_files.extend(files);
+                }
+                write_dirs.sort();
+                write_dirs.dedup();
+                write_files.sort();
+                write_files.dedup();
                 Some(sandbox::render_profile(&ProfileSpec {
                     host,
                     target_root: root,
@@ -975,6 +999,17 @@ impl CAbiDifferential {
             .toolchain
             .push(OBSERVABLE_TOOLCHAIN_ENTRY.to_string());
 
+        // The callees as the program stands: an accepted one's Rust built
+        // as the unit's own was, else its C. Recorded for freshness.
+        let dep_inputs = deps::inputs(target, &runner, &dep_plan)?;
+        inputs.dependencies = deps::records(&dep_inputs);
+        let dep_links = deps::link_paths(&dep_inputs);
+        let others = if whole_built {
+            deps::inputs(target, &runner, &program_plan)?
+        } else {
+            Vec::new()
+        };
+
         let rust_lib = match build_result {
             Ok(lib) => lib,
             Err(e) => {
@@ -1031,6 +1066,7 @@ impl CAbiDifferential {
             &rust_lib,
             &crate_dir,
             &capabilities::unit_classes(&facts, unit),
+            &capabilities::ProgramFns::of(&facts, unit, &dep_plan.symbols()),
         )?;
         let caps_ok = caps.passed;
         checks.push(caps);
@@ -1080,16 +1116,22 @@ impl CAbiDifferential {
         // 5. Differential driver: C-linked vs Rust-linked, byte-identical
         // stdout AND stderr. A crash or timeout of either binary is a failed check
         // (evidence), never a harness error.
+        // Both sides link the pieces the unit calls, as the program stands.
         let mut drv_c_inputs = vec![prep.driver.clone()];
         drv_c_inputs.extend(replace_paths.iter().cloned());
-        let drv_rs_inputs = vec![prep.driver.clone(), rust_lib.clone()];
+        drv_c_inputs.extend(dep_links.iter().cloned());
+        let mut drv_rs_inputs = vec![prep.driver.clone(), rust_lib.clone()];
+        drv_rs_inputs.extend(dep_links.iter().cloned());
         // Each C file compiled with its own arguments, the driver with the
-        // unit's, then one link; a failure is a harness error, as ever.
-        let cc = |out: &Path, inputs: &[PathBuf], cflags: &[String]| -> Result<(), Error> {
+        // unit's, then one link; a failure is the caller's to word.
+        let cc_outcome_of = |out: &Path,
+                             inputs: &[PathBuf],
+                             cflags: &[String]|
+         -> Result<Result<(), String>, Error> {
             let compile = perf::build::Compile {
                 runner: &runner,
                 cflags,
-                strict: true,
+                strict: false,
             };
             build_driver(
                 &compile,
@@ -1098,11 +1140,38 @@ impl CAbiDifferential {
                 &driver_args,
                 out,
                 inputs,
-            )?
-            .map_err(Error::Invariant)
+            )
         };
-        cc(&build.join("drv_c"), &drv_c_inputs, &[])?;
-        cc(&build.join("drv_rs"), &drv_rs_inputs, &[])?;
+        let cc = |out: &Path, inputs: &[PathBuf], cflags: &[String]| -> Result<(), Error> {
+            cc_outcome_of(out, inputs, cflags)?.map_err(Error::Invariant)
+        };
+        // A link that fails is a red check, never a harness error
+        // (docs/BEYOND-LEAVES-DESIGN.md §2): the C side's is the harness's
+        // problem (a build problem, not the Rust's), the Rust side's is the
+        // candidate's — a Rust that forgot a callee sees a red to repair.
+        if let Err(words) = cc_outcome_of(&build.join("drv_c"), &drv_c_inputs, &[])? {
+            checks.push(Check {
+                name: "differential-driver".into(),
+                passed: false,
+                detail: format!(
+                    "{}{}",
+                    harness_core::verdict::DIFFERENTIAL_C_SIDE_LEAD_IN,
+                    deps::linker_words(&words)
+                ),
+            });
+            return Ok(finish(inputs, checks));
+        }
+        if let Err(words) = cc_outcome_of(&build.join("drv_rs"), &drv_rs_inputs, &[])? {
+            checks.push(Check {
+                name: "rust-build".into(),
+                passed: false,
+                detail: format!(
+                    "the unit's Rust does not link into the test program: {}",
+                    deps::linker_words(&words)
+                ),
+            });
+            return Ok(finish(inputs, checks));
+        }
         match (
             confined.run(&build.join("drv_c"), &[], &[])?,
             confined.run(&build.join("drv_rs"), &[], &[])?,
@@ -1129,7 +1198,7 @@ impl CAbiDifferential {
             }),
             Some(args) => {
                 let (wp_checks, built) =
-                    self.whole_program(&prep, unit, &confined, args, &rust_lib)?;
+                    self.whole_program(&prep, unit, &confined, args, &rust_lib, &others)?;
                 checks.extend(wp_checks);
                 whole = Some(built);
             }
@@ -1161,6 +1230,7 @@ impl CAbiDifferential {
                     unit_c: &unit_c,
                     driver: &prep.driver,
                     rust_lib: &rust_lib,
+                    deps: &dep_links,
                     build,
                     unit,
                 })?
@@ -1179,6 +1249,7 @@ impl CAbiDifferential {
             runner: &runner,
             confined: &confined,
             rust_lib: &rust_lib,
+            others: &others,
             whole: whole.as_ref(),
             features,
             program: &program_now,
@@ -1222,17 +1293,29 @@ impl CAbiDifferential {
         let facts = load_facts(target)?;
         let root = &prep.base.root;
         let crate_target_dir = prepare_target_dir(crate_dir)?;
+        let dep_plan = deps::plan(
+            target,
+            root,
+            &facts,
+            unit,
+            harness_core::deps::Stand::AsItStands,
+        )?;
         let host = match sandbox_mode() {
             "sandbox-exec" => Some(HostDirs::from_env()?),
             _ => None,
         };
+        let (dep_dirs, dep_files) = dep_plan.writes();
+        let mut write_dirs = vec![prep.build.clone(), crate_target_dir.clone()];
+        write_dirs.extend(dep_dirs);
+        let mut write_files = vec![crate_dir.join("Cargo.lock")];
+        write_files.extend(dep_files);
         let tool_profile = match &host {
             Some(host) => Some(sandbox::render_profile(&ProfileSpec {
                 host,
                 target_root: root,
                 toolchain: true,
-                write_dirs: &[prep.build.clone(), crate_target_dir.clone()],
-                write_files: &[crate_dir.join("Cargo.lock")],
+                write_dirs: &write_dirs,
+                write_files: &write_files,
             })?),
             None => None,
         };
@@ -1253,6 +1336,7 @@ impl CAbiDifferential {
             crate_dir,
             &crate_target_dir,
         )?;
+        let dep_links = deps::link_paths(&deps::inputs(target, &runner, &dep_plan)?);
         let unit_args = prep.base.unit_args(target, &facts, unit)?;
         let (headers, unit_c) = boundary_inputs(target, &prep, &facts, unit)?;
         boundary_run::run(&boundary_run::BoundaryCtx {
@@ -1264,6 +1348,7 @@ impl CAbiDifferential {
             unit_c: &unit_c,
             driver: &prep.driver,
             rust_lib: &rust_lib,
+            deps: &dep_links,
             build: &prep.build,
             unit,
         })
@@ -1280,6 +1365,7 @@ impl CAbiDifferential {
         confined: &Confinement<'_>,
         args: &[String],
         rust_lib: &Path,
+        others: &[deps::Input],
     ) -> Result<(Vec<Check>, WholePrograms), Error> {
         let build = &prep.build;
         let c_files = program_c_files(prep, unit)?;
@@ -1305,7 +1391,7 @@ impl CAbiDifferential {
         let c_digest = hash::file_hash(&c)?;
         let built = WholePrograms {
             c,
-            mixed: build_whole_mixed(prep, confined.runner, &c_files, rust_lib)?,
+            mixed: build_whole_mixed(prep, confined.runner, &c_files, rust_lib, others)?,
             c_digest,
         };
         let mut checks = Vec::new();
@@ -1455,23 +1541,28 @@ pub(crate) fn replace_paths(prep: &Prepared) -> Vec<PathBuf> {
     prep.replaces.iter().map(|(_, p)| p.clone()).collect()
 }
 
-/// Build `whole_mixed`: `c_files` minus the unit's `replaces`, plus
-/// `rust_lib`.
+/// Build `whole_mixed`, the program as it stands
+/// (docs/BEYOND-LEAVES-DESIGN.md §2, last row): `c_files` minus the unit's
+/// `replaces` and minus the C of every other accepted piece `others` links
+/// as Rust, plus `rust_lib` and those pieces' staticlibs.
 pub(crate) fn build_whole_mixed(
     prep: &Prepared,
     runner: &Runner,
     c_files: &[PathBuf],
     rust_lib: &Path,
+    others: &[deps::Input],
 ) -> Result<PathBuf, Error> {
-    let mixed: Vec<PathBuf> = perf::build::kept_c_files(c_files, &replace_paths(prep))
-        .map_err(|i| {
-            Error::InvalidPlan(format!(
-                "replaces entry `{}` does not match any .c file",
-                prep.replaces[i].0
-            ))
-        })?
+    let kept = perf::build::kept_c_files(c_files, &replace_paths(prep)).map_err(|i| {
+        Error::InvalidPlan(format!(
+            "replaces entry `{}` does not match any .c file",
+            prep.replaces[i].0
+        ))
+    })?;
+    let (kept, libs) = deps::as_it_stands(&kept, others);
+    let mixed: Vec<PathBuf> = kept
         .into_iter()
         .chain(std::iter::once(rust_lib.to_path_buf()))
+        .chain(libs)
         .collect();
     let out = prep.build.join("whole_mixed");
     whole_cc(prep, runner, &out, &mixed)?;
@@ -2135,7 +2226,7 @@ mod tests {
             target_root: &root,
         };
         let (checks, _) = CAbiDifferential
-            .whole_program(&prep, &unit, &confined, &[], &candidate)
+            .whole_program(&prep, &unit, &confined, &[], &candidate, &[])
             .unwrap();
         let summary: Vec<(bool, &str)> = checks
             .iter()

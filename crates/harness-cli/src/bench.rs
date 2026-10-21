@@ -456,11 +456,15 @@ pub fn driver_state(
     } else {
         String::new()
     };
-    Ok(if v.is_fresh_green(&unit_source, &driver) {
-        "validated".into()
-    } else {
-        "stale".into()
-    })
+    let dependencies =
+        harness_core::deps::now_or_none(ctx, facts, unit, harness_core::deps::Stand::OriginalC);
+    Ok(
+        if v.is_fresh_green(&unit_source, &driver, dependencies.as_deref()) {
+            "validated".into()
+        } else {
+            "stale".into()
+        },
+    )
 }
 
 fn cmd_status(suite_dir: &Path) -> Result<u8> {
