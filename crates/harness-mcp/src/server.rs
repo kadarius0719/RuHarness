@@ -366,6 +366,15 @@ impl<W: Write> Server<W> {
                 };
                 self.send(&rpc::result(&id, tool_result(structured, is_error)))
             }
+            // The chat's proposal of the person's features or workloads
+            // (cockpit mode): checked and written here, one file only.
+            "harness_features_propose" | "harness_workloads_propose" => {
+                let (structured, is_error) = match self.propose_tool(tool_name, &args) {
+                    Ok(v) => (v, false),
+                    Err(refusal) => (refusal.to_value(), true),
+                };
+                self.send(&rpc::result(&id, tool_result(structured, is_error)))
+            }
             // The cockpit's server never runs an act: the cockpit holds the
             // call as a permission request and runs it itself (§4.4) — one
             // that reaches here was let through by mistake.
@@ -458,6 +467,42 @@ impl<W: Write> Server<W> {
             )
             .map_err(Refusal::refused)
         }
+    }
+
+    /// `harness_features_propose` and `harness_workloads_propose` on the
+    /// server's tool (docs/COCKPIT-WRAPPER-DESIGN.md §9.6): cockpit mode
+    /// only, a tool open, a ledger made here.
+    fn propose_tool(&self, tool: &str, args: &Map<String, Value>) -> Result<Value, Refusal> {
+        let Some(which) = crate::propose::Which::of_tool(tool).filter(|_| self.cfg.cockpit) else {
+            return Err(Refusal::refused(
+                "proposals are the cockpit chat's: this server does not take them",
+            ));
+        };
+        if self.cfg.project_form {
+            return Err(Refusal {
+                kind: "no-tool",
+                message: "no tool is open in the cockpit: features and workloads are a tool's; \
+                          the person opens a tool (Open tool …) first"
+                    .into(),
+            });
+        }
+        let root = self.cfg.target.clone();
+        self.adopted(&root)?;
+        let ledger = self.cfg.ledger_for(&root);
+        let ledger_rel = ledger
+            .dir()
+            .strip_prefix(&root)
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| harness_core::ledger::MIGRATION_DIR.to_string());
+        crate::propose::propose(
+            &root,
+            &ledger,
+            &ledger_rel,
+            which,
+            arg(args, "model").unwrap_or_default(),
+            arg(args, "text").unwrap_or_default(),
+        )
+        .map_err(Refusal::refused)
     }
 
     fn read(&self, tool: &str, args: &Map<String, Value>) -> Result<Value, Refusal> {
@@ -1071,7 +1116,9 @@ mod tests {
                 "harness_retry",
                 "harness_answer",
                 "harness_map_questions",
-                "harness_map_answer"
+                "harness_map_answer",
+                "harness_features_propose",
+                "harness_workloads_propose"
             ]
         );
         assert!(instructions.contains(tools::MAP_RULE));
@@ -1096,6 +1143,8 @@ mod tests {
         );
         assert_eq!(params("harness_map_questions"), ["batch", "page"]);
         assert_eq!(params("harness_map_answer"), ["batch", "model", "text"]);
+        assert_eq!(params("harness_features_propose"), ["model", "text"]);
+        assert_eq!(params("harness_workloads_propose"), ["model", "text"]);
         for t in listed {
             // The map answer names the model that answers: the advice is
             // recorded as its (the cockpit checks it is the chat's).
@@ -1104,6 +1153,15 @@ mod tests {
                 .is_some_and(|n| n.starts_with("harness_map_"))
             {
                 assert!(t["description"].as_str().unwrap().contains(tools::MAP_RULE));
+                continue;
+            }
+            // A proposal names the model whose it is, and writes only its
+            // own file: it asks no one (§9.6).
+            if t["name"].as_str().is_some_and(|n| n.ends_with("_propose")) {
+                assert!(t["description"]
+                    .as_str()
+                    .unwrap()
+                    .contains(crate::propose::PROPOSE_RULE));
                 continue;
             }
             let props = t["inputSchema"]["properties"].as_object().unwrap();
@@ -1206,6 +1264,90 @@ mod tests {
         assert_eq!(r["result"]["isError"], false, "{r}");
         tools::conforms(&schema("harness_map_answer"), structured(&r)).unwrap();
         assert!(root.join(harness_llm::projectask::REPLY_FILE).is_file());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The chat's proposals (docs/COCKPIT-WRAPPER-DESIGN.md §9.6): in
+    /// cockpit mode a valid proposal is written beside the person's file
+    /// and conforms to its outputSchema; an invalid one is refused with the
+    /// loader's message; the Project view (no tool open) and a ledger made
+    /// elsewhere refuse; a blind server does not have the tools at all.
+    #[test]
+    fn the_cockpits_chat_proposes_features_and_workloads() {
+        let root = crate::propose::tests::target("server");
+        let args: Vec<String> = ["--cockpit", "--target", root.to_str().unwrap()]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let mut cfg = policy::parse_args(&args).unwrap().unwrap();
+        // A folder-form target with its own harness.toml: a tool's ledger.
+        cfg.project_form = false;
+        let mut s = Server::new(
+            cfg.clone(),
+            Vec::new(),
+            ChildSlot::default(),
+            Gate::default(),
+        );
+        let all = s.tools.clone();
+        let schema = |name: &str| all.iter().find(|t| t.name == name).unwrap().output_schema();
+        let bad = json!({"model": "claude-opus-5-5",
+            "text": crate::propose::tests::FEATURES.replace("\"-h\"", "\"a/b\"")});
+        let r = call(&mut s, 1, "harness_features_propose", bad);
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        let why = structured(&r)["error"]["message"]["text"].as_str().unwrap();
+        assert!(why.contains("cannot contain"), "{why}");
+        let ledger = harness_core::ledger::Ledger::new(&root);
+        assert!(!harness_core::features::proposed_path(&ledger).exists());
+        let good = json!({"model": "claude-opus-5-5", "text": crate::propose::tests::FEATURES});
+        let r = call(&mut s, 2, "harness_features_propose", good);
+        assert_eq!(r["result"]["isError"], false, "{r}");
+        tools::conforms(&schema("harness_features_propose"), structured(&r)).unwrap();
+        assert_eq!(structured(&r)["scenarios"], 2);
+        assert!(harness_core::features::proposed_path(&ledger).is_file());
+        assert!(!harness_core::features::features_path(&ledger).exists());
+        let good = json!({"model": "claude-opus-5-5", "text": crate::propose::tests::WORKLOADS});
+        let r = call(&mut s, 3, "harness_workloads_propose", good);
+        assert_eq!(r["result"]["isError"], false, "{r}");
+        tools::conforms(&schema("harness_workloads_propose"), structured(&r)).unwrap();
+        assert!(harness_core::perf::workloads::proposed_path(&ledger).is_file());
+        // The Project view: no tool open, refused.
+        let mut project = cfg.clone();
+        project.project_form = true;
+        let mut s = Server::new(project, Vec::new(), ChildSlot::default(), Gate::default());
+        let r = call(
+            &mut s,
+            4,
+            "harness_features_propose",
+            json!({"model": "m", "text": crate::propose::tests::FEATURES}),
+        );
+        assert_eq!(structured(&r)["error"]["kind"], "no-tool", "{r}");
+        // A ledger made elsewhere: refused before anything is read.
+        let guard = crate::policy::tests::TmpDir::new("propose-elsewhere");
+        let elsewhere = crate::policy::tests::zopfli_copy(&guard.0.join("root/zopfli"));
+        // Another tree at the same path: a token of its own.
+        let token = format!("{}{}", "b".repeat(32), '\n');
+        std::fs::write(elsewhere.join("migration/.ruharness-adopted"), token).unwrap();
+        let mut other = cfg.clone();
+        other.target = elsewhere.canonicalize().unwrap();
+        let mut s = Server::new(other, Vec::new(), ChildSlot::default(), Gate::default());
+        let r = call(
+            &mut s,
+            5,
+            "harness_features_propose",
+            json!({"model": "claude-opus-5-5", "text": crate::propose::tests::FEATURES}),
+        );
+        assert_eq!(structured(&r)["error"]["kind"], "not-adopted", "{r}");
+        let other_ledger = harness_core::ledger::Ledger::new(&elsewhere);
+        assert!(!harness_core::features::proposed_path(&other_ledger).exists());
+        // A blind (standalone) server has no such tool.
+        let mut s = server(&["external"]);
+        let r = call(
+            &mut s,
+            6,
+            "harness_features_propose",
+            json!({"model": "claude-opus-5-5", "text": crate::propose::tests::FEATURES}),
+        );
+        assert_eq!(r["error"]["code"], -32602, "{r}");
         let _ = std::fs::remove_dir_all(&root);
     }
 

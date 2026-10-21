@@ -37,3 +37,7 @@ map tools); the cockpit requires the exact set once harness-mcp is connected.
 
 Edited by hand again (2026-10-20): each `init` tool list gained
 `mcp__harness__harness_gen_driver` (the cockpit's Make the test program).
+
+Edited by hand again (2026-10-20): each `init` tool list gained
+`mcp__harness__harness_features_propose` and `mcp__harness__harness_workloads_propose` (the
+chat's proposals of the features and workloads files).

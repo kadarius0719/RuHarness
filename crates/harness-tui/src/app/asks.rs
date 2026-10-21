@@ -371,6 +371,7 @@ impl App {
         if !self.chat_on {
             return;
         }
+        self.sync_drafts_kept();
         for event in self.chat.pump(now) {
             self.on_chat_event(event, now);
         }
@@ -398,6 +399,7 @@ impl App {
             ChatEvent::Ended { gen } => self.chat_gen_ended(gen, now),
             ChatEvent::Unavailable { .. } => self.chat_trouble_seen(),
             ChatEvent::MapAnswered => self.chat_map_answered(),
+            ChatEvent::ProposalWritten { workloads } => self.chat_proposal_written(workloads),
         }
     }
 

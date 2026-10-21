@@ -13,6 +13,7 @@
 mod acts;
 mod map;
 mod policy;
+mod propose;
 mod reads;
 mod rpc;
 mod server;

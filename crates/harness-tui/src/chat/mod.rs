@@ -55,6 +55,8 @@ pub const COCKPIT_TOOLS: &[&str] = &[
     "mcp__harness__harness_answer",
     "mcp__harness__harness_map_questions",
     "mcp__harness__harness_map_answer",
+    "mcp__harness__harness_features_propose",
+    "mcp__harness__harness_workloads_propose",
 ];
 
 /// Why the chat cannot be used now (docs/CHAT-PANE-DESIGN.md §1.6): the
@@ -294,6 +296,13 @@ pub enum Event {
     /// `harness_map_answer` recorded the chat's answer: the Project view
     /// reads the map's reply again.
     MapAnswered,
+    /// `harness_features_propose` (or, `workloads`,
+    /// `harness_workloads_propose`) wrote the chat's proposal
+    /// (docs/COCKPIT-WRAPPER-DESIGN.md §9.6).
+    ProposalWritten {
+        /// The workloads file's proposal, not the features file's.
+        workloads: bool,
+    },
 }
 
 /// Where the chat is, for the pane's title.
@@ -414,6 +423,14 @@ pub struct Chat {
     /// `harness_map_answer` calls allowed, by call id: their result tells
     /// the app to read the map's reply again.
     map_answers: BTreeSet<String>,
+    /// A draft of the person's own is kept, of the features file and of
+    /// the workloads file: the app sets it before each pump, and a
+    /// proposal of that file is refused while it is (§9.6: the draft slot
+    /// is theirs).
+    pub drafts_kept: [bool; 2],
+    /// Proposal calls allowed, by call id (`true`: the workloads file's):
+    /// their result tells the app the proposal is written.
+    proposals: BTreeMap<String, bool>,
 }
 
 /// The transcript's line between two chats.
@@ -537,6 +554,8 @@ impl Chat {
             resolver: None,
             last_sent: None,
             map_answers: BTreeSet::new(),
+            drafts_kept: [false; 2],
+            proposals: BTreeMap::new(),
         }
     }
 
@@ -1113,6 +1132,11 @@ impl Chat {
                     if self.map_answers.remove(&r.tool_use_id) && !r.is_error {
                         events.push(Event::MapAnswered);
                     }
+                    if let Some(workloads) = self.proposals.remove(&r.tool_use_id) {
+                        if !r.is_error {
+                            events.push(Event::ProposalWritten { workloads });
+                        }
+                    }
                     let (tone, word) = if r.is_error {
                         (Tone::Bad, "failed")
                     } else {
@@ -1412,6 +1436,42 @@ impl Chat {
                         return;
                     }
                 }
+            }
+            // The chat's proposal of the person's features or workloads
+            // (docs/COCKPIT-WRAPPER-DESIGN.md §9.6): checked and written by
+            // harness-mcp to its own proposal file — allowed at once under
+            // the chat's model, refused while a draft of the person's is
+            // kept.
+            "harness_features_propose" | "harness_workloads_propose" => {
+                let workloads = short == "harness_workloads_propose";
+                let noun = if workloads { "workloads" } else { "features" };
+                let named = input.get("model").and_then(Value::as_str);
+                let why = if self.drafts_kept[usize::from(workloads)] {
+                    Some(format!(
+                        "a {noun} draft of the person's is kept — they save or discard it first \
+                         (the draft slot is theirs)"
+                    ))
+                } else {
+                    match (&self.model, named) {
+                        (Some(m), Some(n)) if m == n => None,
+                        _ => Some(format!(
+                            "the proposal is written under the chat's model: pass model = {}",
+                            self.model.as_deref().unwrap_or("the model the chat runs")
+                        )),
+                    }
+                };
+                if let Some(why) = why {
+                    deny_now(self, &why);
+                    self.say(
+                        Tone::Dim,
+                        format!("· propose the {noun} file: refused — {why}"),
+                    );
+                    return;
+                }
+                if let Some(call) = &tool_use_id {
+                    self.proposals.insert(call.clone(), workloads);
+                }
+                Some(format!("· write the chat's proposal of the {noun} file"))
             }
             _ => None,
         };
