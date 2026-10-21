@@ -857,7 +857,9 @@ pub struct App {
     pub mode: Mode,
     /// A transient notice.
     pub notice: Option<Notice>,
-    /// After `plan`: one summary line kept until the next command starts.
+    /// After `plan`: one summary line, kept until the next key press or
+    /// mouse move (then the hint line has its row back), a screen change or
+    /// the next command.
     pub plan_notice: Option<String>,
     /// The last (or current) spawned command.
     pub run: Option<RunPanel>,
@@ -4255,6 +4257,9 @@ impl App {
         if !typing && self.notice.as_ref().is_some_and(|n| n.at < now) {
             self.notice = None;
         }
+        // The plan's summary yields its row to the hint line at the first
+        // key, as `Last:` does (`c` still shows the run's lines).
+        self.plan_notice = None;
         self.on_key_inner(key, now)
     }
 
@@ -4289,6 +4294,11 @@ impl App {
     pub fn on_mouse(&mut self, ev: MouseEvent, now: Instant, late: Duration) -> Command {
         self.now = now;
         self.last_mouse = Some(now);
+        // A mouse move or click: the plan's summary yields to the hint
+        // line, as at a key.
+        if self.mouse {
+            self.plan_notice = None;
+        }
         // A click is no key of a burst: the keys it presses (a hint's
         // `Enter`) are the person's own (fix check N10).
         self.asks.burst = false;
@@ -7557,6 +7567,49 @@ pub(crate) mod tests {
         );
         app.on_spawned(&app.act_argv(Act::Scan, None, None, None).unwrap());
         assert_eq!(app.plan_notice, None);
+    }
+
+    /// The whole-journey check, item 1: the plan's summary yields its row
+    /// to the hint line at the first key or mouse move, as `Last:` does —
+    /// it never stays on through the stages that follow.
+    #[test]
+    fn the_plan_summary_yields_to_the_hint_at_the_first_input() {
+        let mut app = app("planyield");
+        let plan_once = |app: &mut App| {
+            let p = app.act_argv(Act::Plan, None, None, None).unwrap();
+            app.on_spawned(&p);
+            app.on_child_msg(ChildMsg::Event(Event::Message {
+                text: "plan: u-lib: re-approved".into(),
+            }));
+            app.on_child_exit(ExitStatus::from_raw(0));
+            app.load_now();
+            assert!(app.plan_notice.is_some());
+        };
+        plan_once(&mut app);
+        code(&mut app, KeyCode::Down);
+        assert_eq!(app.plan_notice, None, "a key");
+        plan_once(&mut app);
+        let now = Instant::now();
+        app.on_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: 1,
+                row: 1,
+                modifiers: KeyModifiers::NONE,
+            },
+            now,
+            Duration::ZERO,
+        );
+        assert_eq!(app.plan_notice, None, "a mouse move");
+        for k in ['g', 'c'] {
+            plan_once(&mut app);
+            key(&mut app, k);
+            assert_eq!(app.plan_notice, None, "{k}");
+            app.mode = Mode::Normal;
+        }
+        plan_once(&mut app);
+        code(&mut app, KeyCode::Esc);
+        assert_eq!(app.plan_notice, None, "Esc");
     }
 
     /// §6.3: a failed read keeps the last snapshot and says why once; `g`

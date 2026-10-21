@@ -249,6 +249,10 @@ pub struct FeatureModel {
     /// and the run with notes agreed): only then may a View say what the
     /// features do NOT run (review C5/C6).
     pub complete: bool,
+    /// The map is current and only scenarios that cannot run keep it from
+    /// being complete: what the others ran is known (the whole-journey
+    /// check, item 2), though never what no feature runs.
+    pub complete_but_cannot_run: bool,
     /// Every unit with Rust some feature needs re-checked, in plan order.
     pub recheck: Vec<String>,
 }
@@ -392,6 +396,7 @@ pub fn build(
         unknown: 0,
         no_single_main: no_single_main(snapshot),
         complete: false,
+        complete_but_cannot_run: false,
         recheck: Vec::new(),
     };
     let (list, now_features) = match &snapshot.features {
@@ -534,6 +539,14 @@ pub fn build(
             records
                 .get(&(s.feature.clone(), s.id.clone()))
                 .is_some_and(|r| r.noted == "complete" && r.probe_agrees)
+        });
+    model.complete_but_cannot_run = !model.complete
+        && model.map.current()
+        && list.scenarios.iter().all(|s| {
+            let record = records.get(&(s.feature.clone(), s.id.clone()));
+            let cannot_run = list.input_unusable(s).is_some()
+                || record.is_some_and(|r| !r.stable || !r.end.starts_with("exit "));
+            cannot_run || record.is_some_and(|r| r.noted == "complete" && r.probe_agrees)
         });
     if model.map.current() {
         model.by_function = ran_by.clone();

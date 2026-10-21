@@ -1503,7 +1503,19 @@ fn a_tools_screen_comes_back_to_the_project_view() {
     // And into the tool again, as the event loop does on Open tool.
     let read = crate::load::read_tool(&root, Some("t-lzg")).unwrap();
     app.last = Some("Accept t-benchmark — done (1 s); c for details".into());
+    // The session's settings follow, as the palette does: why the theme is
+    // on and the pane width cockpit.toml fixed (the whole-journey check,
+    // item 9: the help's theme line was wrong on the tool's screen, and the
+    // pane 60 columns wide on the Project view was 53 on the tool's).
+    let chosen = crate::theme::Chosen {
+        theme: crate::theme::Theme::Dark,
+        from: crate::theme::Source::Variable,
+    };
+    app.theme_chosen = chosen;
+    app.files_width = Some(60);
     app.open_tool("t-lzg".into(), read);
+    assert_eq!(app.theme_chosen, chosen, "why the theme is on follows");
+    assert_eq!(app.files_width, Some(60), "the pane width follows");
     assert!(!app.in_project_view());
     assert_eq!(app.last, None);
     assert_eq!(app.config.tool.as_deref(), Some("t-lzg"));

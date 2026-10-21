@@ -1691,8 +1691,18 @@ pub(crate) fn unit_features_line(app: &App, unit_id: &str) -> Option<String> {
             "Features need a program with one main() — this target's facts show none.".into(),
         );
     }
-    if !model.complete {
+    // Only scenarios that cannot run keep a current map from being
+    // complete: what the others ran is said, never what none runs (the
+    // whole-journey check, item 2).
+    const FIX: &str = "fix the scenario that cannot run (Features)";
+    let partial = !model.complete && model.complete_but_cannot_run;
+    if !model.complete && !partial {
         return Some("Which features run it: not known — map the features.".into());
+    }
+    if partial && uf.running.is_empty() {
+        return Some(format!(
+            "None of the scenarios that ran reached it; one that cannot run might — {FIX}."
+        ));
     }
     if uf.running.is_empty() {
         return Some(if uf.unwatched == 0 {
@@ -1757,7 +1767,11 @@ pub(crate) fn unit_features_line(app: &App, unit_id: &str) -> Option<String> {
     } else if !has_rust {
         text.push_str(" · still C");
     }
-    text.push_str(" — see Features");
+    if partial {
+        text.push_str(&format!(" — {FIX}"));
+    } else {
+        text.push_str(" — see Features");
+    }
     Some(text)
 }
 
@@ -8930,6 +8944,11 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
 
     /// A current map in which gzip runs katajainen and main, help runs main.
     fn write_current_map(app: &App) {
+        write_map_with(app, |_| {});
+    }
+
+    /// [`write_current_map`], changed by `tweak` before it is written.
+    fn write_map_with(app: &App, tweak: impl Fn(&mut harness_core::features::FeatureMap)) {
         let read = crate::load::read(&app.config.target).unwrap();
         let now = read.map_now.expect("today's inputs");
         let record =
@@ -8949,7 +8968,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
                     .map(|(a, b)| (a.into(), b.into()))
                     .collect(),
             };
-        let map = harness_core::features::FeatureMap {
+        let mut map = harness_core::features::FeatureMap {
             schema: harness_core::features::MAP_SCHEMA_NAME.into(),
             schema_version: 1,
             inputs: now,
@@ -8967,6 +8986,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
                 record("help", "flag", vec![("src/zopfli/zopfli_bin.c", "main")]),
             ],
         };
+        tweak(&mut map);
         std::fs::write(
             harness_core::features::map_path(&harness_core::ledger::Ledger::new(
                 &app.config.target,
@@ -10919,6 +10939,46 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         assert!(
             screen.contains("None of your features runs this unit's functions"),
             "{screen}"
+        );
+    }
+
+    /// The whole-journey check, item 2: a current map that is incomplete
+    /// only because a scenario cannot run says what the others ran, and the
+    /// way out — never "not known — map the features" right after a map.
+    #[test]
+    fn a_scenario_that_cannot_run_leaves_what_the_others_ran() {
+        let app = zopfli_with_features("feat-cannot-run", FEATURES_TOML);
+        write_map_with(&app, |m| {
+            m.scenarios[1] = harness_core::features::ScenarioRecord::input_unusable(
+                "help",
+                "flag",
+                harness_core::perf::workloads::InputUnusable::Missing,
+            );
+        });
+        let mut app = crate::app::tests::app_of_path(&app.config.target);
+        assert!(!app.features.complete);
+        assert!(app.features.complete_but_cannot_run);
+        let line = unit_features_line(&app, "u001-katajainen").unwrap();
+        assert_eq!(
+            line,
+            "1 of your features runs it · 1 not re-checked — fix the scenario that cannot run (Features)"
+        );
+        app.select(Selection::Unit("u-cache".into()));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(!screen.contains("not known — map the features"), "{screen}");
+        assert!(
+            screen.contains("one that cannot run might — fix the scenario that cannot run"),
+            "{screen}"
+        );
+        // A scenario not mapped at all is still not known.
+        write_map_with(&app, |m| {
+            m.scenarios.pop();
+        });
+        let app = crate::app::tests::app_of_path(&app.config.target);
+        assert!(!app.features.complete_but_cannot_run);
+        assert_eq!(
+            unit_features_line(&app, "u-cache").as_deref(),
+            Some("Which features run it: not known — map the features.")
         );
     }
 

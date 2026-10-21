@@ -1196,8 +1196,17 @@ impl App {
         next.now = self.now;
         next.layout = self.layout.clone();
         // The colours are the session's, not the screen's (the person's
-        // --theme dark went back to the terminal theme on Open tool).
+        // --theme dark went back to the terminal theme on Open tool) — and
+        // so are why that theme is on, the pane width cockpit.toml fixed,
+        // the chat's column, the first move made, and the editor leftovers
+        // and old drafts named on quit (the whole-journey check, item 9).
         next.palette = self.palette;
+        next.theme_chosen = self.theme_chosen;
+        next.files_width = self.files_width;
+        next.chat_column = self.chat_column;
+        next.moved = self.moved;
+        next.leftovers = std::mem::take(&mut self.leftovers);
+        next.kept_drafts = std::mem::take(&mut self.kept_drafts);
         next.rebuild_rows();
         next.refresh_view(true);
         next.notice = notice(format!(
@@ -1214,8 +1223,10 @@ impl App {
         };
         p.shown = true;
         p.chat_wanted = chat_on;
-        // The tool's last command is not the project's.
+        // The tool's last command is not the project's, nor its plan's
+        // summary.
         self.last = None;
+        self.plan_notice = None;
         self.last_waiting = false;
         // The next chat starts on the project, no tool open (the switch
         // waits while the chat holds a conversation).
