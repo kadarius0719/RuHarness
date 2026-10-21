@@ -101,6 +101,12 @@ pub enum Action {
         /// A workload, not features.
         workloads: bool,
     },
+    /// Edit from the chat's proposal…: the proposal opened as the draft
+    /// against the person's file (§9.6).
+    EditFromProposal {
+        /// The workloads file's, not the features file's.
+        workloads: bool,
+    },
 }
 
 /// One menu item.

@@ -216,6 +216,10 @@ pub struct Draft {
     pub error_line: Option<u32>,
     /// When the editor was started.
     pub started: Option<Instant>,
+    /// It started from the chat's proposal (docs/COCKPIT-WRAPPER-DESIGN.md
+    /// §9.6): left as it is, it is still offered for saving, and once
+    /// saved the proposal goes.
+    pub from_proposal: bool,
 }
 
 /// The name every features draft's private dir starts with (named on quit).
@@ -322,6 +326,32 @@ pub fn build_config_words(editor: &str, new: bool) -> Vec<String> {
     ]
 }
 
+/// The proposal dialog's first line (§9.6): "The chat's proposal, 4
+/// scenarios in 3 features, opens in nano: read it, change what you like,
+/// save."
+pub fn proposal_words(kind: DraftKind, text: &str, editor: &str) -> String {
+    let plural = |n: usize, one: &str| format!("{n} {one}{}", if n == 1 { "" } else { "s" });
+    let counts = match kind {
+        DraftKind::Features => features::parse(text, Path::new("features.toml"), "migration")
+            .ok()
+            .map(|f| {
+                format!(
+                    ", {} in {},",
+                    plural(f.scenarios.len(), "scenario"),
+                    plural(f.features.len(), "feature")
+                )
+            }),
+        DraftKind::Workloads => workloads::parse(text, Path::new(workloads::WORKLOADS_FILE))
+            .ok()
+            .map(|w| format!(", {},", plural(w.workloads.len(), "workload"))),
+        DraftKind::BuildConfig => None,
+    };
+    format!(
+        "The chat's proposal{} opens in {editor}: read it, change what you like, save.",
+        counts.unwrap_or_default()
+    )
+}
+
 /// The line a loader message names (`… at line N, column M …`).
 fn error_line(message: &str) -> Option<u32> {
     let rest = message.split("at line ").nth(1)?;
@@ -360,8 +390,25 @@ impl App {
     }
 
     /// Menu: Write / Edit the `kind` file, or continue its kept draft —
-    /// the dialog that says which editor opens and how to leave it.
+    /// the dialog that says which editor opens and how to leave it. With
+    /// no file and the chat's proposal waiting, the draft is the proposal.
     pub fn start_edit(&mut self, kind: DraftKind) -> Command {
+        self.start_edit_from(kind, false)
+    }
+
+    /// Menu: Edit from the chat's proposal… — the proposal as the draft,
+    /// against the file as it is now: saving replaces it, as any edit
+    /// (docs/COCKPIT-WRAPPER-DESIGN.md §9.6).
+    pub fn start_edit_from_proposal(&mut self, kind: DraftKind) -> Command {
+        if self.draft(kind).is_some() {
+            self.editing = kind;
+            self.notice = notice("a draft of yours is kept — save or discard it first");
+            return Command::None;
+        }
+        self.start_edit_from(kind, true)
+    }
+
+    fn start_edit_from(&mut self, kind: DraftKind, from_proposal: bool) -> Command {
         self.editing = kind;
         let noun = kind.noun();
         if self.running {
@@ -400,6 +447,25 @@ impl App {
                     return Command::None;
                 }
             };
+            // The chat's proposal: asked for, or the file's place when
+            // there is no file (§9.6).
+            let proposal = if from_proposal || expect == "none" {
+                match self.read_proposal(kind) {
+                    Ok(p) => p,
+                    Err(why) => {
+                        self.notice = notice(why);
+                        return Command::None;
+                    }
+                }
+            } else {
+                None
+            };
+            if from_proposal && proposal.is_none() {
+                self.notice = notice("the chat's proposal is gone — ask the chat again");
+                return Command::None;
+            }
+            let from_proposal = proposal.is_some();
+            let text = proposal.unwrap_or(text);
             let tmp = match handedit::private_dir(&std::env::temp_dir(), kind.prefix()) {
                 Ok(t) => t,
                 Err(e) => {
@@ -422,16 +488,82 @@ impl App {
                 before: text,
                 error_line: None,
                 started: None,
+                from_proposal,
             });
         }
         self.open_editor_dialog();
         Command::None
     }
 
+    /// The chat's proposal of `kind`'s file, read as the person's own
+    /// file is: a regular file (never through a link), within the file's
+    /// cap, UTF-8. `Ok(None)` when there is none; `Err` in words.
+    fn read_proposal(&self, kind: DraftKind) -> Result<Option<String>, String> {
+        let Some(path) = kind.proposed_path(&self.config) else {
+            return Ok(None);
+        };
+        match harness_core::ledger::read_regular(&path, kind.max_bytes()) {
+            Ok(bytes) => String::from_utf8(bytes)
+                .map(Some)
+                .map_err(|_| "the chat's proposal is not UTF-8 text — ask the chat again".into()),
+            Err(e) if e.is_not_found() => Ok(None),
+            Err(e) => Err(format!("the chat's proposal cannot be read: {e}")),
+        }
+    }
+
+    /// The saved draft came from the chat's proposal: the proposal goes
+    /// (its text lives in the file now) — only while it is still what the
+    /// draft started from, so a newer proposal stays.
+    fn remove_proposal(&self, kind: DraftKind, origin: &str) {
+        let Some(path) = kind.proposed_path(&self.config) else {
+            return;
+        };
+        if harness_core::ledger::read_regular(&path, kind.max_bytes())
+            .is_ok_and(|bytes| bytes == origin.as_bytes())
+        {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
     fn open_editor_dialog(&mut self) {
         let kind = self.editing;
         let editor = self.features_editor();
         let name = editor_name(&editor);
+        if let Some(d) = self.draft(kind).filter(|d| d.from_proposal) {
+            let title = format!("Open the chat's proposal in {name}?");
+            let mut body = vec![proposal_words(kind, &d.origin, &name)];
+            body.push(if d.expect == "none" {
+                format!(
+                    "It is a private copy: {} is written only when you save.",
+                    kind.rel_path(&self.config)
+                )
+            } else {
+                format!(
+                    "It is a private copy: saving replaces {} as it is now.",
+                    kind.rel_path(&self.config)
+                )
+            });
+            body.push(editor_instructions(&name));
+            body.push(
+                "When you come back, the cockpit checks it and asks before saving it.".into(),
+            );
+            let mut dialog = Dialog::new(Kind::OpenEditor, self.now);
+            dialog.chat_rules = false;
+            if let Some(open) = dialog
+                .buttons
+                .iter_mut()
+                .find(|b| b.choice == crate::dialog::Choice::Run)
+            {
+                open.label = format!("Open {name}").into();
+            }
+            self.mode = Mode::Dialog(Box::new(super::Confirm {
+                dialog,
+                title,
+                body,
+                purpose: Purpose::OpenEditor,
+            }));
+            return;
+        }
         let title = match kind {
             DraftKind::BuildConfig if self.draft(kind).is_some_and(|d| d.expect == "none") => {
                 format!("Write the build configuration in {name}?")
@@ -641,6 +773,9 @@ impl App {
         // configuration all the same ("no flags"): the person saw it and
         // left, so it is written.
         let example_kept = kind == DraftKind::BuildConfig && draft.expect == "none";
+        // The chat's proposal, read and left as it is, is the person's
+        // choice all the same (§9.6): it is offered for saving.
+        let example_kept = example_kept || draft.from_proposal;
         if untouched && !example_kept {
             self.notice = notice("No change.");
             return self.discard_quietly(kind);
@@ -867,6 +1002,10 @@ impl App {
         if success {
             let d = self.draft(kind)?;
             if std::fs::read_to_string(&d.file).is_ok_and(|now| now == saved) {
+                if d.from_proposal {
+                    let origin = d.origin.clone();
+                    self.remove_proposal(kind, &origin);
+                }
                 return self.draft_slot(kind).take().map(|d| d.tmp);
             }
             self.notice = notice(format!(

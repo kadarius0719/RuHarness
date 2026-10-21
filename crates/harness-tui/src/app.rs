@@ -3611,6 +3611,13 @@ impl App {
                 }
                 Command::None
             }
+            Action::EditFromProposal { workloads } => {
+                self.start_edit_from_proposal(if *workloads {
+                    features_edit::DraftKind::Workloads
+                } else {
+                    features_edit::DraftKind::Features
+                })
+            }
         }
     }
 

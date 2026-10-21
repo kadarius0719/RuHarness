@@ -151,6 +151,20 @@ impl App {
         it.model = true;
         it.greyed = self.propose_greyed(kind);
         items.push(it);
+        // With the person's file there, the proposal opens against it.
+        if self.has_own_file(kind) && self.has_proposal(kind) && self.draft(kind).is_none() {
+            let mut it = item(
+                "Edit from the chat's proposal…",
+                Action::EditFromProposal {
+                    workloads: kind == DraftKind::Workloads,
+                },
+                None,
+            );
+            if self.running {
+                it.greyed = Some("a command is running (one at a time)".into());
+            }
+            items.push(it);
+        }
     }
 
     /// The Next step on the Features (or Speed) row with no file of the
@@ -318,6 +332,7 @@ pub(crate) mod tests {
             before: String::new(),
             error_line: None,
             started: None,
+            from_proposal: false,
         });
         let it = find(&app, FEATURES).unwrap();
         assert_eq!(
@@ -361,6 +376,181 @@ pub(crate) mod tests {
                 .is_some_and(|n| n.text.contains("Write your features file opens it")),
             "{:?}",
             app.notice.as_ref().map(|n| &n.text)
+        );
+    }
+
+    /// A proposal as harness-mcp writes it: its header, then the chat's
+    /// text (two scenarios in two features).
+    const PROPOSAL: &str =
+        "# The chat's proposal for your features file, written by m on 2026-10-20.\n\n\
+schema_version = 1\n\n[[feature]]\nid = \"gzip\"\nname = \"Compress to gzip\"\n\n\
+[[feature]]\nid = \"help\"\nname = \"Show the help\"\n\n\
+# Compresses English text.\n[[scenario]]\nfeature = \"gzip\"\nid = \"text\"\n\
+args = [\"-c\", \"{input}\"]\ninput = \"sample:text\"\n\n\
+# The help.\n[[scenario]]\nfeature = \"help\"\nid = \"flag\"\nargs = [\"-h\"]\n";
+
+    fn ok() -> std::io::Result<std::process::ExitStatus> {
+        use std::os::unix::process::ExitStatusExt;
+        Ok(std::process::ExitStatus::from_raw(0))
+    }
+
+    fn write_proposal(app: &App, kind: DraftKind, text: &str) -> std::path::PathBuf {
+        let path = kind.proposed_path(&app.config).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    /// The editor dialog, then its Open: the draft's file.
+    fn open(app: &mut App, from_proposal: bool) -> (String, Vec<String>, std::path::PathBuf) {
+        if from_proposal {
+            app.start_edit_from_proposal(DraftKind::Features);
+        } else {
+            app.start_features_edit();
+        }
+        let confirm = match std::mem::replace(&mut app.mode, Mode::Normal) {
+            Mode::Dialog(c) => *c,
+            other => panic!(
+                "the editor dialog: {other:?} ({:?})",
+                app.notice.as_ref().map(|n| &n.text)
+            ),
+        };
+        let (title, body) = (confirm.title.clone(), confirm.body.clone());
+        match app.close_features_dialog(confirm.purpose, crate::dialog::Choice::Run) {
+            crate::app::Command::EditFeatures { file, .. } => (title, body, file),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// No file and a proposal: Write opens the proposal as the draft, the
+    /// dialog says so; left as it is, it is offered for saving; once saved
+    /// the proposal goes.
+    #[test]
+    fn write_opens_the_proposal_as_the_draft_and_the_save_removes_it() {
+        let mut app = app_of_without_features("targets/zopfli", "propose-open");
+        let path = write_proposal(&app, DraftKind::Features, PROPOSAL);
+        let name = crate::app::features_edit::editor_name(&app.features_editor());
+        let (title, body, file) = open(&mut app, false);
+        assert_eq!(title, format!("Open the chat's proposal in {name}?"));
+        assert_eq!(
+            body[0],
+            format!(
+                "The chat's proposal, 2 scenarios in 2 features, opens in {name}: read it, change \
+                 what you like, save."
+            )
+        );
+        assert!(
+            body[1].contains("is written only when you save"),
+            "{body:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), PROPOSAL);
+        let d = app.features_draft.as_ref().unwrap();
+        assert!(d.from_proposal);
+        assert_eq!(d.expect, "none");
+        // Back from the editor with it as it was: the Save dialog, not "No
+        // change".
+        app.features_draft.as_mut().unwrap().started =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(5));
+        app.features_edited(ok());
+        let Mode::Dialog(c) = &app.mode else {
+            panic!("the save dialog: {:?}", app.mode)
+        };
+        let crate::app::Purpose::Act(p) = &c.purpose else {
+            panic!("{:?}", c.purpose)
+        };
+        assert_eq!(p.act, crate::app::Act::SaveFeatures);
+        assert_eq!(p.stdin.as_deref(), Some(PROPOSAL));
+        app.mode = Mode::Normal;
+        // Saved: the draft and the proposal go.
+        assert!(app
+            .features_save_ended(DraftKind::Features, true, PROPOSAL)
+            .is_some());
+        assert!(app.features_draft.is_none());
+        assert!(!path.exists(), "the proposal is removed once saved");
+    }
+
+    /// A proposal rewritten by the chat while the person edited stays
+    /// after their save; a failed save keeps both.
+    #[test]
+    fn a_newer_proposal_is_kept_after_the_save() {
+        let mut app = app_of_without_features("targets/zopfli", "propose-newer");
+        let path = write_proposal(&app, DraftKind::Features, PROPOSAL);
+        let (_, _, file) = open(&mut app, false);
+        let mine = PROPOSAL.replace("Show the help", "Help");
+        std::fs::write(&file, &mine).unwrap();
+        assert!(app
+            .features_save_ended(DraftKind::Features, false, &mine)
+            .is_none());
+        assert!(path.exists());
+        std::fs::write(&path, PROPOSAL.replace("gzip", "zip")).unwrap();
+        assert!(app
+            .features_save_ended(DraftKind::Features, true, &mine)
+            .is_some());
+        assert!(path.exists(), "a newer proposal stays");
+    }
+
+    /// With the file there: Write opens the file, and the heading's menu
+    /// offers Edit from the chat's proposal…, which opens the proposal
+    /// against the file's digest.
+    #[test]
+    fn with_a_file_the_proposal_opens_from_its_own_item() {
+        let mut app = crate::app::tests::app_of("targets/zopfli", "propose-edit-from");
+        app.select(Selection::Features);
+        assert!(find(&app, "Edit from the chat's proposal…").is_none());
+        write_proposal(&app, DraftKind::Features, PROPOSAL);
+        let it = find(&app, "Edit from the chat's proposal…").expect("the item");
+        assert_eq!(it.action, Action::EditFromProposal { workloads: false });
+        assert!(!it.model);
+        // The Next step stays the row's own.
+        assert_ne!(
+            app.advice(&Selection::Features).unwrap().action,
+            Some(Action::EditFeatures)
+        );
+        let (title, body, file) = open(&mut app, true);
+        assert!(title.starts_with("Open the chat's proposal in "), "{title}");
+        assert!(body[1].contains("saving replaces"), "{body:?}");
+        assert_eq!(std::fs::read_to_string(file).unwrap(), PROPOSAL);
+        let d = app.features_draft.as_ref().unwrap();
+        let current =
+            std::fs::read(harness_core::features::features_path(&app.config.ledger())).unwrap();
+        assert_eq!(d.expect, harness_core::hash::bytes_hash(&current));
+        // A kept draft: the item is gone (Continue my draft stands).
+        assert!(find(&app, "Edit from the chat's proposal…").is_none());
+        // Write (Edit) on the file opens the file, not the proposal.
+        let tmp = app.features_draft.take().unwrap().tmp;
+        let _ = std::fs::remove_dir_all(tmp);
+        let (title, _, file) = open(&mut app, false);
+        assert!(title.starts_with("Open the features file in "), "{title}");
+        assert_eq!(std::fs::read(file).unwrap(), current);
+    }
+
+    /// A proposal reached through a link is never read: refused, said.
+    #[test]
+    fn a_linked_proposal_is_refused() {
+        let mut app = app_of_without_features("targets/zopfli", "propose-link");
+        let path = DraftKind::Workloads.proposed_path(&app.config).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let elsewhere = app.config.target.join("elsewhere.toml");
+        std::fs::write(&elsewhere, "schema_version = 1\n").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+        app.start_edit(DraftKind::Workloads);
+        assert!(matches!(app.mode, Mode::Normal), "{:?}", app.mode);
+        assert!(
+            app.notice
+                .as_ref()
+                .is_some_and(|n| n.text.contains("the chat's proposal cannot be read")),
+            "{:?}",
+            app.notice.as_ref().map(|n| &n.text)
+        );
+        assert!(app.workloads_draft.is_none());
+        // The workloads proposal's words.
+        assert_eq!(
+            crate::app::features_edit::proposal_words(
+                DraftKind::Workloads,
+                "schema_version = 1\n[[workload]]\nid = \"a\"\nargs = [\"-h\"]\n",
+                "nano"
+            ),
+            "The chat's proposal, 1 workload, opens in nano: read it, change what you like, save."
         );
     }
 }
