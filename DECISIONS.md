@@ -93,6 +93,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-10-20 — **A readable default: the theme chosen from the terminal's background, title bands, fewer blue things** — the cockpit asks the terminal for its background and picks dark or light; panes get title bands and a gap; the section colour only on titles and group headings.
 - 2026-10-21 — **A project file as a scenario's input; the chat's fix** — `input` may name a small file in the project (the workloads' rules, 8 MiB), read once, copied under its basename; a file the run cannot use is the scenario's `input-unusable`; the brief's stability and real-input rules; Fix the features (workloads) file — ask in chat, with read tools for both files.
 - 2026-10-21 — **Beyond the leaves: the leaf cap was an assumption, not a rule** — the spike moved a calling piece green with the callee linked; BEYOND-LEAVES-DESIGN; callees as the program stands, an extern allow-list, callee digests in the verdict.
+- 2026-10-21 — **Beyond the leaves, pass A: the judge** — every build links the callees as the program stands through one function; a failed link is a red check; callee digests in the verdict and the driver record; the extern allow-list, the import rule, the main holder stays C; the whole program links every accepted piece; promoted constants ignored.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -4054,3 +4055,40 @@ until the end-state design. Two passes, the judge then the cockpit, then a live 
 
 **Why not the combined crate now.** Two staticlibs link and run; the combined crate is an
 optimisation and the shape of the end state, not a requirement. It waits with `main`.
+
+## 2026-10-21 — Beyond the leaves, pass A: the judge
+
+**Built** (docs/BEYOND-LEAVES-DESIGN.md §1–§4, SCHEMAS "Beyond the leaves"). `harness_core::deps`
+says which pieces a unit calls (its `depends_on`, transitively, in execution order) and how each
+is linked; `harness_oracle::deps` builds them. Driver validation, both sides of the differential,
+the sanitizer build and every boundary link take them; the whole program (whole-program check and
+features) links every accepted piece's staticlib. A failed link is `differential-driver` red ("the
+C side does not link: …") or `rust-build` red. The verdict and the driver record carry
+`dependencies`; `state status` reads a mismatch as `STALE: dependencies`, the cockpit's read
+model as "out of date (a piece it calls changed)". migrate refuses only the piece holding `main`
+("holds main — stays C in this version"); a unit with dependencies gets the prompt section
+"[FUNCTIONS OF OTHER PIECES YOU MAY CALL]" and may declare its callees in an `extern "C"` block;
+capabilities refuses an import of a program function outside its dependencies; symbol-set ignores
+hidden `anon.….llvm.…` constants. Live: on a copy of the spike's liblzg, with no spike edits,
+`verify u-encode` went green against u-checksum's Rust (recorded `rust`), and u-version moved as
+FIRST-HOUR says, its whole program linking three staticlibs.
+
+**Decided where the design left room.** (1) A Rust callee's digest is its crate's source digest,
+not the staticlib's bytes: verdicts must be the same on every machine and `state status` never
+builds. (2) Driver validation links the callees' *original C*, not the program as it stands: its
+contract is "the driver against the original C", it runs no cargo, and a callee's accepted Rust
+then leaves the caller's test program valid (otherwise every Accept would force the callers' test
+programs to be made again by a model). Its record still lists the callees, so a callee's C edit
+makes it stale. (3) "Accepted" is the plan status verified or merged with the crate present — the
+same rule for the callees and for the whole program; a crate that does not build is linked as its
+C and recorded `c` (`state status` then reads that verdict as stale until the crate builds). (4)
+The piece holding `main` is the unit whose plan symbols name `main`. (5) The prompt lists the
+callee functions the unit's C calls (resolved call refs), with the facts' signatures; the extern
+allow-list is every symbol of every dependency. (6) Two staticlibs are grouped on Linux in every
+link, not only perf's (unchecked: no Linux machine). (7) A promoted constant is ignored when `nm -m`
+shows it hidden on macOS; on ELF the shape alone decides. (8) The two refused links end the run: a
+program that does not link has nothing left to compare.
+
+**Not done here (pass B).** The cockpit's stays-C words, its order and cards, the guide's Part 7
+and the TUTORIAL; the combined crate and the `main` holder stay the end-state design.
+

@@ -1156,10 +1156,13 @@ boundary harder:
    and the judge must check each tool, not one.
 2. **Calls both ways**: real code is mostly non-leaf; Rust must call C that has not moved yet
    (Rust-to-C declarations kept in sync as units move; the plan's order matters more).
+   Built: docs/BEYOND-LEAVES-DESIGN.md (2026-10-21).
 3. **Several Rust units in one program**: each unit is its own staticlib with its own copy of
    Rust's standard library; linking two can clash. The speed work already names these
    (mixed panic runtimes; does not link: `no-std`, `two-no-std`, `lto`, `two-lto`). At scale:
-   one combined Rust library per program.
+   one combined Rust library per program. Built: docs/BEYOND-LEAVES-DESIGN.md (2026-10-21) —
+   the judge's whole program links every accepted piece's staticlib; the combined library
+   waits with the end state.
 4. **Shared data and memory**: structs both sides read (`#[repr(C)]`, exact layout), globals,
    memory allocated on one side and freed on the other, callbacks (function pointers), `errno`,
    varargs.

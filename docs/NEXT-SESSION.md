@@ -63,6 +63,18 @@ pane, the unit views' "Heading:" lines) — the next cockpit design under §9.3'
 newly started cockpit does not remember that a hand-off is waiting; a terminal that answers the
 background query late (slow ssh) could have its reply read as keys (no DA query follows it).
 
+## Done (2026-10-21): beyond the leaves, pass A
+
+The judge tests a piece that calls other pieces (docs/BEYOND-LEAVES-DESIGN.md §1–§4; DECISIONS
+2026-10-21, "Beyond the leaves, pass A"): every build links the callees as the program stands, a
+failed link is a red check, the verdict and the driver record carry `dependencies` (a callee's
+accepted Rust makes its callers `STALE: dependencies`), migrate refuses only the piece holding
+`main`, the prompt names the callees' prototypes and the `extern` block may declare them,
+capabilities has the import rule, the whole program links every accepted piece, and symbol-set
+ignores LLVM's promoted constants. On a copy of the spike's liblzg, `verify u-encode` is green with
+no spike edits. Pass B is next: the cockpit's words, order and cards (§5), the docs (§6), then the
+live walk.
+
 ## The work, in order
 
 1. **The person's own cold-start run.** docs/FIRST-HOUR.md as written (liblzg), then lz4 through

@@ -2555,3 +2555,85 @@ ledger's lock.
 | every file of a ledger folder (the tables above) | the command that writes it today | that ledger's `.lock` |
 | `migration/tools/<id>/harness.toml` | a person; `project accept <id>` | `project accept`: the project lock, then an existing tool's `.lock` (read-only to every other command) |
 | `AGENTS.md` (the target's block), `CLAUDE.md` (`@AGENTS.md`) at the project root | `sync-runtime [--tool <id>]` | the project lock `migration/map/.lock`, then that target's `.lock` (`--check` writes nothing and takes neither) |
+
+# Beyond the leaves: a piece that calls other pieces (docs/BEYOND-LEAVES-DESIGN.md governs; additive)
+
+A unit whose `depends_on` is not empty is judged with the pieces it calls linked in — each
+**as the program stands**: its accepted Rust (status `verified` or `merged`, its unit crate
+present and building) else its C. The callees are the unit's `depends_on`, transitively, in
+`Plan::execution_order`; the plan is read only for a unit that depends on something, so a
+leaf's builds, prompts and records are byte for byte what they were.
+
+## Verdict and driver-validation additions
+
+`inputs.dependencies` (absent when empty), one entry per callee in execution order:
+
+```json
+"dependencies": [ {"unit": "u-checksum", "kind": "rust", "digest": "blake3:…"} ]
+```
+
+- `kind` `c`: the C files linked (the callee's `replaces`, else its `.c` files); `digest` is
+  their file-set hash with their include closure (as `unit_source`).
+- `kind` `rust`: the callee's staticlib, built as verify builds a unit's own (`cargo build
+  --release --offline` into its crate's `target/`, under the tool sandbox); `digest` is its
+  crate's `rust_crate` digest — the sources, not the archive's bytes, so the record is the
+  same on every machine and `state status` compares it without building anything. An
+  accepted callee whose crate is refused or does not build is linked, and recorded, as `c`.
+- `driver-validation.json`'s `inputs.dependencies` has the same shape, always `kind` `c`:
+  validation holds a test program to the original C program. It is fresh only when the
+  list equals today's (as are `unit_source` and `driver`); `migrate`'s R6 rule reads it so.
+- **Freshness.** `state status` recomputes the list as the program stands; a mismatch adds
+  `dependencies` to the verdict's stale inputs (`verdict=green (STALE: dependencies)`), so
+  accepting a callee's Rust makes its callers' verdicts out of date until a Re-check tests
+  them against that Rust. The cockpit's read model words a verdict stale on `dependencies`
+  alone as `out of date (a piece it calls changed)`, with Re-check as its step.
+
+## Builds
+
+Every build of verify, driver validation and the boundary check links the callees, through
+one function (`harness_oracle::deps`): driver validation's `-O2`, `-O0`, sanitizer and mutant
+builds (only the unit's own C is ever mutated; the callees' C is compiled once per
+validation into `dv/dep-<n>/`), both sides of `differential-driver`, the `sanitizers` build
+(as the C side), and every link of the boundary check. Callee C files come before
+staticlibs, staticlibs callers' first.
+
+- **A failed link is a red check, never a harness error.** The C side's test program not
+  linking is `differential-driver` red with the detail `the C side does not link: <the
+  linker's first two lines>` (`harness_core::verdict::DIFFERENTIAL_C_SIDE_LEAD_IN`: a build
+  problem on the harness's side, not the Rust's); the Rust side's is `rust-build` red with
+  `the unit's Rust does not link into the test program: <the linker's first two lines>` — a
+  candidate that forgot or misnamed a callee gets a red it can repair. Either ends the run.
+- **The whole program as it stands.** `whole-program:*` and the feature step's mixed program
+  link all C but the unit's `replaces` and the C of every OTHER accepted piece, plus the
+  unit's staticlib and each accepted piece's (built only when a whole program is built).
+- **Linux.** Where the linker is GNU ld's kind, two or more staticlibs in one link are
+  wrapped in `-Wl,--start-group … -Wl,--end-group`, as perf's program as it stands is.
+  Unchecked here: no Linux machine (macOS links them in either order).
+
+## What the Rust may call
+
+- **The source rule check.** `src/ffi.rs` may hold `extern "C" { … }` blocks declaring only
+  `fn`s named among the symbols of the unit's dependencies (and, for a unit whose C prints,
+  the C stdio output functions). Any other foreign declaration is refused, naming it:
+  `src/ffi.rs: foreign \`extern { … }\` block declaring <name>, which is not a function of a
+  piece this unit calls — such a block may declare only \`fn\`s of those pieces (<symbols>)`.
+  Without dependencies the rule and its words are today's.
+- **The import rule (`capabilities`).** An undefined symbol of the candidate's own archive
+  members that is a public function the facts know in the program's C (not the unit's own)
+  must be a symbol of a piece the unit depends on; otherwise `capabilities` fails with
+  `calls <name>, which belongs to a piece it does not depend on`. Imports of libc and std are
+  judged as before.
+- **`symbol-set`** still reads defined symbols only (a candidate may not define a callee).
+  A defined symbol shaped `anon.<hex>.<n>.llvm.<n>` — a constant LLVM promoted across the
+  crate's codegen units — is not reported when `nm -m` shows it `private external` (macOS);
+  on ELF, whose `nm` shows no visibility, the shape alone decides (a `#[no_mangle]` name
+  cannot hold a dot and `export_name` is refused by the source rule check).
+- **The prompt.** A migrate turn for a unit with dependencies gains the section `[FUNCTIONS
+  OF OTHER PIECES YOU MAY CALL]`: a fixed paragraph, then the C prototypes of the callee
+  functions the unit's C calls (the facts' resolved `call` refs from its include closure;
+  each prototype is the facts' `symbol` record's signature; every dependency symbol when no
+  such ref is recorded), fenced as the `[ABI CONTRACT]` lines are (`<abi_NONCE
+  kind="callees" trust="untrusted">`). No other prompt changes, so recorded traces of leaves
+  replay unchanged.
+- **The piece holding `main`** (its plan symbols name `main`) is refused by `migrate`:
+  `<id> holds main — stays C in this version`. Every other unit may move whatever it calls.
