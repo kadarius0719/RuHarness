@@ -370,7 +370,11 @@ pub fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect, column: bool, str
                  Code is not installed or not signed in, the cockpit shows how to fix it.",
                 app.chat.sign_in
             ),
-            Err(why) => format!("The chat is unavailable: {why}"),
+            // With the way out (the whole-journey check, item 13).
+            Err(why) => format!(
+                "The chat is unavailable: {} — choose Check the chat's connection",
+                why.trim_end_matches('.')
+            ),
         };
         wrapped(&intro, width, notice())
             .into_iter()

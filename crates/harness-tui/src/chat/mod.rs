@@ -1462,7 +1462,7 @@ impl Chat {
             "harness_workloads_file" => Some("· read the workloads file".to_string()),
             "harness_unit" => Some(match input.get("attempt").and_then(Value::as_str) {
                 Some(a) => format!("· read {} of {}", short_attempt(a), arg(&input, "unit")),
-                None => format!("· read unit {}", arg(&input, "unit")),
+                None => format!("· read piece {}", arg(&input, "unit")),
             }),
             "harness_request" => Some(format!(
                 "· read the request of {} (page {})",

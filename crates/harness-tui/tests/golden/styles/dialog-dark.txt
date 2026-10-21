@@ -2,8 +2,8 @@
   @0-99 fg 243 NONE "Files                          u-lib · done"
 │▾ harness-tu…0000000000 ✓1/1│ │All 8 steps done ✓                                                 │
   @0-99 fg 243 NONE "│▾ harness-tu…0000000000 ✓1/1│ │All 8 steps done ✓                                                 │"
-│  ▾ Units (1)               │ │✓ u-lib done                                                       │
-  @0-99 fg 243 NONE "│  ▾ Units (1)               │ │✓ u-lib done                                                       │"
+│  ▾ Pieces (1)              │ │✓ u-lib done                                                       │
+  @0-99 fg 243 NONE "│  ▾ Pieces (1)              │ │✓ u-lib done                                                       │"
 │    ▸ ✓ u-lib           done│ │Next: In Rust and checked — nothing to do                          │
   @0-99 fg 243 NONE "│    ▸ ✓ u-lib           done│ │Next: In Rust and checked — nothing to do                          │"
 │    Features (none yet)     │ │                                                                   │
@@ -16,12 +16,12 @@
   @0-11 fg 243 NONE "│"
   @12-87 fg 75 bg 237 BOLD "┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐"
   @88-99 fg 243 NONE "date       │"
-│           │Builds u-lib's Rust and runs it against the C in the sandbox.             │e tree)    │
+│           │Builds u-lib's Rust and runs it against the C in the sandbox.             │ree)       │
   @0-11 fg 243 NONE "│"
   @12-12 fg 75 bg 237 BOLD "│"
   @13-86 fg - bg 237 NONE "Builds u-lib's Rust and runs it against the C in the sandbox."
   @87-87 fg 75 bg 237 BOLD "│"
-  @88-99 fg 243 NONE "e tree)    │"
+  @88-99 fg 243 NONE "ree)       │"
 │           │Writes: the judge's check of u-lib and its status in the plan; changes no │           │
   @0-11 fg 243 NONE "│"
   @12-12 fg 75 bg 237 BOLD "│"

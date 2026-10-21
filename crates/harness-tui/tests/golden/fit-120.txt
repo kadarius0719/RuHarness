@@ -1,23 +1,23 @@
 ┌ Files ───────────────────────────────┐┌ u-cache · no test program ───────────────────────────────────────────────────┐
-│▾ harness-tui…0000000000 ✓0/13 (+1 ✓?)││Step 6 of 8: Test program                                                     │
-│  ▾ Units (11)                        ││◇ u-cache no test program                                                     │
+│▾ harness-tui-fit-0000000000      ✓1/4││Step 6 of 8: Test program                                                     │
+│  ▾ Pieces (11)                       ││◇ u-cache no test program                                                     │
 │    ▸ ✓ u001-katajainen           done││Next: Make the test program — run harness gen-driver u-cache (the chat is off)│
-│    ▸ ◇ u-cache        no test program││                                                                              │
-│    ▸ ◇ u-hash         no test program││5 exported functions: ZopfliCacheToSublen (22 lines), ZopfliCleanCache (5     │
-│    ▸ · u-lz77                 stays C││lines), ZopfliInitCache (19 lines), ZopfliMaxCachedSublen (11 lines),         │
-│    ▸ · u-tree                 stays C││ZopfliSublenToCache (32 lines)                                                │
-│    ▸ · u-blockspli…te-squeeze stays C││Its C: 1 file — src/zopfli/cache.c                                            │
-│    ▸ · u-gzip_container       stays C││No Rust yet                                                                   │
-│    ▸ ◇ u-util         no test program││5 of your features run it · still C — see Features                            │
-│    ▸ · u-zlib_container       stays C││Attempts: none yet                                                            │
-│    ▸ · u-zopfli_lib           stays C││                                                                              │
-│    ▸ · u-zopfli_bin           stays C││▸ C source (Tab to the View, then Enter)                                      │
+│      ◇ u-cache        no test program││                                                                              │
+│      ◇ u-hash         no test program││5 exported functions: ZopfliCacheToSublen (22 lines), ZopfliCleanCache (5     │
+│      · u-lz77                 stays C││lines), ZopfliInitCache (19 lines), ZopfliMaxCachedSublen (11 lines),         │
+│      · u-tree                 stays C││ZopfliSublenToCache (32 lines)                                                │
+│      · u-blockspli…te-squeeze stays C││Its C: 1 file — src/zopfli/cache.c                                            │
+│      · u-gzip_container       stays C││No Rust yet                                                                   │
+│      ◇ u-util         no test program││5 of your features run it · still C — see Features                            │
+│      · u-zlib_container       stays C││Tries: none yet                                                               │
+│      · u-zopfli_lib           stays C││                                                                              │
+│      · u-zopfli_bin           stays C││▸ C source (Tab to the View, then Enter)                                      │
 │  ▾ Features (7)                      ││                                                                              │
-│      ◉ Compress to gzip              ││                                                                              │
-│      ◉ Compress to zlib              ││                                                                              │
-│      ◉ Compress to raw deflate       ││                                                                              │
-│      ◉ Say what it does              ││                                                                              │
-│      ◉ Compress quickly              ││                                                                              │
+│      ◉ Compress to gzip         holds││                                                                              │
+│      ◉ Compress to zlib         holds││                                                                              │
+│      ◉ Compress to raw deflate  holds││                                                                              │
+│      ◉ Say what it does         holds││                                                                              │
+│      ◉ Compress quickly         holds││                                                                              │
 │      ◌ Show the help      still all C││                                                                              │
 │      ◌ Report a …ing file still all C││                                                                              │
 │    Speed — not set up                ││                                                                              │

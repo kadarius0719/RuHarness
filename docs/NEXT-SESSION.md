@@ -54,6 +54,16 @@ flight, or a design.
 - **2026-10-21, file inputs and the chat's fix** (FEATURES-DESIGN §14): a scenario's input may
   be a small file in the project; `input-unusable` as a reason; **Fix the features file — ask in
   chat**; the chat's brief knows which scenarios cannot be checks.
+- **2026-10-21, the cockpit after the whole-journey check** (eighteen snags; DECISIONS of that
+  date): the plan's summary yields to the hint line at the first key; a unit says what the
+  features ran when only a scenario that cannot run keeps the map incomplete; one count about
+  moving (the pieces that can move are the denominator); a test program waiting for its answer
+  is a waiting piece; the tool's journey stays on its earliest unfinished stage; Open tool keeps
+  the theme's why and `files_width`; the Project view ranks a tool with work ready first;
+  dialogs of three lines for the build configuration and the adoption question; the `i` card
+  ends with the pane's Next line; greyed reasons never cut; on screen every word is **piece**
+  and **try** (the commands and files keep unit and attempt); a feature row never cuts its state
+  word. Walked on a liblzg copy at 120x40 and 100x30.
 
 Still open from these, for the person: the live chat tests once (`crates/harness-tui/tests/
 chat_live.rs`, both hosts; the brief and the tool list changed many times); a live "Fix the

@@ -2,8 +2,8 @@
   @0-99 fg DarkGray NONE "┌ Files ─────────────────────┐┌ u-lib · done ──────────────────────────────────────────────────────┐"
 │▾ harness-tu…0000000000 ✓1/1││All 8 steps done ✓                                                  │
   @0-99 fg DarkGray NONE "│▾ harness-tu…0000000000 ✓1/1││All 8 steps done ✓                                                  │"
-│  ▾ Units (1)               ││✓ u-lib done                                                        │
-  @0-99 fg DarkGray NONE "│  ▾ Units (1)               ││✓ u-lib done                                                        │"
+│  ▾ Pieces (1)              ││✓ u-lib done                                                        │
+  @0-99 fg DarkGray NONE "│  ▾ Pieces (1)              ││✓ u-lib done                                                        │"
 │    ▸ ✓ u-lib           done││Next: In Rust and checked — nothing to do                           │
   @0-99 fg DarkGray NONE "│    ▸ ✓ u-lib           done││Next: In Rust and checked — nothing to do                           │"
 │    Features (none yet)     ││                                                                    │
@@ -16,11 +16,11 @@
   @0-11 fg DarkGray NONE "│"
   @12-87 fg LightBlue BOLD "┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐"
   @88-99 fg DarkGray NONE "ate        │"
-│           │Builds u-lib's Rust and runs it against the C in the sandbox.             │ tree)     │
+│           │Builds u-lib's Rust and runs it against the C in the sandbox.             │ee)        │
   @0-11 fg DarkGray NONE "│"
   @12-12 fg LightBlue BOLD "│"
   @87-87 fg LightBlue BOLD "│"
-  @88-99 fg DarkGray NONE "tree)     │"
+  @88-99 fg DarkGray NONE "ee)        │"
 │           │Writes: the judge's check of u-lib and its status in the plan; changes no │           │
   @0-11 fg DarkGray NONE "│"
   @12-12 fg LightBlue BOLD "│"

@@ -1,25 +1,25 @@
 ┌ Files ─────────────────────┐┌ u-cache · no test program ─────────────────────────────────────────┐
-│▾ harnes…00000 ✓0/13 (+1 ✓?)││Step 6 of 8: Test program                                           │
-│  ▾ Units (11)              ││◇ u-cache no test program                                           │
+│▾ harness-tu…0000000000 ✓1/4││Step 6 of 8: Test program                                           │
+│  ▾ Pieces (11)             ││◇ u-cache no test program                                           │
 │    ▸ ✓ u001-katajainen done││Next: Make the test program — run harness gen-driver u-cache (the   │
-│    ▸ ◇ u-cache      no test││chat is off)                                                        │
-│    ▸ ◇ u-hash       no test││                                                                    │
-│    ▸ · u-lz77       stays C││5 exported functions: ZopfliCacheToSublen (22 lines),               │
-│    ▸ · u-tree       stays C││ZopfliCleanCache (5 lines), ZopfliInitCache (19 lines),             │
-│    ▸ · u-bloc…ueeze stays C││ZopfliMaxCachedSublen (11 lines), ZopfliSublenToCache (32 lines)    │
-│    ▸ · u-gzip…ainer stays C││Its C: 1 file — src/zopfli/cache.c                                  │
-│    ▸ ◇ u-util       no test││No Rust yet                                                         │
-│    ▸ · u-zlib…ainer stays C││5 of your features run it · still C — see Features                  │
-│    ▸ · u-zopfli_lib stays C││Attempts: none yet                                                  │
-│    ▸ · u-zopfli_bin stays C││                                                                    │
+│      ◇ u-cache      no test││chat is off)                                                        │
+│      ◇ u-hash       no test││                                                                    │
+│      · u-lz77       stays C││5 exported functions: ZopfliCacheToSublen (22 lines),               │
+│      · u-tree       stays C││ZopfliCleanCache (5 lines), ZopfliInitCache (19 lines),             │
+│      · u-bloc…ueeze stays C││ZopfliMaxCachedSublen (11 lines), ZopfliSublenToCache (32 lines)    │
+│      · u-gzip…ainer stays C││Its C: 1 file — src/zopfli/cache.c                                  │
+│      ◇ u-util       no test││No Rust yet                                                         │
+│      · u-zlib…ainer stays C││5 of your features run it · still C — see Features                  │
+│      · u-zopfli_lib stays C││Tries: none yet                                                     │
+│      · u-zopfli_bin stays C││                                                                    │
 │  ▾ Features (7)            ││▸ C source (Tab to the View, then Enter)                            │
-│      ◉ Compress to gzip    ││                                                                    │
-│      ◉ Compress to zlib    ││                                                                    │
-│      ◉ Compress t…w deflate││                                                                    │
-│      ◉ Say what it does    ││                                                                    │
-│      ◉ Compress quickly    ││                                                                    │
-│      ◌ Show the help       ││                                                                    │
-│      ◌ Report a m…sing file││                                                                    │
+│      ◉ Compres…o gzip holds││                                                                    │
+│      ◉ Compres…o zlib holds││                                                                    │
+│      ◉ Compres…eflate holds││                                                                    │
+│      ◉ Say wha…t does holds││                                                                    │
+│      ◉ Compres…uickly holds││                                                                    │
+│      ◌ Show…elp still all C││                                                                    │
+│      ◌ Repo…ile still all C││                                                                    │
 │    Speed — not set up      ││                                                                    │
 │  ▸ src/       ✓0/13 (+1 ✓?)││                                                                    │
 │                            ││                                                                    │
@@ -27,4 +27,4 @@
 └────────────────────────────┘└────────────────────────────────────────────────────────────────────┘
  u-cache: one piece of the program; it has no test program yet.
 
- ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   ? help   q quit
+ ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   i what is this?   ? help   q quit

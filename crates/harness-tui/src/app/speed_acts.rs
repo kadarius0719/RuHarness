@@ -96,13 +96,13 @@ impl App {
     /// the reason it would leave it out (§3.2).
     fn not_measurable(&self, id: &str) -> String {
         let Some(u) = self.snapshot.unit(id) else {
-            return format!("unit {id} is gone");
+            return format!("piece {id} is gone");
         };
         if !matches!(
             u.unit.status,
             harness_core::UnitStatus::Verified | harness_core::UnitStatus::Merged
         ) {
-            return "Speed measures a verified unit's Rust — accept an attempt first".into();
+            return "Speed measures a verified piece's Rust — accept a try first".into();
         }
         match crate::speed::left_out_today(u) {
             Some("accept-interrupted") => format!(
@@ -148,8 +148,8 @@ impl App {
         let two_units = || -> Result<(), String> {
             if self.speed.measurable.len() < 2 {
                 return Err(
-                    "the program as it stands needs two verified units — with one, that \
-                     unit's own row measures the same program"
+                    "the program as it stands needs two verified pieces — with one, that \
+                     piece's own row measures the same program"
                         .into(),
                 );
             }
@@ -275,7 +275,7 @@ impl App {
                 let mut sides = vec!["the C alone".to_string()];
                 if !units.is_empty() {
                     sides.push(format!(
-                        "the program with each verified unit's Rust alone ({})",
+                        "the program with each verified piece's Rust alone ({})",
                         units.join(", ")
                     ));
                 }
@@ -307,7 +307,7 @@ impl App {
             (Act::MeasureProgram, _) => (
                 "Measure the program as it stands?".into(),
                 format!(
-                    "Runs your program on {on}: the C and the program with every verified unit's \
+                    "Runs your program on {on}: the C and the program with every verified piece's \
                      Rust ({}), taking turns — {}.",
                     units.join(", "),
                     n_runs(measured)

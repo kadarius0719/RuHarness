@@ -1,9 +1,9 @@
 ┌ Files ────────────────────────────┐┌ test_case/src/lib.c · done (u-lib) ─────────────────────────────────────────────┐
 │▾ harness-tui-g000-0000000000  ✓1/1││All 8 steps done ✓                                                               │
-│  ▾ Units (1)                      ││✓ u-lib done                                                                     │
+│  ▾ Pieces (1)                     ││✓ u-lib done                                                                     │
 │    ▸ ✓ u-lib                  done││Next: In Rust and checked — nothing to do                                        │
 │    Features (none yet)            ││Its Rust: from try a-13c9 · the judge says green, up to date                     │
-│    Speed — not set up             ││Internal: get_bits() (compared through the unit's exported functions)            │
+│    Speed — not set up             ││Internal: get_bits() (compared through the piece's exported functions)           │
 │  ▾ test_case/                 ✓1/1││C  read_scalefactors (lib.c:17)         ⇄ Rust  read_scalefactors (src/ffi.rs:11)│
 │    ▾ include/                     ││17 void read_scalefactors(bs_t *bs, ui› │  11 pub unsafe extern "C" fn read_scal›│
 │        · lib.h              header││18                                   i› │  12     bs: *mut BsT,                  │
@@ -33,7 +33,7 @@
 │                                   ││42         6.00777173e-07f / 65535, 9.› │  36         core::slice::from_raw_part›│
 │                                   ││43         7.56931807e-07f / 3,     6.› │  37     };                             │
 │                                   ││Checks  – whole program not run  ✓ same exports  ✓ allowed calls only            │
-│                                   ││        ✓ driver shape  ✓ same outputs as C  ✓ sanitizers  ✓ boundary calls      │
+│                                   ││        ✓ test program shape  ✓ same outputs as C  ✓ sanitizers +1               │
 └───────────────────────────────────┘└─────────────────────────────────────────────────────────────────────────────────┘
  lib.c is the C of the piece u-lib; its Rust is done and passed the judge's check.
 

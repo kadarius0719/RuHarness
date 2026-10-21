@@ -1,17 +1,17 @@
 ┌ Files ───────────────────────────────┐┌ Features (none yet) ─────────────────────────────────────────────────────────┐
-│▾ harness-tui…0000000000 ✓0/13 (+1 ✓?)││Step 6 of 8: Test program 1/4                                                 │
-│  ▾ Units (11)                        ││Next: Read the chat's proposal — Enter, then Write your features file         │
+│▾ harness-tui-proposed-0000000000 ✓1/4││Step 6 of 8: Test program 1/4                                                 │
+│  ▾ Pieces (11)                       ││Next: Read the chat's proposal — Enter, then Write your features file         │
 │    ▸ ✓ u001-katajainen           done││                                                                              │
-│    ▸ ◇ u-cache        no test program││The chat's proposal (2 features, 3 scenarios) — …atures/features.proposed.toml│
-│    ▸ ◇ u-hash         no test program││  gzip/text: Compresses English text to gzip.                                 │
-│    ▸ · u-lz77                 stays C││  gzip/empty: Compresses nothing at all.                                      │
-│    ▸ · u-tree                 stays C││  help/flag: -h                                                               │
-│    ▸ · u-blockspli…te-squeeze stays C││Enter: Write your features file — opens it in your editor to change and save  │
-│    ▸ · u-gzip_container       stays C││                                                                              │
-│    ▸ ◇ u-util         no test program││A feature is something a person does with the program and can see the result  │
-│    ▸ · u-zlib_container       stays C││of. Each is one or more runs of the whole program; every Re-check then runs   │
-│    ▸ · u-zopfli_lib           stays C││them on the C and on the program with the unit's Rust.                        │
-│    ▸ · u-zopfli_bin           stays C││                                                                              │
+│      ◇ u-cache        no test program││The chat's proposal (2 features, 3 scenarios) — …atures/features.proposed.toml│
+│      ◇ u-hash         no test program││  gzip/text: Compresses English text to gzip.                                 │
+│      · u-lz77                 stays C││  gzip/empty: Compresses nothing at all.                                      │
+│      · u-tree                 stays C││  help/flag: -h                                                               │
+│      · u-blockspli…te-squeeze stays C││Enter: Write your features file — opens it in your editor to change and save  │
+│      · u-gzip_container       stays C││                                                                              │
+│      ◇ u-util         no test program││A feature is something a person does with the program and can see the result  │
+│      · u-zlib_container       stays C││of. Each is one or more runs of the whole program; every Re-check then runs   │
+│      · u-zopfli_lib           stays C││them on the C and on the program with the piece's Rust.                       │
+│      · u-zopfli_bin           stays C││                                                                              │
 │    Features (none yet)               ││                                                                              │
 │    Speed — not set up                ││                                                                              │
 │  ▸ src/                 ✓0/13 (+1 ✓?)││                                                                              │

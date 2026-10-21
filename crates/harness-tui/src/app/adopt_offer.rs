@@ -27,38 +27,20 @@ impl App {
         }
     }
 
-    /// The adoption dialog: one plain sentence first, then what adopting
-    /// does — the start's own words — and the folder's claim.
+    /// The adoption dialog: the start's three plain lines; what adopting
+    /// does in full and the folder's claim are its card (`i`).
     pub fn ask_adopt(&mut self) {
-        let Some(refused) = self.not_adopted.clone() else {
+        if self.not_adopted.is_none() {
             self.notice = notice("this folder needs no adoption");
             return;
-        };
+        }
         if self.running {
             self.notice = notice("a command is running — adopt the folder when it is done");
             return;
         }
-        let file = harness_core::adopt::adoption_file()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|e| e.to_string());
-        let mut body = vec![crate::adoption::LEAD.to_string()];
-        // The explanation's lines, joined back into paragraphs: one per
-        // dash item.
-        let mut paragraph = String::new();
-        for line in crate::adoption::explanation(&file).lines() {
-            let line = line.trim();
-            if line.starts_with("- ") && !paragraph.is_empty() {
-                body.push(std::mem::take(&mut paragraph));
-            }
-            if !paragraph.is_empty() {
-                paragraph.push(' ');
-            }
-            paragraph.push_str(line);
-        }
-        if !paragraph.is_empty() {
-            body.push(paragraph);
-        }
-        body.push(format!("The refusal: {refused}."));
+        // Three plain lines, as at the start; the rest, with the folder's
+        // claim, is its card, `i` (the whole-journey check, item 11).
+        let body = crate::adoption::short_words();
         let mut dialog = Dialog::new(Kind::Act, self.now);
         dialog.chat_rules = false;
         if let Some(b) = dialog.buttons.iter_mut().find(|b| b.choice == Choice::Run) {

@@ -1,9 +1,9 @@
-┌ Files ───────────────────────────────┐┌ harness-tui-gdetails-0000000000 · 1 of 1 C file in Rust ─────────────────────┐
+┌ Files ───────────────────────────────┐┌ harness-tui-gdetails-0000000000 · its one piece that can move is in Rust ────┐
 │▾ harness-tui-gdetails-0000000000 ✓1/1││All 8 steps done ✓                                                            │
-│  ▾ Units (1)                         ││Next: Name a workload for Speed — Enter on the Speed row                      │
+│  ▾ Pieces (1)                        ││Next: Name a workload for Speed — Enter on the Speed row                      │
 │    ▸ ✓ u-lib                     done││                                                                              │
 │    Features (none yet)               ││2 files scanned                                                               │
-│    Speed — not set up                ││Units (1): 1 ✓ done                                                           │
+│    Speed — not set up                ││Pieces (1): 1 ✓ done                                                          │
 │  ▸ test_case/                    ✓1/1││                                                                              │
 │                                      ││                                                                              │
 │                                      ││                                                                              │

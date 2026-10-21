@@ -624,6 +624,15 @@ pub fn acceptable(unit: &UnitView) -> Option<&str> {
         .map(|a| a.record.id.as_str())
 }
 
+/// A try at the unit's test program stopped at a hand-off: the piece
+/// waits for an answer, as for a try at its Rust (the whole-journey check,
+/// item 7).
+pub fn driver_waiting(unit: &UnitView) -> bool {
+    unit.driver_attempts
+        .iter()
+        .any(|a| a.outcome == "in-progress")
+}
+
 /// A unit's state (§2.3, first match wins).
 pub fn unit_state(unit: &UnitView) -> UnitState {
     let r = &unit.report;
@@ -689,6 +698,7 @@ pub fn unit_state(unit: &UnitView) -> UnitState {
             .attempts
             .iter()
             .any(|a| a.record.outcome == "in-progress")
+            || driver_waiting(unit)
         {
             return UnitState::Waiting;
         }
@@ -1147,7 +1157,7 @@ mod tests {
             .units
             .iter()
             .position(|u| u.unit.files.len() == 3)
-            .expect("a 3-file unit");
+            .expect("a 3-file piece");
         for f in &snap.units[three].unit.files {
             assert_eq!(files.file(f).unwrap().state, FileState::Owned(three), "{f}");
         }

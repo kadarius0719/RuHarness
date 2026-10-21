@@ -95,6 +95,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-10-21 — **Beyond the leaves: the leaf cap was an assumption, not a rule** — the spike moved a calling piece green with the callee linked; BEYOND-LEAVES-DESIGN; callees as the program stands, an extern allow-list, callee digests in the verdict.
 - 2026-10-21 — **Beyond the leaves, pass A: the judge** — every build links the callees as the program stands through one function; a failed link is a red check; callee digests in the verdict and the driver record; the extern allow-list, the import rule, the main holder stays C; the whole program links every accepted piece; promoted constants ignored.
 - 2026-10-21 — **Beyond the leaves, proven on a fresh copy; four gaps for pass B** — three pieces moved in order, the program with three Rust pieces the same as the C; a stale callee not reported on the caller, the features' program digest, the status line's words.
+- 2026-10-21 — **The cockpit after the whole-journey check: eighteen snags** — the plan's summary yields to the hint; one count about moving; a waiting test program; the Project view's order; dialogs of three lines; piece and try on every screen; greyed reasons never cut.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -4120,3 +4121,106 @@ the cockpit's "out of date (a piece it calls changed)" should be the command lin
 **Not a gap.** Changing checksum.c once u-checksum's Rust is accepted does not make u-encode out
 of date: the program runs the Rust, not that C. By design ("as the program stands"); the docs say
 it in those words.
+## 2026-10-21 — The cockpit after the whole-journey check: eighteen snags
+
+A newcomer check walked the cockpit through the whole journey on liblzg and listed eighteen
+snags: two that block a newcomer, twelve that slow one down, four cosmetic. All fixed in
+crates/harness-tui (and one plural in harness-cli's `features map` line), in four commits, then
+walked once on a liblzg copy (map, configure, accept, open, scan and plan in the cockpit;
+u-version's test program and Rust on the command line with `--no-promote`), at 120x40 and
+100x30, which found five more small things (fixed in a fifth commit).
+
+**What blocked.**
+- **The plan's summary held the hint's row.** `plan changed N units — …` stayed on the notice
+  row until the next command, hiding every hint sentence and greyed reason through the stages
+  done on the command line. It now yields at the first key or mouse move (as `Last:` lets the
+  hint have row two), so `g`, `c` and `Esc` clear it too, and a move back to the Project view
+  drops it.
+- **"Which features run it: not known" right after a map.** A scenario whose input is missing
+  made the map incomplete, so no piece said anything. The feature model now knows when only
+  scenarios that cannot run keep a current map from being complete; a piece then says what the
+  others ran and ends "fix the scenario that cannot run (Features)". It still never claims that
+  no feature runs it (that scenario might).
+
+**What slowed.**
+- A feature's Next names the scenario's own reason (its input file, from today's read or the
+  map's record), not "differs between runs".
+- **One count about moving.** The pieces that can move are the denominator in every sentence:
+  the tool row's count (`✓1/2`), the View's title, the Next step, the hints, the journey
+  ("1 of the 2 that can move is in Rust"; "all 2 …"; "none of the 2 … yet"). The Project card
+  keeps its full breakdown ("4 pieces · 1 done · 2 stay C"). A verified piece with no recorded
+  origin counts as done once, never again as "1 more verified". A plan run counts only its
+  change lines (its "next, …" line made a plan of 4 say 5).
+- A piece with a green try waiting says "Its Rust: not accepted yet — try a-… is green".
+- A waiting try's row, word and card say the piece's waiting sentence (its answer file, the
+  command to run again), never "It has not finished" or "in 0 turns".
+- **A test program waiting for its answer is a waiting piece**: `⚑ waiting for your answer`,
+  the `driver-traces/` answer file, `gen-driver` to run again, at the test program's stage.
+- The tool's journey stays on its earliest unfinished stage; the tool's Next for a features
+  re-check reads "open u-… (under Units), then Re-check" (now "under Pieces").
+- **Open tool keeps the session's settings.** It carried the palette and the layout; it now
+  carries the theme's why (the help's line was wrong on the tool's screen) and `files_width`
+  (60 on the Project view was 53 on the tool's). Audited `App::new_from`'s other fields: also
+  carried now the chat's column, the first move made (the first screen's how-to), and the
+  editor leftovers and old drafts named on quit. Not carried, on purpose: kept hand edits,
+  drafts and hand-offs (the move is refused while any is kept), Modify's notes (per try of the
+  tool left), the mouse and layout (already carried).
+- **The Project view's order** (decided): work waiting in a tool, then a tool with a piece ready
+  to start (not scanned yet, or pieces to move), then a program that links, then one that needs
+  a decision, then a tool whose features are not written. COCKPIT-WRAPPER-DESIGN §9.3 and
+  SCHEMAS say so.
+- **Dialogs in one breath.** Write the build configuration: three lines and the editor's own
+  command (`nano <draft>`, not the `sh -c` wrapper that runs it), the rest its `i` card. The
+  adoption question, at the start and in the cockpit, is three plain lines (no "ledger", no
+  "verdict"); its card holds what adopting does in full and the folder's claim; at the start,
+  which is a question on the terminal before the screen, `i` and Enter prints that card. The
+  first scan and the first plan say no "again"; the first plan's item and dialog are "Make the
+  plan" (afterwards "Refresh the plan"), its Next "Make the plan — Enter on the tool row",
+  whether a plan was made read from the plan file.
+- **One Next line.** The `i` card's last line is the pane's Next line, computed once
+  (`App::pane_next`). A feature needing a re-check says it once, in its Next ("open u-… below,
+  then Re-check"); its state heading stays (decided: every View shows its state on line one).
+- **Greyed reasons are never cut**: what row one cannot hold goes on in row two. While the
+  chat cannot be used no reason or card names a chat item (Migrate's reason names `harness
+  gen-driver`, Accept's drops "(or Ask for a proposal — ask in chat)", the card's advice line
+  names `harness project ask`); the chat pane's unavailable line ends "— choose Check the
+  chat's connection".
+- **Piece and try** (decided, item 14): every sentence, heading, menu item and card the cockpit
+  shows says piece and try (`Pieces (4)`, `Open piece`, `Tries: 1`, `try a-49ed of u-version`,
+  `Compare with the accepted try`); the help's States section says once "a piece is a unit in
+  the commands and files; a try is an attempt". Unchanged: ids, commands and their
+  placeholders (`<unit>`), file names and paths, the records' keys, the harness's own refusals
+  quoted as they are (perf's "a plan of at most 999 units", the adoption claim "(N units, M
+  verified)"), and the chat's brief (the chat's words are the model's; changing the brief
+  means the person's live chat tests again — left for them to decide).
+
+**Cosmetic.** No `· id` line on a feature's View; no "verdict" in the Map dialog, the Accept
+card, the features save words or the outside-the-program line; "every check passed"; "test
+program shape"; the Rust row says "Rust"; a command's own records come after its plain lines in
+the details. Grammar: "what the program's own files link", a folder of one file, "(1 needs a
+look)", "not scanned yet" before any scan, "(make the plan first)" after the scan, "the Rust a
+model or you wrote", a feature not yet mapped never "reaches 0 pieces". Cuts: the panes' key
+bar gives up re-read, details, back and pane (in that order) before `i what is this?`; a
+feature row keeps its state word at every width, a short word first ("can't run", "holds",
+"all C"), its name cut before it. Menus: Fold only on rows with rows under them; a piece has ▸
+only when its Rust or its tries are there (→ on one with nothing under it goes to its code);
+Map the project's card (and Ask's and the saves') says what the dialog does not; the program's
+Accept button says Accept.
+
+**Docs.** The cockpit topic (piece and try, the hint line after a plan, the theme and width on
+every screen, the first help page's seven keys, Make the plan), the guide's Steps 12.25–12.30
+and 12.33 and Part 9's help page, the features topic (a mapped project's
+`migration/tools/<id>/features/features.toml`), TUTORIAL (the old migrate refusal's row, the
+three-lines sentence, the menu items: Make the test program, Propose features / a workload, Fix
+the features file), §9.3's order, SCHEMAS's order. The guide's gate is green.
+
+**Tests.** harness-tui and harness-mcp: 589 before, 598 after (nine new: the plan's summary
+yielding, a map incomplete only by an unrunnable scenario, a test program waiting, a try
+waiting, the tool's journey, the scenario's own reason, a greyed reason never cut, the key bar
+and Fold, a feature row's word); the open-tool round trip now checks the theme's why and the
+pane width. Goldens regenerated and read at each commit.
+
+**Open.** The other builder's judge work (harness-core, harness-oracle, harness-llm) may add a
+stale cause in files.rs and model.rs; the changes there are additive (a `driver_waiting`
+function and one more condition). Whether the chat should say piece and try is the person's
+call (the brief and the live chat tests).

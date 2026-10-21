@@ -305,15 +305,30 @@ pub fn editor_argv(editor: &str, file: &Path, line: Option<u32>) -> Vec<OsString
 /// and what happens after — the file is checked and written, and the person
 /// then chooses Map the project again.
 pub fn build_config_words(editor: &str, new: bool) -> Vec<String> {
+    let mut words = build_config_card(editor, new);
+    // Three lines before the command (the whole-journey check, item 11):
+    // the rest is the dialog's card (`i`).
+    words.truncate(1);
+    words.push(
+        "In flags, put the -I and -D parts of your compile line, like [\"-Isrc/include\"].".into(),
+    );
+    words.push(format!(
+        "Back here, the cockpit checks it and writes {CONFIG_FILE}; then Map the project again."
+    ));
+    words
+}
+
+/// The Write (Edit) the build configuration dialog's card: its words in
+/// full.
+pub fn build_config_card(editor: &str, new: bool) -> Vec<String> {
     vec![
         if new {
-            format!(
-                "{editor} opens {CONFIG_FILE}, filled in with the example the map suggests: one \
-                 [[configuration]] with its name, from and flags."
-            )
+            format!("{editor} opens {CONFIG_FILE}, filled in with the example the map suggests.")
         } else {
             format!("{editor} opens {CONFIG_FILE} as it is now.")
         },
+        "It holds one [[configuration]]: its name, from (the build it stands for) and flags."
+            .into(),
         "In flags, put the include folders and defines your build uses (the -I and -D \
          parts of your compile line), each in quotes, like [\"-Isrc/include\"]; flags = [] \
          says it needs none."
@@ -939,10 +954,10 @@ impl App {
             if f == 1 { "" } else { "s" }
         )];
         if new_digest.is_some() && new_digest == old_digest {
-            body.push("Only names changed: no verdict is affected.".into());
+            body.push("Only names changed: no check result is affected.".into());
         } else if n > 0 {
             body.push(
-                "From now on every Re-check runs them; verdicts made before show \"not checked \
+                "From now on every Re-check runs them; checks made before show \"not checked \
                  since you changed them\" until re-checked."
                     .into(),
             );

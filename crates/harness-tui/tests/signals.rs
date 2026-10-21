@@ -352,7 +352,7 @@ fn a_hangup_cancels_the_running_harness_and_its_sandboxed_group() {
     press(DOWN);
     press(b"e");
     let deadline = Instant::now() + Duration::from_secs(30);
-    while !saw("a note for the human attempt") {
+    while !saw("a note for your own try") {
         assert!(
             Instant::now() < deadline,
             "no hand-edit note prompt; the screen ended with:\n{}",

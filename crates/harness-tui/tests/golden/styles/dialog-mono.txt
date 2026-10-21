@@ -2,8 +2,8 @@
   @0-99 fg - DIM "┌ Files ─────────────────────┐┌ u-lib · done ──────────────────────────────────────────────────────┐"
 │▾ harness-tu…0000000000 ✓1/1││All 8 steps done ✓                                                  │
   @0-99 fg - DIM "│▾ harness-tu…0000000000 ✓1/1││All 8 steps done ✓                                                  │"
-│  ▾ Units (1)               ││✓ u-lib done                                                        │
-  @0-99 fg - DIM "│  ▾ Units (1)               ││✓ u-lib done                                                        │"
+│  ▾ Pieces (1)              ││✓ u-lib done                                                        │
+  @0-99 fg - DIM "│  ▾ Pieces (1)              ││✓ u-lib done                                                        │"
 │    ▸ ✓ u-lib           done││Next: In Rust and checked — nothing to do                           │
   @0-99 fg - DIM "│    ▸ ✓ u-lib           done││Next: In Rust and checked — nothing to do                           │"
 │    Features (none yet)     ││                                                                    │
@@ -16,11 +16,11 @@
   @0-11 fg - DIM "│"
   @12-87 fg - BOLD "┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐"
   @88-99 fg - DIM "ate        │"
-│           │Builds u-lib's Rust and runs it against the C in the sandbox.             │ tree)     │
+│           │Builds u-lib's Rust and runs it against the C in the sandbox.             │ee)        │
   @0-11 fg - DIM "│"
   @12-12 fg - BOLD "│"
   @87-87 fg - BOLD "│"
-  @88-99 fg - DIM "tree)     │"
+  @88-99 fg - DIM "ee)        │"
 │           │Writes: the judge's check of u-lib and its status in the plan; changes no │           │
   @0-11 fg - DIM "│"
   @12-12 fg - BOLD "│"

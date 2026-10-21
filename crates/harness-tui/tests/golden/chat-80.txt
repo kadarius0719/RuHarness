@@ -1,6 +1,6 @@
 ┌ Files ───────────────┐┌ Chat — waiting for you · h…───[New]─[?]─ View ─ Chat ┐
 │▾ harness…0000000 ✓1/1││› Please migrate u-lib.                               │
-│  ▾ Units (1)         ││                                                      │
+│  ▾ Pieces (1)        ││                                                      │
 │    ▸ ✓ u-lib     done││I will ask to migrate u-lib.                          │
 │    Features …one yet)││                                                      │
 │    Speed — not set up││  · read the project's status — done                  │
@@ -19,6 +19,6 @@
 │                      ││About: the project                                    │
 │                      ││› Enter reviews the request — or type                 │
 └──────────────────────┘└──────────────────────────────────────────────────────┘
- The C project moving to Rust; its one piece is in Rust.
+ The C project moving to Rust; its one piece that can move is in Rust.
 
  Enter review   Esc decline   Ctrl-J new line   F1 help   Ctrl-C quit

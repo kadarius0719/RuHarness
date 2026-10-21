@@ -703,7 +703,7 @@ impl App {
     /// before its Rust is accepted, or failing.
     fn chat_migrate_argv(&self, unit: &str, model: &str) -> Result<Pending, String> {
         if !harness_core::plan::is_clean_segment(unit) {
-            return Err(format!("{unit:?} is not a plain unit id"));
+            return Err(format!("{unit:?} is not a plain piece id"));
         }
         let (i, u) = self
             .snapshot
@@ -711,7 +711,7 @@ impl App {
             .iter()
             .enumerate()
             .find(|(_, u)| u.unit.id == unit)
-            .ok_or_else(|| format!("unit {unit} is not in the plan"))?;
+            .ok_or_else(|| format!("piece {unit} is not in the plan"))?;
         let state = self
             .files
             .units
@@ -720,13 +720,13 @@ impl App {
             .unwrap_or_else(|| crate::files::unit_state(u));
         if let UnitState::StaysC(deps) = &state {
             return Err(format!(
-                "{unit} calls {}, so in this version it stays C — the judge tests each unit alone",
+                "{unit} calls {}, so in this version it stays C — the judge tests each piece alone",
                 deps.join(", ")
             ));
         }
         if !(state.before_rust() || state == UnitState::Failing) {
             return Err(format!(
-                "unit {unit} is {} — Migrate is for a unit with no Rust accepted yet, or failing",
+                "piece {unit} is {} — Migrate is for a piece with no Rust accepted yet, or failing",
                 state.word()
             ));
         }
@@ -774,7 +774,7 @@ impl App {
     /// out of date.
     fn chat_gen_driver_argv(&self, unit: &str, model: &str) -> Result<Pending, String> {
         if !harness_core::plan::is_clean_segment(unit) {
-            return Err(format!("{unit:?} is not a plain unit id"));
+            return Err(format!("{unit:?} is not a plain piece id"));
         }
         let (i, u) = self
             .snapshot
@@ -782,7 +782,7 @@ impl App {
             .iter()
             .enumerate()
             .find(|(_, u)| u.unit.id == unit)
-            .ok_or_else(|| format!("unit {unit} is not in the plan"))?;
+            .ok_or_else(|| format!("piece {unit} is not in the plan"))?;
         let state = self
             .files
             .units
@@ -791,7 +791,7 @@ impl App {
             .unwrap_or_else(|| crate::files::unit_state(u));
         if let UnitState::StaysC(deps) = &state {
             return Err(format!(
-                "{unit} calls {}, so in this version it stays C — the judge tests each unit alone",
+                "{unit} calls {}, so in this version it stays C — the judge tests each piece alone",
                 deps.join(", ")
             ));
         }
@@ -802,7 +802,7 @@ impl App {
         }
         if !(state.before_rust() || state == UnitState::Failing) {
             return Err(format!(
-                "unit {unit} is {} — a test program is made for a unit with no Rust accepted yet",
+                "piece {unit} is {} — a test program is made for a piece with no Rust accepted yet",
                 state.word()
             ));
         }
@@ -849,23 +849,23 @@ impl App {
     fn chat_retry_refusal(&self, r: &AttemptRecord, model: &str) -> Option<String> {
         if r.requester.as_deref() != Some(harness_core::attempts::REQUESTER_CHAT) {
             return Some(format!(
-                "attempt {} was not asked for in chat — the chat retries only its own attempts",
+                "try {} was not asked for in chat — the chat retries only its own tries",
                 r.id
             ));
         }
         let external = r.provider == EXTERNAL_PROVIDER || r.provider_kind == EXTERNAL_PROVIDER;
         if external && r.model != model {
             return Some(format!(
-                "attempt {} was answered by {}, not by this chat's model {model}",
+                "try {} was answered by {}, not by this chat's model {model}",
                 r.id, r.model
             ));
         }
         if r.outcome == "in-progress" {
-            return Some(format!("attempt {} is not finished", r.id));
+            return Some(format!("try {} is not finished", r.id));
         }
         if r.seeded_from.is_some() != r.steer_note.is_some() {
             return Some(format!(
-                "attempt {} records only half of a steer: inconsistent, not retried",
+                "try {} records only half of a steer: inconsistent, not retried",
                 r.id
             ));
         }
@@ -889,10 +889,10 @@ impl App {
         let u = self
             .snapshot
             .unit(unit)
-            .ok_or_else(|| format!("unit {unit} is gone"))?;
+            .ok_or_else(|| format!("piece {unit} is gone"))?;
         let a = u
             .attempt(attempt)
-            .ok_or_else(|| format!("attempt {attempt} is not in unit {unit}"))?;
+            .ok_or_else(|| format!("try {attempt} is not in piece {unit}"))?;
         if let Some(why) = self.chat_retry_refusal(&a.record, model) {
             return Err(why);
         }
@@ -957,14 +957,14 @@ impl App {
         let u = self
             .snapshot
             .unit(unit)
-            .ok_or_else(|| format!("unit {unit} is gone"))?;
+            .ok_or_else(|| format!("piece {unit} is gone"))?;
         let driver = harness_core::attempts::is_driver_attempt(attempt);
         let r = if driver {
             u.driver_attempt(attempt)
         } else {
             u.attempt(attempt).map(|a| &a.record)
         }
-        .ok_or_else(|| format!("attempt {attempt} is not in unit {unit}"))?;
+        .ok_or_else(|| format!("try {attempt} is not in piece {unit}"))?;
         let held = self
             .asks
             .table
@@ -975,7 +975,7 @@ impl App {
         };
         if held.key != key {
             return Err(format!(
-                "attempt {attempt} waits on request {}, not {key}",
+                "try {attempt} waits on request {}, not {key}",
                 held.key
             ));
         }
@@ -990,16 +990,16 @@ impl App {
         }
         if r.requester.as_deref() != Some(harness_core::attempts::REQUESTER_CHAT) {
             return Err(format!(
-                "attempt {attempt} was not asked for in chat: its hand-off is answered by hand \
-                 (see Help), or ask for a steer attempt from it"
+                "try {attempt} was not asked for in chat: its hand-off is answered by hand \
+                 (see Help), or ask for a steered try from it"
             ));
         }
         if r.outcome != "in-progress" {
-            return Err(format!("attempt {attempt} is no longer in progress"));
+            return Err(format!("try {attempt} is no longer in progress"));
         }
         if r.model != model {
             return Err(format!(
-                "attempt {attempt} is answered by {}, not by {model}",
+                "try {attempt} is answered by {}, not by {model}",
                 r.model
             ));
         }
@@ -1077,10 +1077,10 @@ impl App {
             return Err("the chat withdrew this request".into());
         }
         let ledger = self.config.ledger();
-        let unit = p.unit.as_deref().ok_or("no unit")?;
+        let unit = p.unit.as_deref().ok_or("no piece")?;
         let load = |a: &str| {
             AttemptRecord::load(&harness_core::attempts::attempt_dir(&ledger, unit, a))
-                .map_err(|e| format!("attempt {a} could not be read: {e}"))
+                .map_err(|e| format!("try {a} could not be read: {e}"))
         };
         match p.act {
             Act::Migrate => {
@@ -1090,14 +1090,14 @@ impl App {
                     .units
                     .iter()
                     .find(|u| u.id == unit)
-                    .ok_or_else(|| format!("unit {unit} is no longer in the plan"))?;
+                    .ok_or_else(|| format!("piece {unit} is no longer in the plan"))?;
                 if matches!(u.status.as_str(), "verified" | "merged" | "blocked") {
-                    return Err(format!("unit {unit} is {} now", u.status.as_str()));
+                    return Err(format!("piece {unit} is {} now", u.status.as_str()));
                 }
                 Ok(())
             }
             Act::Retry => {
-                let a = p.attempt.as_deref().ok_or("no attempt")?;
+                let a = p.attempt.as_deref().ok_or("no try")?;
                 match self.chat_retry_refusal(&load(a)?, &tag.model) {
                     Some(why) => Err(why),
                     None => Ok(()),
@@ -1110,34 +1110,34 @@ impl App {
                     .units
                     .iter()
                     .find(|u| u.id == unit)
-                    .ok_or_else(|| format!("unit {unit} is no longer in the plan"))?;
+                    .ok_or_else(|| format!("piece {unit} is no longer in the plan"))?;
                 if matches!(u.status.as_str(), "verified" | "merged" | "blocked") {
-                    return Err(format!("unit {unit} is {} now", u.status.as_str()));
+                    return Err(format!("piece {unit} is {} now", u.status.as_str()));
                 }
                 Ok(())
             }
             Act::Continue => {
-                let a = p.attempt.as_deref().ok_or("no attempt")?;
+                let a = p.attempt.as_deref().ok_or("no try")?;
                 let key = tag.key.as_deref().ok_or("no request key")?;
                 let r = if harness_core::attempts::is_driver_attempt(a) {
                     AttemptRecord::load(&harness_core::attempts::driver_attempt_dir(
                         &ledger, unit, a,
                     ))
-                    .map_err(|e| format!("attempt {a} could not be read: {e}"))?
+                    .map_err(|e| format!("try {a} could not be read: {e}"))?
                 } else {
                     load(a)?
                 };
                 if r.outcome != "in-progress" {
-                    return Err(format!("attempt {a} is no longer in progress"));
+                    return Err(format!("try {a} is no longer in progress"));
                 }
                 if r.requester.as_deref() != Some(harness_core::attempts::REQUESTER_CHAT) {
-                    return Err(format!("attempt {a} was not asked for in chat"));
+                    return Err(format!("try {a} was not asked for in chat"));
                 }
                 if r.model != tag.model {
-                    return Err(format!("attempt {a} is answered by {}", r.model));
+                    return Err(format!("try {a} is answered by {}", r.model));
                 }
                 if self.asks.table.get(a).map(|h| h.key.as_str()) != Some(key) {
-                    return Err(format!("attempt {a} no longer waits on request {key}"));
+                    return Err(format!("try {a} no longer waits on request {key}"));
                 }
                 if response_present(&self.chat_response(unit, a, key)) {
                     return Err(format!("request {key} already has a response"));
@@ -1917,11 +1917,11 @@ impl App {
                 Some(i) if harness_core::plan::is_clean_segment(id) => {
                     let state = self.files.units.get(i).map(|x| x.state.word());
                     match state {
-                        Some(s) => format!("the unit {id} ({s})"),
-                        None => format!("the unit {id}"),
+                        Some(s) => format!("the piece {id} ({s})"),
+                        None => format!("the piece {id}"),
                     }
                 }
-                _ => "a unit whose id is not shown".into(),
+                _ => "a piece whose id is not shown".into(),
             }
         };
         match &self.selection {
@@ -1929,7 +1929,7 @@ impl App {
             Selection::Dir(p) => format!("the directory {}", path(p)),
             Selection::File(p) => format!("the C file {}", path(p)),
             Selection::Function(p, _) => format!("a function in {}", path(p)),
-            Selection::Units => "the list of units".into(),
+            Selection::Units => "the list of pieces".into(),
             Selection::Features => "the list of the person's features".into(),
             // Ids only: a feature's name is the person's text, never the
             // chat's (docs/FEATURES-DESIGN.md §2.3).
@@ -1960,11 +1960,11 @@ impl App {
                 let id = if fence::is_attempt_id(a) {
                     a.clone()
                 } else {
-                    "an attempt".into()
+                    "a try".into()
                 };
                 match outcome {
-                    Some(o) => format!("the attempt {id} ({o}) of {}", unit_word(u)),
-                    None => format!("the attempt {id} of {}", unit_word(u)),
+                    Some(o) => format!("the try {id} ({o}) of {}", unit_word(u)),
+                    None => format!("the try {id} of {}", unit_word(u)),
                 }
             }
         }
@@ -1982,7 +1982,7 @@ impl App {
             Selection::Unit(id) => format!("Migrate {id}"),
             _ => match self.model_step_unit(false) {
                 Some(id) => format!("Migrate {id}"),
-                None => "Migrate the next unit with no Rust yet".to_string(),
+                None => "Migrate the next piece with no Rust yet".to_string(),
             },
         };
         self.chat.input.insert(&text);
@@ -1999,7 +1999,7 @@ impl App {
         }
         let text = match &self.selection {
             Selection::Unit(id) => format!("Make the test program for {id}"),
-            _ => "Make the test program for the next unit".to_string(),
+            _ => "Make the test program for the next piece".to_string(),
         };
         self.chat.input.insert(&text);
         self.move_focus(Focus::Chat);
@@ -2149,8 +2149,8 @@ fn no_key_held(r: &AttemptRecord) -> String {
         _ => format!("ask for Migrate of {} again", r.unit),
     };
     format!(
-        "no answer is expected here for attempt {}: the cockpit holds no request key for it in \
-         this chat — {act}; it resumes the attempt and poses the request again",
+        "no answer is expected here for try {}: the cockpit holds no request key for it in \
+         this chat — {act}; it resumes the try and poses the request again",
         r.id
     )
 }
@@ -2290,7 +2290,7 @@ fn outcome_message(o: &Owed, failed_read: Option<&str>) -> (String, String, T) {
             .attempt
             .as_deref()
             .is_some_and(harness_core::attempts::is_driver_attempt);
-    let unit = o.unit.as_deref().unwrap_or("the unit");
+    let unit = o.unit.as_deref().unwrap_or("the piece");
     let failed_words = || {
         c.messages
             .iter()

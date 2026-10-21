@@ -68,6 +68,21 @@ impl App {
         self.advice_of(sel).map(|a| self.unless_chat_down(a))
     }
 
+    /// The Next step the View pane shows while `sel` is selected — the
+    /// line the `i` card ends with, computed here once so the two never
+    /// disagree (the whole-journey check, item 12): the Project view's own
+    /// Next step there, the row back to it on a tool's screen, else the
+    /// selection's.
+    pub fn pane_next(&self, sel: &Selection) -> Option<Advice> {
+        if self.in_project_view() {
+            self.project_next()
+        } else if *sel == Selection::ProjectHome {
+            self.project_row_advice(sel)
+        } else {
+            self.advice(sel)
+        }
+    }
+
     fn advice_of(&self, sel: &Selection) -> Option<Advice> {
         match sel {
             Selection::Project | Selection::Units => self.next_step(),
@@ -85,7 +100,7 @@ impl App {
                         Some(Action::Act(Act::Scan)),
                     )),
                     Some(FileState::NotInPlan) => Some(advice(
-                        "this file is in no unit yet — Refresh the plan",
+                        "this file is in no piece yet — Refresh the plan",
                         Some(Action::Act(Act::Plan)),
                     )),
                     Some(FileState::Owned(_)) => {
@@ -122,40 +137,7 @@ impl App {
             ),
             // Why is the line above it on the card.
             UnitState::StaysC(_) => advice("nothing to do on it in this version", None),
-            UnitState::Waiting => {
-                // An attempt of this session's: Resume; one the command line
-                // left: its answer file and the command again.
-                if let Some(aw) = self.awaiting.iter().find(|aw| {
-                    unit.attempts
-                        .iter()
-                        .any(|a| aw.attempt.as_ref() == Some(&a.record.id))
-                }) {
-                    advice(
-                        crate::app::waiting_words(
-                            &crate::app::short_file(&aw.path),
-                            "open its attempt and choose Resume",
-                        ),
-                        aw.attempt.clone().map(Action::ChooseAttempt),
-                    )
-                } else {
-                    match self.pending_answer(unit) {
-                        // The command line's try: its answer is the
-                        // person's (the chat answers only its own tries).
-                        Some(path) => advice(
-                            format!(
-                                "waiting for your answer: {} — write the reply there, then run \
-                                 the same migrate command again",
-                                crate::app::short_file(&path)
-                            ),
-                            None,
-                        ),
-                        None => advice(
-                            "an attempt has not finished — it may still be running elsewhere",
-                            None,
-                        ),
-                    }
-                }
-            }
+            UnitState::Waiting => self.waiting_advice(unit),
             UnitState::RustGreen
             | UnitState::RustTried
             | UnitState::TestProgramReady
@@ -177,7 +159,7 @@ impl App {
                 }) {
                     advice(
                         format!(
-                            "attempt {} waits for an answer to its hand-off — open it, then \
+                            "try {} waits for an answer to its hand-off — open it, then \
                              Resume",
                             aw.attempt
                                 .as_deref()
@@ -191,8 +173,8 @@ impl App {
                     // never recommended, the Migrate item stays listed.
                     advice(
                         format!(
-                            "it calls other units ({}), so in this version it stays C — the judge \
-                             tests each unit alone",
+                            "it calls other pieces ({}), so in this version it stays C — the judge \
+                             tests each piece alone",
                             unit.unit.depends_on.join(", ")
                         ),
                         None,
@@ -261,7 +243,7 @@ impl App {
                     && !matches!(self.speed.group, crate::speed::Group::NoFile)
                 {
                     advice(
-                        "in Rust and checked — Measure this unit's speed to compare it with the C",
+                        "in Rust and checked — Measure this piece's speed to compare it with the C",
                         Some(Action::Act(Act::Measure)),
                     )
                 } else {
@@ -278,7 +260,14 @@ impl App {
     pub fn pending_answer(&self, unit: &crate::model::UnitView) -> Option<std::path::PathBuf> {
         let dir = self.snapshot.ledger().unit_dir(&unit.unit.id);
         let mut found: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
-        for sub in ["traces", "traces/chat"] {
+        // A test program's hand-off waits under driver-traces/ (the
+        // whole-journey check, item 7).
+        for sub in [
+            "traces",
+            "traces/chat",
+            "driver-traces",
+            "driver-traces/chat",
+        ] {
             let Ok(entries) = std::fs::read_dir(dir.join(sub)) else {
                 continue;
             };
@@ -301,6 +290,65 @@ impl App {
         found.into_iter().max().map(|(_, p)| p)
     }
 
+    /// A waiting piece's Next step — its row, its tries' rows and their
+    /// cards say the same (the whole-journey check, items 6 and 7): a try of
+    /// this session's is resumed; one the command line left names its
+    /// answer file and the command to run again (`gen-driver` for a test
+    /// program's, `migrate` for its Rust's).
+    pub fn waiting_advice(&self, unit: &crate::model::UnitView) -> Advice {
+        let ours = |id: &str| {
+            unit.attempts.iter().any(|a| a.record.id == id)
+                || unit.driver_attempts.iter().any(|a| a.id == id)
+        };
+        if let Some(aw) = self
+            .awaiting
+            .iter()
+            .find(|aw| aw.attempt.as_deref().is_some_and(ours))
+        {
+            let driver = unit
+                .driver_attempts
+                .iter()
+                .any(|a| aw.attempt.as_ref() == Some(&a.id));
+            return advice(
+                crate::app::waiting_words(
+                    &crate::app::short_file(&aw.path),
+                    if driver {
+                        "choose Make the test program again"
+                    } else {
+                        "open its try and choose Resume"
+                    },
+                ),
+                aw.attempt
+                    .clone()
+                    .filter(|_| !driver)
+                    .map(Action::ChooseAttempt),
+            );
+        }
+        match self.pending_answer(unit) {
+            // The command line's try: its answer is the person's (the chat
+            // answers only its own tries).
+            Some(path) => {
+                let command = if path.components().any(|c| c.as_os_str() == "driver-traces") {
+                    "gen-driver"
+                } else {
+                    "migrate"
+                };
+                advice(
+                    format!(
+                        "waiting for your answer: {} — write the reply there, then run the same \
+                         {command} command again",
+                        crate::app::short_file(&path)
+                    ),
+                    None,
+                )
+            }
+            None => advice(
+                "a try has not finished — it may still be running elsewhere",
+                None,
+            ),
+        }
+    }
+
     /// An attempt's Next step.
     fn attempt_advice(&self, u: usize, id: &str) -> Option<Advice> {
         let unit = self.snapshot.units.get(u)?;
@@ -318,19 +366,19 @@ impl App {
         }
         if r.promoted {
             return Some(advice(
-                "this is the Rust the unit uses — nothing to do",
+                "this is the Rust the piece uses — nothing to do",
                 None,
             ));
         }
         Some(match r.outcome.as_str() {
             "green" => advice(
                 format!(
-                    "it passed every check (GREEN) — look over its code below, then Accept it into {}",
+                    "every check passed — look over its code below, then Accept it into {}",
                     unit.unit.id
                 ),
                 Some(Action::Act(Act::Accept)),
             ),
-            "in-progress" => advice("it has not finished", None),
+            "in-progress" => self.waiting_advice(unit),
             _ if a.is_human() => advice(
                 "your hand edit did not pass — Show the checks, then Hand edit again",
                 Some(Action::HandEdit),
@@ -376,7 +424,7 @@ impl App {
                     featmap::MapStatus::OutOfDate(_) => {
                         "the map is out of date — Map the features again"
                     }
-                    _ => "not mapped yet — Map the features, so each says which units it runs",
+                    _ => "not mapped yet — Map the features, so each says which pieces it runs",
                 },
                 Some(Action::Act(Act::MapFeatures)),
             ),
@@ -386,7 +434,7 @@ impl App {
                     None,
                 ),
                 None => advice(
-                    "nothing to do — choose a feature to see which units it runs",
+                    "nothing to do — choose a feature to see which pieces it runs",
                     None,
                 ),
             },
@@ -398,14 +446,14 @@ impl App {
         use featmap::FeatureState as S;
         let f = self.features.feature(id)?;
         Some(match &f.state {
-            S::Failing => advice("open the failing unit below and Show its checks", None),
+            S::Failing => advice("open the failing piece below and Show its checks", None),
             S::ScenarioCannotRun => advice(
                 "change or remove the scenario that cannot run (Edit the features file)",
                 Some(Action::EditFeatures),
             ),
             S::NeedsRecheck => advice(
                 format!(
-                    "Re-check {} — your features are not checked on {} yet",
+                    "open {} below, then Re-check — your features are not checked on {} yet",
                     f.recheck.join(", "),
                     if f.recheck.len() == 1 { "it" } else { "them" }
                 ),
@@ -421,18 +469,18 @@ impl App {
             ),
             S::MapIncomplete => advice("see the scenario flagged below", None),
             S::ReachesNoUnit => advice(
-                "nothing to do — or add a scenario that reaches a unit",
+                "nothing to do — or add a scenario that reaches a piece",
                 None,
             ),
             S::AllMigrated | S::HoldsSoFar { .. } => advice(
-                "nothing to do — it keeps being checked as more units move to Rust",
+                "nothing to do — it keeps being checked as more pieces move to Rust",
                 None,
             ),
             S::AllC => advice(
-                "migrate one of its units below; every Re-check then checks this feature",
+                "migrate one of its pieces below; every Re-check then checks this feature",
                 None,
             ),
-            S::SeeUnits => advice("see its units below", None),
+            S::SeeUnits => advice("see its pieces below", None),
         })
     }
 
@@ -462,7 +510,7 @@ impl App {
                 Some(Action::Act(Act::Measure)),
             ),
             Group::COnly => advice(
-                "only the C is measured: a unit is measured once its Rust is verified",
+                "only the C is measured: a piece is measured once its Rust is verified",
                 None,
             ),
             Group::Units { .. } => {
@@ -484,7 +532,7 @@ impl App {
                 }) {
                     advice(
                         format!(
-                            "{}'s Rust is slower than the C — open it under Units to see how to \
+                            "{}'s Rust is slower than the C — open it under Pieces to see how to \
                              change it, if speed matters there",
                             u.id
                         ),

@@ -301,9 +301,11 @@ fn while_the_chat_is_unavailable_its_items_are_greyed_and_never_recommended() {
         .iter()
         .find(|i| i.label == "Migrate — ask in chat")
         .unwrap();
+    // Never the chat's item while the chat cannot be used: the command
+    // line's way (the whole-journey check, item 13).
     assert_eq!(
         migrate.greyed.as_deref(),
-        Some("it has no test program yet — Make the test program first")
+        Some("it has no test program yet — make one first: run harness gen-driver u-cache")
     );
     let make = m
         .items

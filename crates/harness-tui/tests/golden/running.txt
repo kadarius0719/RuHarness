@@ -1,9 +1,9 @@
-┌ Files ────────────────────────────┐┌ harness-tui-grun-0000000000 · 1 of 1 C file in Rust ────────────────────────────┐
+┌ Files ────────────────────────────┐┌ harness-tui-grun-0000000000 · its one piece that can move is in Rust ───────────┐
 │▾ harness-tui-grun-0000000000  ✓1/1││All 8 steps done ✓                                                               │
-│  ▾ Units (1)                      ││Next: Name a workload for Speed — Enter on the Speed row                         │
+│  ▾ Pieces (1)                     ││Next: Name a workload for Speed — Enter on the Speed row                         │
 │    ▸ ✓ u-lib                  done││                                                                                 │
 │    Features (none yet)            ││2 files scanned                                                                  │
-│    Speed — not set up             ││Units (1): 1 ✓ done                                                              │
+│    Speed — not set up             ││Pieces (1): 1 ✓ done                                                             │
 │  ▸ test_case/                 ✓1/1││                                                                                 │
 │                                   ││                                                                                 │
 │                                   ││                                                                                 │
@@ -16,5 +16,5 @@
 │                                   ││                                                                                 │
 └───────────────────────────────────┘└─────────────────────────────────────────────────────────────────────────────────┘
  * Re-check u-lib: Checked: same outputs as C — passed · 41 s                                     [Cancel x] [Details c]
- harness-tui-grun-0000000000: the C project moving to Rust, its files below; its one piece is in Rust.
- x cancel   ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   c details   g re-read   ? help   q quit
+ harness-tui-grun-0000000000: the C project moving to Rust, its files below; its one piece that can move is in Rust.
+ x cancel   ↑↓ move   ←→ fold/open   Enter actions   Tab pane   Esc back   i what is this?   ? help   q quit

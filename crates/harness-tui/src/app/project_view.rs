@@ -568,8 +568,32 @@ impl App {
             );
         }
         let open = |o: &&Offered| o.acceptable() && !p.tools.contains(&o.id);
-        // A program that links, before one that needs a decision (fix
-        // pass, item 4).
+        // The tool with the most to do: not scanned yet, then pieces to
+        // move, then features not written (the person, 2026-10-20).
+        let most = p
+            .tools
+            .iter()
+            .filter_map(|id| {
+                p.progress
+                    .get(id)
+                    .and_then(ToolProgress::to_do)
+                    .map(|(rank, why)| (rank, id, why))
+            })
+            .min_by_key(|(rank, _, _)| *rank);
+        let open_tool = |id: &String, why: &str| {
+            say(
+                format!("Open tool {} — Enter on its row ({why})", safe_line(id)),
+                why,
+                Some(Action::OpenTool(id.clone())),
+            )
+        };
+        // A tool with a piece ready to start comes first, then a program
+        // that links, then one that needs a decision (the whole-journey
+        // check, item 10: the decision came first and hid the work ready in
+        // the tool just accepted).
+        if let Some((_, id, why)) = most.as_ref().filter(|(rank, _, _)| *rank <= 1) {
+            return open_tool(id, why);
+        }
         if let Some(o) = m
             .offered
             .iter()
@@ -608,24 +632,8 @@ impl App {
             );
         }
         if let Some(first) = p.tools.first() {
-            // The tool with the most to do: not scanned yet, then pieces
-            // to move, then features not written (the person, 2026-10-20).
-            let most = p
-                .tools
-                .iter()
-                .filter_map(|id| {
-                    p.progress
-                        .get(id)
-                        .and_then(ToolProgress::to_do)
-                        .map(|(rank, why)| (rank, id, why))
-                })
-                .min_by_key(|(rank, _, _)| *rank);
             return match most {
-                Some((_, id, why)) => say(
-                    format!("Open tool {} — Enter on its row ({why})", safe_line(id)),
-                    &why,
-                    Some(Action::OpenTool(id.clone())),
-                ),
+                Some((_, id, why)) => open_tool(id, &why),
                 None => say(
                     "Every program is as far as this version goes — write features and \
                      workloads for what matters"
@@ -805,7 +813,14 @@ impl App {
                                 .to_string(),
                         )
                     } else if map.is_some_and(MapView::unstated) {
-                        Some(project::ACCEPT_NEEDS_STATED.to_string())
+                        Some(if self.chat_unavailable().is_none() {
+                            project::ACCEPT_NEEDS_STATED.to_string()
+                        } else {
+                            // Never the chat's item while it cannot be used
+                            // (the whole-journey check, item 13).
+                            project::ACCEPT_NEEDS_STATED
+                                .replace(" (or Ask for a proposal — ask in chat)", "")
+                        })
                     } else {
                         busy.clone()
                     };
@@ -1196,8 +1211,17 @@ impl App {
         next.now = self.now;
         next.layout = self.layout.clone();
         // The colours are the session's, not the screen's (the person's
-        // --theme dark went back to the terminal theme on Open tool).
+        // --theme dark went back to the terminal theme on Open tool) — and
+        // so are why that theme is on, the pane width cockpit.toml fixed,
+        // the chat's column, the first move made, and the editor leftovers
+        // and old drafts named on quit (the whole-journey check, item 9).
         next.palette = self.palette;
+        next.theme_chosen = self.theme_chosen;
+        next.files_width = self.files_width;
+        next.chat_column = self.chat_column;
+        next.moved = self.moved;
+        next.leftovers = std::mem::take(&mut self.leftovers);
+        next.kept_drafts = std::mem::take(&mut self.kept_drafts);
         next.rebuild_rows();
         next.refresh_view(true);
         next.notice = notice(format!(
@@ -1214,8 +1238,10 @@ impl App {
         };
         p.shown = true;
         p.chat_wanted = chat_on;
-        // The tool's last command is not the project's.
+        // The tool's last command is not the project's, nor its plan's
+        // summary.
         self.last = None;
+        self.plan_notice = None;
         self.last_waiting = false;
         // The next chat starts on the project, no tool open (the switch
         // waits while the chat holds a conversation).

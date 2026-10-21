@@ -1,23 +1,23 @@
-  Files                    harness-tui-theme-first-0000000000 · 0 of 13 C files
+  Files                    harness-tui-theme-first-0000000000 · 1 of the 4 that
   @0-23 fg 75 BOLD | REVERSED "Files"
-  @26-78 fg 75 bg 237 BOLD "harness-tui-theme-first-0000000000 · 0 of 13 C files"
-│▾ harn…000 ✓0/13 (+1 …│ │Step 6 of 8: Test program 1/4                        │
+  @26-78 fg 75 bg 237 BOLD "harness-tui-theme-first-0000000000 · 1 of the 4 that"
+│▾ harness…0000000 ✓1/4│ │Step 6 of 8: Test program 1/4                        │
   @0-0 fg 75 BOLD "│"
   @1-2 fg 248 BOLD | REVERSED "▾"
-  @3-11 fg - BOLD | REVERSED "harn…000"
-  @12-22 fg 250 BOLD | REVERSED "✓0/13 (+1 …"
+  @3-18 fg - BOLD | REVERSED "harness…0000000"
+  @19-22 fg 250 BOLD | REVERSED "✓1/4"
   @23-23 fg 75 BOLD "│"
   @25-25 fg 244 NONE "│"
   @39-54 fg - BOLD "Test program 1/4"
   @79-79 fg 244 NONE "│"
-│  ▾ Units (11)        │ │Next: 3 of the 11 can move to Rust now — open        │
+│  ▾ Pieces (11)       │ │Next: 1 of the 4 that can move is in Rust — open     │
   @0-0 fg 75 BOLD "│"
   @1-4 fg 248 NONE "▾"
-  @5-14 fg 75 BOLD "Units (11)"
+  @5-15 fg 75 BOLD "Pieces (11)"
   @23-23 fg 75 BOLD "│"
   @25-25 fg 244 NONE "│"
   @26-30 fg 81 BOLD "Next:"
-  @31-70 fg - BOLD "3 of the 11 can move to Rust now — open"
+  @31-73 fg - BOLD "1 of the 4 that can move is in Rust — open"
   @79-79 fg 244 NONE "│"
 │    ▸ ✓ u001…inen done│ │u-cache: Enter                                       │
   @0-0 fg 75 BOLD "│"
@@ -28,83 +28,73 @@
   @25-25 fg 244 NONE "│"
   @26-39 fg - BOLD "u-cache: Enter"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-c…he no test│ │                                                     │
+│      ◇ u-c…he no test│ │                                                     │
   @0-0 fg 75 BOLD "│"
-  @1-6 fg 248 NONE "▸"
   @7-8 fg 250 NONE "◇"
   @16-22 fg 250 NONE "no test"
   @23-23 fg 75 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-hash no test│ │26 files scanned                                     │
+│      ◇ u-hash no test│ │26 files scanned                                     │
   @0-0 fg 75 BOLD "│"
-  @1-6 fg 248 NONE "▸"
   @7-8 fg 250 NONE "◇"
   @16-22 fg 250 NONE "no test"
   @23-23 fg 75 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ · u-lz77 stays C│ │Units (11): 1 ✓ done · 3 ◇ no test program · 7 ·     │
+│      · u-lz77 stays C│ │Pieces (11): 1 ✓ done · 3 ◇ no test program · 7 ·    │
   @0-0 fg 75 BOLD "│"
-  @1-6 fg 248 NONE "▸"
   @7-8 fg 250 NONE "·"
   @16-22 fg 250 NONE "stays C"
   @23-23 fg 75 BOLD "│"
   @25-25 fg 244 NONE "│"
-  @26-36 fg - BOLD "Units (11):"
+  @26-37 fg - BOLD "Pieces (11):"
   @79-79 fg 244 NONE "│"
-│    ▸ · u-tree stays C│ │stays C                                              │
+│      · u-tree stays C│ │stays C                                              │
   @0-0 fg 75 BOLD "│"
-  @1-6 fg 248 NONE "▸"
-  @7-8 fg 250 NONE "·"
-  @16-22 fg 250 NONE "stays C"
-  @23-23 fg 75 BOLD "│"
-  @25-25 fg 244 NONE "│"
-  @79-79 fg 244 NONE "│"
-│    ▸ · u-b…ze stays C│ │                                                     │
-  @0-0 fg 75 BOLD "│"
-  @1-6 fg 248 NONE "▸"
   @7-8 fg 250 NONE "·"
   @16-22 fg 250 NONE "stays C"
   @23-23 fg 75 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ · u-g…er stays C│ │Features: 7 — 5 hold so far, 2 still all C           │
+│      · u-b…ze stays C│ │                                                     │
   @0-0 fg 75 BOLD "│"
-  @1-6 fg 248 NONE "▸"
+  @7-8 fg 250 NONE "·"
+  @16-22 fg 250 NONE "stays C"
+  @23-23 fg 75 BOLD "│"
+  @25-25 fg 244 NONE "│"
+  @79-79 fg 244 NONE "│"
+│      · u-g…er stays C│ │Features: 7 — 5 hold so far, 2 still all C           │
+  @0-0 fg 75 BOLD "│"
   @7-8 fg 250 NONE "·"
   @16-22 fg 250 NONE "stays C"
   @23-23 fg 75 BOLD "│"
   @25-25 fg 244 NONE "│"
   @26-34 fg - BOLD "Features:"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-util no test│ │                                                     │
+│      ◇ u-util no test│ │                                                     │
   @0-0 fg 75 BOLD "│"
-  @1-6 fg 248 NONE "▸"
   @7-8 fg 250 NONE "◇"
   @16-22 fg 250 NONE "no test"
   @23-23 fg 75 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ · u-z…er stays C│ │                                                     │
+│      · u-z…er stays C│ │                                                     │
   @0-0 fg 75 BOLD "│"
-  @1-6 fg 248 NONE "▸"
   @7-8 fg 250 NONE "·"
   @16-22 fg 250 NONE "stays C"
   @23-23 fg 75 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ · u-z…ib stays C│ │                                                     │
+│      · u-z…ib stays C│ │                                                     │
   @0-0 fg 75 BOLD "│"
-  @1-6 fg 248 NONE "▸"
   @7-8 fg 250 NONE "·"
   @16-22 fg 250 NONE "stays C"
   @23-23 fg 75 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ · u-z…in stays C│ │                                                     │
+│      · u-z…in stays C│ │                                                     │
   @0-0 fg 75 BOLD "│"
-  @1-6 fg 248 NONE "▸"
   @7-8 fg 250 NONE "·"
   @16-22 fg 250 NONE "stays C"
   @23-23 fg 75 BOLD "│"
@@ -117,45 +107,52 @@
   @23-23 fg 75 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      ◉ Compres…o gzip│ │                                                     │
+│      ◉ Comp…zip holds│ │                                                     │
   @0-0 fg 75 BOLD "│"
   @7-8 fg 114 NONE "◉"
+  @18-22 fg 250 NONE "holds"
   @23-23 fg 75 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      ◉ Compres…o zlib│ │                                                     │
+│      ◉ Comp…lib holds│ │                                                     │
   @0-0 fg 75 BOLD "│"
   @7-8 fg 114 NONE "◉"
+  @18-22 fg 250 NONE "holds"
   @23-23 fg 75 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      ◉ Compres…eflate│ │                                                     │
+│      ◉ Comp…ate holds│ │                                                     │
   @0-0 fg 75 BOLD "│"
   @7-8 fg 114 NONE "◉"
+  @18-22 fg 250 NONE "holds"
   @23-23 fg 75 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      ◉ Say wha…t does│ │                                                     │
+│      ◉ Say …oes holds│ │                                                     │
   @0-0 fg 75 BOLD "│"
   @7-8 fg 114 NONE "◉"
+  @18-22 fg 250 NONE "holds"
   @23-23 fg 75 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      ◉ Compres…uickly│ │                                                     │
+│      ◉ Comp…kly holds│ │                                                     │
   @0-0 fg 75 BOLD "│"
   @7-8 fg 114 NONE "◉"
+  @18-22 fg 250 NONE "holds"
   @23-23 fg 75 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      ◌ Show the help │ │                                                     │
+│      ◌ Show…elp all C│ │                                                     │
   @0-0 fg 75 BOLD "│"
   @7-8 fg 250 NONE "◌"
+  @18-22 fg 250 NONE "all C"
   @23-23 fg 75 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      ◌ Report …g file│ │                                                     │
+│      ◌ Repo…ile all C│ │                                                     │
   @0-0 fg 75 BOLD "│"
   @7-8 fg 250 NONE "◌"
+  @18-22 fg 250 NONE "all C"
   @23-23 fg 75 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
@@ -188,16 +185,16 @@
  Ready — ↑↓ to choose a row, Enter for what you can do
   @0-53 fg 250 NONE "Ready — ↑↓ to choose a row, Enter for what you can do"
 
- ↑↓ move   ←→ fold/open   Enter actions   Tab pane   ? help   q quit
+ ↑↓ move   ←→ fold/open   Enter actions   i what is this?   ? help   q quit
   @0-2 fg - BOLD "↑↓"
   @3-8 fg 248 NONE "move"
   @10-12 fg - BOLD "←→"
   @13-23 fg 248 NONE "fold/open"
   @25-30 fg - BOLD "Enter"
   @31-39 fg 248 NONE "actions"
-  @41-44 fg - BOLD "Tab"
-  @45-50 fg 248 NONE "pane"
-  @52-53 fg - BOLD "?"
-  @54-59 fg 248 NONE "help"
-  @61-62 fg - BOLD "q"
-  @63-68 fg 248 NONE "quit"
+  @41-42 fg - BOLD "i"
+  @43-57 fg 248 NONE "what is this?"
+  @59-60 fg - BOLD "?"
+  @61-66 fg 248 NONE "help"
+  @68-69 fg - BOLD "q"
+  @70-75 fg 248 NONE "quit"

@@ -234,6 +234,8 @@ pub fn unit_stage(unit: &UnitView, state: &UnitState) -> Option<usize> {
         UnitState::Migrated(_) | UnitState::OriginUnknown => 9,
         UnitState::RustGreen => 8,
         UnitState::NoTestProgram | UnitState::TestProgramStale => 6,
+        // A test program's try that waits is still at the test program.
+        UnitState::Waiting if crate::files::driver_waiting(unit) => 6,
         UnitState::TestProgramReady | UnitState::RustTried | UnitState::Waiting => 7,
         // A verdict to make again, or one that went red: the stage the unit
         // was in, from what it holds.
@@ -351,6 +353,13 @@ impl App {
                     *d = past == total;
                     counts[i] = Some((past, total));
                 }
+                // The tool as a whole is at its earliest unfinished stage —
+                // never at Accept while another piece has not started (the
+                // whole-journey check, item 8); the tool's own stages first.
+                let current = match current.filter(|c| *c <= 5 && !done[c - 1]) {
+                    Some(c) => Some(c),
+                    None => (5..done.len()).find(|&i| !done[i]).map(|i| i + 1),
+                };
                 Journey::of(&done, counts, current, None)
             }
         }

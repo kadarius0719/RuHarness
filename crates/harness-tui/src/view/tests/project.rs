@@ -238,9 +238,11 @@ fn a_failed_run_says_so_and_offers_the_adoption_question() {
         panic!("no adoption dialog: {:?}", app.mode)
     };
     assert_eq!(c.title, "Adopt this folder?");
-    assert_eq!(c.body[0], crate::adoption::LEAD);
-    assert!(c
-        .body
+    // Three plain lines; the folder's claim is its card (the whole-journey
+    // check, item 11).
+    assert_eq!(c.body, crate::adoption::short_words());
+    let (_, card) = app.act_card(c);
+    assert!(card
         .iter()
         .any(|b| b.contains("this folder already holds migration results made elsewhere")));
     let screen = text(&render(&mut app, 120, 34));
@@ -560,7 +562,14 @@ fn the_build_configuration_is_written_from_the_cockpit() {
     );
     assert!(c.body[0]
         .contains("opens migration/map/config.toml, filled in with the example the map suggests"));
-    assert!(c.body[3].ends_with("then choose Map the project again to map with it."));
+    // Three lines, then the editor's command; the rest is its card (the
+    // whole-journey check, item 11).
+    assert_eq!(c.body.len(), 3);
+    assert!(c.body[2].ends_with("then Map the project again."));
+    let (_, card) = app.act_card(c);
+    assert!(card
+        .iter()
+        .any(|l| l.contains("flags = [] says it needs none")));
     let screen = text(&render(&mut app, 120, 34));
     assert!(screen.contains(&format!("[ Open {name}  y ]")), "{screen}");
     arm(&mut app);
@@ -1036,7 +1045,7 @@ fn the_next_step_is_one_line_for_each_rule() {
     };
     tool("t-unlzg");
     app.reload_project();
-    next(&app); // links, no decision
+    next(&app); // a tool with work ready, before a program that links
     tool("t-lzg");
     tool("l-checksum");
     app.reload_project();
@@ -1057,7 +1066,7 @@ fn the_next_step_is_one_line_for_each_rule() {
             "Write the build configuration — Enter, or Ask for a proposal in the chat".into(),
             "Write the build configuration — Enter (or harness project map --adopt)".into(),
             "Accept t-lzg — Enter on its row".into(),
-            "Accept t-lzg — Enter on its row".into(),
+            "Open tool t-unlzg — Enter on its row (not scanned yet)".into(),
             "Open tool l-checksum — Enter on its row (not scanned yet)".into(),
             "Open tool t-lzg — Enter on its row".into(),
             "Map the project again — Enter".into(),
@@ -1193,9 +1202,11 @@ fn the_tool_just_accepted_is_the_next_step_only_until_the_selection_moves() {
     );
     app.select(Selection::Program("t-unlzg".into()));
     app.select(Selection::Program("t-lzg".into()));
+    // A tool with work ready comes before a program that links (the
+    // whole-journey check, item 10).
     assert_eq!(
         app.project_next().unwrap().text,
-        "Accept l-checksum — Enter on its row"
+        "Open tool t-lzg — Enter on its row (not scanned yet)"
     );
 }
 
@@ -1262,6 +1273,10 @@ fn after_an_accept_the_next_step_is_the_new_tool() {
     app.select(Selection::Program("t-lzg".into()));
     code(&mut app, KeyCode::Enter);
     choose(&mut app, "Accept this program");
+    // Its button says Accept, as a piece's does (the whole-journey check,
+    // item 18).
+    let screen = text(&render(&mut app, 120, 34));
+    assert!(screen.contains("[ Accept  y ]"), "{screen}");
     arm(&mut app);
     let Command::Spawn(p) = key(&mut app, 'y') else {
         panic!("y did not run it: {:?}", app.mode)
@@ -1414,7 +1429,9 @@ fn the_project_view_after_an_accept() {
         // Accepted: its path, no longer what the map guessed.
         "│tools/lzg.c ",
         "│Its build configuration: migration/tools/t-lzg/harness.toml ",
-        "│Enter: Open tool t-lzg ",
+        // Its work ready comes first (the whole-journey check, item 10):
+        // the Next step says what Enter does.
+        "│Next: Open tool t-lzg — Enter on its row (not scanned yet) ",
     ] {
         assert!(screen.contains(words), "{words}\n{screen}");
     }
@@ -1503,7 +1520,19 @@ fn a_tools_screen_comes_back_to_the_project_view() {
     // And into the tool again, as the event loop does on Open tool.
     let read = crate::load::read_tool(&root, Some("t-lzg")).unwrap();
     app.last = Some("Accept t-benchmark — done (1 s); c for details".into());
+    // The session's settings follow, as the palette does: why the theme is
+    // on and the pane width cockpit.toml fixed (the whole-journey check,
+    // item 9: the help's theme line was wrong on the tool's screen, and the
+    // pane 60 columns wide on the Project view was 53 on the tool's).
+    let chosen = crate::theme::Chosen {
+        theme: crate::theme::Theme::Dark,
+        from: crate::theme::Source::Variable,
+    };
+    app.theme_chosen = chosen;
+    app.files_width = Some(60);
     app.open_tool("t-lzg".into(), read);
+    assert_eq!(app.theme_chosen, chosen, "why the theme is on follows");
+    assert_eq!(app.files_width, Some(60), "the pane width follows");
     assert!(!app.in_project_view());
     assert_eq!(app.last, None);
     assert_eq!(app.config.tool.as_deref(), Some("t-lzg"));

@@ -311,8 +311,11 @@ pub fn rows(
                 let id = u.unit.id.clone();
                 let sel = Selection::Unit(id.clone());
                 let open = expansion.is_open(&sel);
-                push_node(&mut rows, 2, sel, true, open);
-                if open {
+                // A ▸ only when something is under it (the whole-journey
+                // check, item 18): its Rust, or its tries.
+                let children = u.crate_dir.is_some() || !u.attempts.is_empty();
+                push_node(&mut rows, 2, sel, children, open && children);
+                if open && children {
                     // Its Rust, only once it exists: a row saying "no Rust
                     // yet" read as a promise, and never kept for a piece
                     // that stays C (2026-10-20).

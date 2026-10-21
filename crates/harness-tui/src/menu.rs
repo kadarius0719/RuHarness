@@ -339,7 +339,7 @@ impl App {
             it
         };
         items.push(scanned(self.act_item(
-            "Measure this unit's speed".into(),
+            "Measure this piece's speed".into(),
             Act::Measure,
             Some(unit),
             None,
@@ -380,11 +380,11 @@ impl App {
     fn recheck_gate(&self, u: usize) -> Option<String> {
         let unit = &self.snapshot.units[u];
         if unit.crate_dir.is_none() {
-            return Some("the unit has no Rust yet".into());
+            return Some("the piece has no Rust yet".into());
         }
         if !unit.report.source_fresh {
             return Some(
-                "the C changed since the unit was planned — scan, refresh the plan and review \
+                "the C changed since the piece was planned — scan, refresh the plan and review \
                  its diff first"
                     .into(),
             );
@@ -392,11 +392,11 @@ impl App {
         if !self.files.units.get(u).is_some_and(|i| i.known_code) {
             return Some(match unit.report.verdict.state {
                 harness_core::status::VerdictState::Present => {
-                    "its Rust differs from every recorded attempt and from what the judge last \
+                    "its Rust differs from every recorded try and from what the judge last \
                      checked — restore it, or record it with `harness override` (see Help)"
                         .into()
                 }
-                _ => "the crate matches no recorded attempt and there is no verdict to compare \
+                _ => "the crate matches no recorded try and there is no verdict to compare \
                       it with — restore the verdict (git), or record the crate with `harness \
                       override` (see Help)"
                     .into(),
@@ -407,7 +407,7 @@ impl App {
         if self.pairs_unit.as_deref() != Some(unit.unit.id.as_str()) || self.pairs_digest.is_none()
         {
             return Some(
-                "open the unit (or its crate) first — the cockpit re-checks only code it shows"
+                "open the piece (or its crate) first — the cockpit re-checks only code it shows"
                     .into(),
             );
         }
@@ -474,7 +474,7 @@ impl App {
                 None,
             )),
             _ => items.push(item(
-                of("Choose an attempt to accept…"),
+                of("Choose a try to accept…"),
                 Action::ChooseAttempt(id.to_string()),
                 None,
             )),
@@ -494,13 +494,18 @@ impl App {
         // The project's Next step names a unit: the jump to it.
         if *sel == Selection::Project {
             if let Some(Action::OpenUnit(id)) = self.next_step().and_then(|n| n.action) {
-                items.push(item(format!("Open unit {id}"), Action::OpenUnit(id), None));
+                items.push(item(format!("Open piece {id}"), Action::OpenUnit(id), None));
             }
         }
-        if matches!(
-            sel,
-            Selection::Dir(_) | Selection::Units | Selection::Features
-        ) {
+        // Fold only on a row that has something under it (the
+        // whole-journey check, item 18): never on `Features (none yet)`.
+        let has_children = match sel {
+            Selection::Units => !self.snapshot.units.is_empty(),
+            Selection::Features => !self.features.features.is_empty(),
+            Selection::Dir(_) => true,
+            _ => false,
+        };
+        if has_children {
             items.push(item(
                 if self.expansion.is_open(sel) {
                     "Fold"
@@ -533,7 +538,7 @@ impl App {
             .owning_unit(sel)
             .is_some_and(|u| !self.snapshot.units[u].report.source_fresh);
         if project || (is_file && file_state == Some(FileState::NotInPlan)) || c_changed {
-            let mut it = self.act_item("Refresh the plan".into(), Act::Plan, None, None);
+            let mut it = self.act_item(self.plan_label().into(), Act::Plan, None, None);
             if it.greyed.is_none() {
                 it.greyed = self.facts_gate();
             }
@@ -619,7 +624,7 @@ impl App {
             Selection::File(_) | Selection::Function(..) => {
                 if let Some(u) = owner {
                     let id = self.snapshot.units[u].unit.id.clone();
-                    items.push(item(format!("Open unit {id}"), Action::OpenUnit(id), None));
+                    items.push(item(format!("Open piece {id}"), Action::OpenUnit(id), None));
                     self.unit_items(u, true, &mut items);
                 }
             }
@@ -735,7 +740,20 @@ impl App {
             it.greyed = if let Some(why) = &stays_c {
                 Some(why.clone())
             } else if needs_driver {
-                Some("it has no test program yet — Make the test program first".to_string())
+                // Never the chat's item while the chat cannot be used
+                // (the whole-journey check, item 13).
+                Some(
+                    match (self.chat_unavailable(), self.model_step_unit(true)) {
+                        (Some(_), Some(u)) => format!(
+                            "it has no test program yet — make one first: run {}",
+                            self.command_line_way("gen-driver", &u)
+                        ),
+                        (Some(_), None) => "it has no test program yet — make one first".into(),
+                        (None, _) => {
+                            "it has no test program yet — Make the test program first".into()
+                        }
+                    },
+                )
             } else {
                 chat_off(false).or_else(draft)
             };
@@ -806,7 +824,7 @@ impl App {
         }
         if self.diff_available(unit, a) {
             items.push(item(
-                "Compare with the promoted attempt",
+                "Compare with the accepted try",
                 Action::Compare,
                 Some("d"),
             ));
@@ -918,7 +936,7 @@ mod tests {
             at(Selection::File("test_case/src/lib.c".into())),
             [
                 "Find risky patterns in the C",
-                "Open unit u-lib",
+                "Open piece u-lib",
                 "Show the checks (u-lib)",
                 "Re-check with the judge (u-lib)",
                 "Re-read the project"
@@ -934,7 +952,7 @@ mod tests {
                 "Show the checks",
                 "Re-check with the judge",
                 // Greyed: no workloads file yet.
-                "(Measure this unit's speed)",
+                "(Measure this piece's speed)",
                 "Re-read the project"
             ]
         );
@@ -963,7 +981,7 @@ mod tests {
                 "Hand edit",
                 "Show the checks",
                 "Replace u-lib's verified crate with a-28d8",
-                "Compare with the promoted attempt",
+                "Compare with the accepted try",
                 "Re-read the project",
                 "Modify with a note"
             ]
@@ -973,7 +991,7 @@ mod tests {
             [
                 "Hand edit",
                 "Show the checks",
-                "Compare with the promoted attempt",
+                "Compare with the accepted try",
                 "Re-read the project",
                 "Modify with a note"
             ]
@@ -1037,7 +1055,7 @@ mod tests {
             .iter()
             .find(|i| i.label == "Re-check with the judge")
             .expect("Re-check listed");
-        assert_eq!(recheck.greyed.as_deref(), Some("the unit has no Rust yet"));
+        assert_eq!(recheck.greyed.as_deref(), Some("the piece has no Rust yet"));
         // The chat off: Migrate is greyed, so nothing is recommended.
         app.mode = crate::app::Mode::Normal;
         app.chat.bins = Err("no `claude` on PATH".into());
@@ -1129,7 +1147,7 @@ mod tests {
             "test_case/src/lib.c::get_bits".into(),
         ));
         let recheck = find(&app, &Action::Act(crate::app::Act::Verify));
-        assert!(recheck.greyed.unwrap().contains("open the unit"));
+        assert!(recheck.greyed.unwrap().contains("open the piece"));
         app.select(Selection::Unit("u-lib".into()));
         assert_eq!(
             find(&app, &Action::Act(crate::app::Act::Verify)).greyed,
@@ -1160,11 +1178,11 @@ mod tests {
             .menu_items()
             .into_iter()
             .find(|i| i.label.starts_with("Accept a-28d8 into u-lib"))
-            .expect("the unit's Accept");
+            .expect("the piece's Accept");
         assert_eq!(it.action, Action::ChooseAttempt("u-lib".into()));
         assert!(
             it.pending.is_none(),
-            "nothing is accepted from the unit's view"
+            "nothing is accepted from the piece's view"
         );
         app.choose(&it);
         assert_eq!(
@@ -1206,7 +1224,7 @@ mod tests {
         app.select(Selection::File("test_case/include/lib.h".into()));
         assert!(app.source.is_some(), "its source, not an empty pairs view");
         let recheck = find(&app, &Action::Act(crate::app::Act::Verify));
-        assert!(recheck.greyed.unwrap().contains("open the unit"));
+        assert!(recheck.greyed.unwrap().contains("open the piece"));
     }
 
     /// Mutation-checked rules, over every node of both committed targets:

@@ -13,7 +13,7 @@ pub fn check_words(name: &str) -> String {
     match name {
         "symbol-set" => "same exports".into(),
         "capabilities" => "allowed calls only".into(),
-        "driver-shape" => "driver shape".into(),
+        "driver-shape" => "test program shape".into(),
         "rust-build" => "the Rust builds".into(),
         "differential-driver" => "same outputs as C".into(),
         "sanitizers" => "sanitizers".into(),
@@ -276,7 +276,7 @@ impl Narrator {
                 self.verdict = Some(text);
             }
             Event::Attempt { id, outcome, .. } => {
-                self.step = format!("Recorded attempt {id}: {outcome}");
+                self.step = format!("Recorded try {id}: {outcome}");
             }
             Event::PerfRow {
                 side,
@@ -480,7 +480,7 @@ mod tests {
         );
         assert!(steps.iter().any(|s| s == "Turn 1: passed"), "{steps:#?}");
         assert!(
-            steps.iter().any(|s| s.starts_with("Recorded attempt a-")),
+            steps.iter().any(|s| s.starts_with("Recorded try a-")),
             "{steps:#?}"
         );
         assert_eq!(n.ending(Some(0), None), Ending::Done);

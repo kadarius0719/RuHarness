@@ -95,13 +95,34 @@ impl FeatureState {
             FeatureState::NotMapped => "not mapped yet".into(),
             FeatureState::MapOutOfDate => "map out of date".into(),
             FeatureState::MapIncomplete => "map incomplete".into(),
-            FeatureState::ReachesNoUnit => "reaches no unit".into(),
-            FeatureState::AllMigrated => "all its units migrated".into(),
+            FeatureState::ReachesNoUnit => "reaches no piece".into(),
+            FeatureState::AllMigrated => "all its pieces migrated".into(),
             FeatureState::HoldsSoFar { rust, of } => {
-                format!("holds so far · {rust} of {of} unit{}", plural(*of))
+                format!("holds so far · {rust} of {of} piece{}", plural(*of))
             }
             FeatureState::AllC => "still all C".into(),
-            FeatureState::SeeUnits => "see its units".into(),
+            FeatureState::SeeUnits => "see its pieces".into(),
+        }
+    }
+}
+
+impl FeatureState {
+    /// The state in a word or two, for a narrow tree row: the name is cut
+    /// before the state word, and this is the word's last form (the
+    /// whole-journey check, item 17).
+    pub fn short_word(&self) -> &'static str {
+        match self {
+            FeatureState::Failing => "failing",
+            FeatureState::ScenarioCannotRun => "can't run",
+            FeatureState::NeedsRecheck => "re-check",
+            FeatureState::NotMapped => "not mapped",
+            FeatureState::MapOutOfDate => "map old",
+            FeatureState::MapIncomplete => "map partial",
+            FeatureState::ReachesNoUnit => "no piece",
+            FeatureState::AllMigrated => "all Rust",
+            FeatureState::HoldsSoFar { .. } => "holds",
+            FeatureState::AllC => "all C",
+            FeatureState::SeeUnits => "see pieces",
         }
     }
 }
@@ -249,6 +270,10 @@ pub struct FeatureModel {
     /// and the run with notes agreed): only then may a View say what the
     /// features do NOT run (review C5/C6).
     pub complete: bool,
+    /// The map is current and only scenarios that cannot run keep it from
+    /// being complete: what the others ran is known (the whole-journey
+    /// check, item 2), though never what no feature runs.
+    pub complete_but_cannot_run: bool,
     /// Every unit with Rust some feature needs re-checked, in plan order.
     pub recheck: Vec<String>,
 }
@@ -392,6 +417,7 @@ pub fn build(
         unknown: 0,
         no_single_main: no_single_main(snapshot),
         complete: false,
+        complete_but_cannot_run: false,
         recheck: Vec::new(),
     };
     let (list, now_features) = match &snapshot.features {
@@ -534,6 +560,14 @@ pub fn build(
             records
                 .get(&(s.feature.clone(), s.id.clone()))
                 .is_some_and(|r| r.noted == "complete" && r.probe_agrees)
+        });
+    model.complete_but_cannot_run = !model.complete
+        && model.map.current()
+        && list.scenarios.iter().all(|s| {
+            let record = records.get(&(s.feature.clone(), s.id.clone()));
+            let cannot_run = list.input_unusable(s).is_some()
+                || record.is_some_and(|r| !r.stable || !r.end.starts_with("exit "));
+            cannot_run || record.is_some_and(|r| r.noted == "complete" && r.probe_agrees)
         });
     if model.map.current() {
         model.by_function = ran_by.clone();
@@ -698,7 +732,7 @@ pub fn build(
                 ))
             }
             FeatureState::HoldsSoFar { .. } | FeatureState::AllC if red_units > 0 => Some(format!(
-                "{red_units} unit{} with a red verdict",
+                "{red_units} piece{} with a red check",
                 plural(red_units)
             )),
             _ => None,

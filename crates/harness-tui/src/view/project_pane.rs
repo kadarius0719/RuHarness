@@ -126,7 +126,7 @@ pub fn project_view(
         return lines;
     }
     let width = width.min(CARD_MAX);
-    if let Some(next) = app.project_next() {
+    if let Some(next) = app.pane_next(&app.selection) {
         lines.extend(next_line(&next, width));
         lines.push(Line::from(""));
     }
@@ -338,8 +338,15 @@ fn decision_lines(
             let how = if app.project_map().is_some_and(|m| m.unstated()) {
                 "Advice comes once the build configuration is written and the project mapped again"
                     .to_string()
-            } else if app.chat_on {
+            } else if app.chat_unavailable().is_none() {
                 "No advice yet — Enter, then Ask for advice (the chat answers)".to_string()
+            } else if app.chat_on {
+                // The chat cannot answer: never its item (item 13).
+                format!(
+                    "No advice yet — run {} (the models topic), or choose Check the chat's \
+                     connection",
+                    harness_core::runtime_view::command_line("project ask", None)
+                )
             } else {
                 // The command spelled for this project (fix pass, item 1).
                 format!(
@@ -401,7 +408,7 @@ pub fn enter_line(app: &App, sel: &Selection) -> Option<String> {
 /// A tool's row back to the Project view: what it leads to.
 pub fn home_view(app: &App, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    if let Some(next) = app.project_row_advice(&Selection::ProjectHome) {
+    if let Some(next) = app.pane_next(&Selection::ProjectHome) {
         lines.extend(next_step(&next.line(), width));
         lines.push(Line::from(""));
     }

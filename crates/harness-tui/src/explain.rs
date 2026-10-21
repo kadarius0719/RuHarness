@@ -55,13 +55,13 @@ pub fn hint_in(app: &App, sel: &Selection, width: usize) -> String {
         .clone()
 }
 
-/// What `sel` is, for its card: its own lines, then what Enter recommends
-/// there — the menu's first item, for the selected row.
+/// What `sel` is, for its card: its own lines, then the View pane's Next
+/// line, word for word.
 pub fn explain(app: &App, sel: &Selection) -> Explained {
     let mut e = explained(app, sel);
-    if let Some(next) = next_words(app, sel) {
+    if let Some(next) = app.pane_next(sel) {
         e.card.truncate(7);
-        e.card.push(format!("Next: {next}"));
+        e.card.push(next.line());
     }
     e
 }
@@ -115,38 +115,6 @@ fn fit(candidates: &[String]) -> String {
     cut
 }
 
-/// What Enter recommends on the row: for the selected row, the menu item
-/// that does its Next step ("Enter, then Accept t-lzg"); else the Next
-/// step's own words.
-fn next_words(app: &App, sel: &Selection) -> Option<String> {
-    let project = app.in_project_view() || *sel == Selection::ProjectHome;
-    let advice = if project {
-        app.project_row_advice(sel)
-    } else {
-        app.advice(sel)
-    }?;
-    if let (Some(want), true) = (&advice.action, *sel == app.selection) {
-        let items = if project {
-            app.project_menu_items()
-        } else {
-            app.menu_items()
-        };
-        if let Some(it) = items
-            .iter()
-            .find(|it| &it.action == want && it.greyed.is_none())
-        {
-            return Some(format!("Enter, then {}", it.label));
-        }
-    }
-    let line = advice.line();
-    let text = line
-        .strip_prefix("Next: ")
-        .unwrap_or(&line)
-        .trim()
-        .to_string();
-    (!text.is_empty()).then_some(text)
-}
-
 /// A path under the target, relative to its root, `/`-joined.
 fn rel(app: &App, path: &Path) -> String {
     path.strip_prefix(&app.snapshot.root)
@@ -196,7 +164,7 @@ fn state_of<'a>(app: &'a App, id: &str) -> Option<&'a UnitState> {
 
 /// The counts the tool's summary uses: pieces that can move (blocked and
 /// stays-C left out), of them done; pieces that stay C.
-fn piece_counts(app: &App) -> (usize, usize, usize) {
+pub(crate) fn piece_counts(app: &App) -> (usize, usize, usize) {
     let (mut pieces, mut done, mut stay) = (0, 0, 0);
     for info in &app.files.units {
         match &info.state {
@@ -212,6 +180,34 @@ fn piece_counts(app: &App) -> (usize, usize, usize) {
     (pieces, done, stay)
 }
 
+/// `text` with its first letter capitalised.
+fn capitalised(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+/// The one sentence about moving, wherever the cockpit says how far a
+/// program is: the pieces that can move are its denominator — "1 of the 2
+/// that can move is in Rust" (the whole-journey check, item 4: the title,
+/// the row, the Next step, the hint and the journey each counted their own
+/// way). The Project view's card keeps the full breakdown.
+pub(crate) fn moved_words(done: usize, movable: usize) -> String {
+    match (movable, done) {
+        (0, _) => crate::journey::NOTHING_MOVES.to_string(),
+        (1, 1) => "its one piece that can move is in Rust".into(),
+        (1, _) => "its one piece that can move is not in Rust yet".into(),
+        (m, 0) => format!("none of the {m} that can move is in Rust yet"),
+        (m, d) if d >= m => format!("all {m} that can move are in Rust"),
+        (m, d) => format!(
+            "{d} of the {m} that can move {} in Rust",
+            if d == 1 { "is" } else { "are" }
+        ),
+    }
+}
+
 // ----- the tool's screen ------------------------------------------------------
 
 fn project(app: &App) -> Explained {
@@ -222,13 +218,15 @@ fn project(app: &App) -> Explained {
         None => folder(app),
     };
     let rust = if app.snapshot.units.is_empty() {
-        "it is not cut into pieces yet (scan and plan it first)".to_string()
-    } else {
-        match (pieces, done) {
-            (1, 1) => "its one piece is in Rust".to_string(),
-            (1, _) => "its one piece is not in Rust yet".to_string(),
-            _ => format!("{done} of its {pieces} pieces are in Rust"),
+        // Said of what is still to do: after the scan, only the plan (the
+        // whole-journey check, item 16).
+        if app.snapshot.facts.is_some() {
+            "it is not cut into pieces yet (make the plan first)".to_string()
+        } else {
+            "it is not cut into pieces yet (scan and plan it first)".to_string()
         }
+    } else {
+        moved_words(done, pieces)
     };
     let hint = match &app.config.tool {
         Some(id) => fit(&[
@@ -257,16 +255,21 @@ fn project(app: &App) -> Explained {
         ),
     }];
     if app.snapshot.units.is_empty() {
-        card.push("It is not cut into pieces yet: scan it, then refresh the plan.".into());
+        card.push(if app.snapshot.facts.is_some() {
+            "It is not cut into pieces yet: make the plan.".into()
+        } else {
+            "It is not cut into pieces yet: scan it, then make the plan.".into()
+        });
     } else {
-        let mut parts = vec![
-            plural(pieces, "piece that can move", "pieces that can move"),
-            format!("{done} in Rust"),
-        ];
+        let mut text = moved_words(done, pieces);
         if stay > 0 {
-            parts.push(format!("{stay} stay C"));
+            text.push_str(&format!(
+                "; {} other pieces and {} C",
+                plural(stay, "calls", "call"),
+                if stay == 1 { "stays" } else { "stay" }
+            ));
         }
-        card.push(format!("Its pieces: {}.", parts.join(" · ")));
+        card.push(format!("Its pieces: {text}."));
     }
     card.push("Your C files are never changed: each piece's Rust is written beside them.".into());
     if app.config.tool.is_some() {
@@ -321,10 +324,22 @@ fn dir(app: &App, d: &str) -> Explained {
         ])
     } else {
         fit(&[
-            format!(
-                "{prefix}: a folder of {}; {owned} of them hold the C of a piece.",
-                plural(n, "file", "files")
-            ),
+            match (n, owned) {
+                (_, 0) => format!(
+                    "{prefix}: a folder of {}; none holds the C of a piece.",
+                    plural(n, "file", "files")
+                ),
+                (1, _) => format!("{prefix}: a folder of 1 file, which holds the C of a piece."),
+                (_, o) if o == n => {
+                    format!("{prefix}: a folder of {n} files; each holds the C of a piece.")
+                }
+                (_, 1) => {
+                    format!("{prefix}: a folder of {n} files; 1 of them holds the C of a piece.")
+                }
+                (_, o) => {
+                    format!("{prefix}: a folder of {n} files; {o} of them hold the C of a piece.")
+                }
+            },
             format!("A folder of {}.", plural(n, "file", "files")),
         ])
     };
@@ -422,14 +437,16 @@ fn file(app: &App, p: &str) -> Explained {
             ],
         ),
         FileState::NotInTool => {
-            let from = main_file(app)
-                .map(|m| base(&m).to_string())
-                .unwrap_or_else(|| "the program's own files".into());
+            // "what lzg.c links", "what the program's own files link".
+            let (from, links) = match main_file(app) {
+                Some(m) => (base(&m).to_string(), "links"),
+                None => ("the program's own files".to_string(), "link"),
+            };
             (
                 fit(&[
                     format!(
                         "{name} is in the project, but {tool} never calls into it: the map \
-                         followed what {from} links and this file is not reached."
+                         followed what {from} {links} and this file is not reached."
                     ),
                     format!(
                         "{name} is in the project, but {tool} never reaches it, so it is not \
@@ -439,7 +456,7 @@ fn file(app: &App, p: &str) -> Explained {
                 vec![
                     format!("{p}: a file of the project, not of {tool}."),
                     format!(
-                        "The map followed what {from} links; nothing it links reaches this file."
+                        "The map followed what {from} {links}; nothing linked reaches this file."
                     ),
                     "Nothing here acts on it. Another program of the project may use it: see \
                      the project view."
@@ -476,6 +493,18 @@ fn file(app: &App, p: &str) -> Explained {
                 format!("{p}: changed since the last scan."),
                 "What is known about its functions may be out of date.".into(),
                 "Scan the project, then Refresh the plan.".into(),
+            ],
+        ),
+        // Before any scan nothing is "new since the last scan" (the
+        // whole-journey check, item 16).
+        FileState::New if app.snapshot.facts.is_none() => (
+            fit(&[format!(
+                "{name} is not scanned yet: Scan the project to read it."
+            )]),
+            vec![
+                format!("{p}: not scanned yet."),
+                "Nothing is known about it until the project is scanned.".into(),
+                "Scan the project to read it.".into(),
             ],
         ),
         FileState::New => (
@@ -592,8 +621,9 @@ fn units(app: &App) -> Explained {
     let hint = if stay > 0 {
         fit(&[
             format!(
-                "The program's pieces: {pieces} can move to Rust, {done} of them done; {stay} \
-                 call other pieces, so in this version they stay C."
+                "The program's pieces: {}; {stay} call other pieces, so in this version they \
+                 stay C.",
+                moved_words(done, pieces)
             ),
             all,
         ])
@@ -602,7 +632,7 @@ fn units(app: &App) -> Explained {
     };
     let mut card = vec![
         "The plan cuts the C into pieces: functions that call each other move together.".into(),
-        format!("{pieces} can move now; {done} of them are in Rust."),
+        format!("{}.", capitalised(&moved_words(done, pieces))),
     ];
     if stay > 0 {
         card.push(format!(
@@ -613,7 +643,7 @@ fn units(app: &App) -> Explained {
     }
     card.push("Each piece goes: a test program, then its Rust, then your Accept.".into());
     Explained {
-        title: format!("Units ({n})"),
+        title: format!("Pieces ({n})"),
         hint,
         shorter: Vec::new(),
         card,
@@ -629,7 +659,7 @@ fn unit_state_clause(s: &UnitState) -> String {
         UnitState::Migrated(_) | UnitState::OriginUnknown => {
             "its Rust is done and passed the judge's check".into()
         }
-        UnitState::Waiting => "a try of its Rust stopped to wait for an answer".into(),
+        UnitState::Waiting => "a try stopped to wait for your answer".into(),
         UnitState::StaysC(deps) => {
             format!("it calls {}, so in this version it stays C", and_list(deps))
         }
@@ -906,7 +936,9 @@ fn attempt(app: &App, unit_id: &str, a: &str) -> Explained {
     } else if chat {
         format!("A try: the Rust a model wrote for {unit_id} (asked in chat)")
     } else {
-        format!("A try: the Rust a model wrote for {unit_id}")
+        // The command line's external answer may be the person's own
+        // (the whole-journey check, item 16).
+        format!("A try: the Rust a model or you wrote for {unit_id}")
     };
     let outcome = outcome_clause(&at.record.outcome);
     let tag_clause = if tags.iter().any(|t| t.starts_with("in use")) {
@@ -927,8 +959,15 @@ fn attempt(app: &App, unit_id: &str, a: &str) -> Explained {
     ]);
     let turns = at.record.turns.len();
     let dir = harness_core::attempts::attempt_dir(&app.snapshot.ledger(), unit_id, a);
+    let waiting = at.record.outcome == "in-progress";
     let mut card = vec![if human {
         format!("Your hand edit of {unit_id}'s Rust, checked by the judge.")
+    } else if waiting {
+        // Not "in 0 turns": it stopped for an answer (item 6).
+        format!(
+            "A try at {unit_id}'s Rust by the model {}.",
+            at.record.model
+        )
     } else {
         format!(
             "A try at {unit_id}'s Rust by the model {}, in {}.",
@@ -1034,10 +1073,17 @@ fn feature(app: &App, id: &str) -> Explained {
     let name = crate::display::line(&f.name);
     let runs = plural(f.scenarios.len(), "run", "runs");
     let pieces = plural(f.units.len(), "piece", "pieces");
+    // Which pieces it reaches only from a current map (the whole-journey
+    // check: "it reaches 0 pieces" was said before any map).
+    let mapped = app.features.map.current() && f.scenarios.iter().all(|s| s.record.is_some());
+    let reaches = if mapped {
+        format!("it reaches {pieces}")
+    } else {
+        "which pieces it reaches is not known until it is mapped".to_string()
+    };
     let hint = fit(&[
         format!(
-            "{name}: one of your features, {runs} of the whole program; it reaches {pieces}; \
-             {}.",
+            "{name}: one of your features, {runs} of the whole program; {reaches}; {}.",
             f.state.word()
         ),
         format!("{name}: one of your features; {}.", f.state.word()),
@@ -1045,7 +1091,11 @@ fn feature(app: &App, id: &str) -> Explained {
     ]);
     let card = vec![
         format!("One of your features: {name} (its id: {id})."),
-        format!("It is {runs} of the whole program; the map found it runs {pieces}."),
+        if mapped {
+            format!("It is {runs} of the whole program; the map found it runs {pieces}.")
+        } else {
+            format!("It is {runs} of the whole program; not mapped yet.")
+        },
         format!("Now: {}.", f.state.word()),
         "Every check of a piece it runs compares it on the C and on that piece's Rust.".into(),
     ];
@@ -1462,7 +1512,7 @@ mod tests {
                 &tractor,
                 &Selection::Attempt("u-lib".into(), crate::app::tests::PROVENANCE.into()),
             ),
-            "A try: the Rust a model wrote for u-lib; green means every check passed; in use \
+            "A try: the Rust a model or you wrote for u-lib; green means every check passed; in use \
              means it is the piece's Rust now."
         );
         assert_eq!(

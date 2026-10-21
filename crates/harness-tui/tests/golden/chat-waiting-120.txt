@@ -1,6 +1,6 @@
 ┌ Files ───────────────────────────────┐┌ Chat — continuing… · haiku-4-5 ───────────────────────[New]─[?]─ View ─ Chat ┐
 │▾ harness-tui-cha…ines-0000000000 ✓1/1││  line 184                                                                    │
-│  ▾ Units (1)                         ││  line 185                                                                    │
+│  ▾ Pieces (1)                        ││  line 185                                                                    │
 │    ▸ ✓ u-lib                     done││  line 186                                                                    │
 │    Features (none yet)               ││  line 187                                                                    │
 │    Speed — not set up                ││  line 188                                                                    │
@@ -19,6 +19,6 @@
 │                                      ││About: the project                                                            │
 │                                      ││› type here — Enter sends                                                     │
 └──────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────┘
- harness-tui-chat-lines-0000000000: the C project moving to Rust, its files below; its one piece is in Rust.
+ The C project moving to Rust; its one piece that can move is in Rust.
 
  Esc hold   Ctrl-J new line   ↑↓ scroll   Tab pane   F1 help   Ctrl-C quit

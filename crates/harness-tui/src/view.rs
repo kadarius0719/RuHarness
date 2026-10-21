@@ -42,7 +42,7 @@ pub const SPLIT_VIEW_MIN: u16 = 78;
 pub const DIALOG_COLUMNS: u16 = 76;
 
 mod chat_pane;
-mod project_pane;
+pub(crate) mod project_pane;
 pub use chat_pane::{state_word, CHAT_COLUMN_FROM, CHAT_COLUMN_MAX, VIEW_KEEPS};
 
 // The roles (crate::theme): every style the view draws is one of these.
@@ -646,9 +646,9 @@ fn node_name(app: &App, sel: &Selection) -> String {
         Selection::Dir(d) => format!("{}/", d.rsplit('/').next().unwrap_or(d)),
         Selection::File(p) => p.rsplit('/').next().unwrap_or(p).to_string(),
         Selection::Function(_, name) => format!("{}()", short_symbol(name)),
-        Selection::Units => format!("Units ({})", app.snapshot.units.len()),
+        Selection::Units => format!("Pieces ({})", app.snapshot.units.len()),
         Selection::Unit(id) => id.clone(),
-        Selection::Crate(_) => "crate".into(),
+        Selection::Crate(_) => "Rust".into(),
         Selection::Attempt(_, id) => short_id(id),
         Selection::Features => match &app.features.group {
             featmap::Group::NoFile => "Features (none yet)".into(),
@@ -692,10 +692,47 @@ fn feature_row_name(app: &App, id: &str) -> String {
 /// The room a feature's name has in the tree at 80 columns (§8.3).
 const FEATURE_NAME_ROOM: usize = 14;
 
+/// The tool row's compact counts: the tree's rollup, its share in Rust
+/// counted in pieces that can move once there is a plan — the count every
+/// sentence about moving uses (the whole-journey check, item 4).
+fn project_counts(app: &App) -> String {
+    let mut r = app.files.rollup("");
+    if !app.snapshot.units.is_empty() {
+        // A piece verified with no recorded origin is in Rust: counted
+        // among the done, never a second time.
+        let (pieces, done, _) = crate::explain::piece_counts(app);
+        r.migrated = done;
+        r.migratable = pieces;
+        r.origin_unknown = 0;
+    }
+    r.text()
+}
+
+/// The tool row's counts in words, for the View's title: the same counts,
+/// the share in Rust said as [`crate::explain::moved_words`] once there is
+/// a plan.
+fn project_count_words(app: &App) -> String {
+    let mut r = app.files.rollup("");
+    if app.snapshot.units.is_empty() {
+        return r.words();
+    }
+    r.migratable = 0;
+    r.origin_unknown = 0;
+    let (pieces, done, _) = crate::explain::piece_counts(app);
+    let rest = r.words();
+    // How far it is, first: a narrow title cuts the end.
+    let moved = crate::explain::moved_words(done, pieces);
+    if rest.is_empty() {
+        moved
+    } else {
+        format!("{moved} · {rest}")
+    }
+}
+
 /// A row's glyph and state word (a rollup for the project and directories).
 fn row_label(app: &App, sel: &Selection) -> (&'static str, String) {
     match sel {
-        Selection::Project => ("", app.files.rollup("").text()),
+        Selection::Project => ("", project_counts(app)),
         Selection::Dir(d) => ("", app.files.rollup(d).text()),
         Selection::Units | Selection::Features | Selection::Speed => app.node_label(sel),
         Selection::Attempt(u, a) => {
@@ -826,6 +863,12 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
     // letters; the word's padding goes first, then the word gets short
     // (`no test`, `ready`, …), then the name is cut (fix pass, item 8).
     let unit_words = match sel {
+        // A feature's state word, likewise: never cut — a shorter word
+        // first, the name cut before it (the whole-journey check, item 17).
+        Selection::Feature(id) => app
+            .features
+            .feature(id)
+            .map(|f| (word.clone(), f.state.short_word().to_string())),
         Selection::Unit(_) | Selection::File(_) if !internal && !name_first => {
             let state = match sel {
                 Selection::File(p) => match app.files.file(p).map(|f| &f.state) {
@@ -842,8 +885,14 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
         _ => None,
     };
     let (mut name_text, pad, word_text) = if let Some((full, short)) = unit_words {
-        const KEEP: usize = 6;
-        let keep = name_w.min(KEEP);
+        // A feature's mark and word say its state; its name gives way
+        // further (to 4 columns) before the word goes (item 17).
+        let keep_at_least = if matches!(sel, Selection::Feature(_)) {
+            4
+        } else {
+            6
+        };
+        let keep = name_w.min(keep_at_least);
         let word_text = [full, short]
             .into_iter()
             .find(|w| keep + 1 + width_of(&display::line(w)) <= room)
@@ -1238,13 +1287,13 @@ fn view_title(app: &App) -> String {
     let name = match sel {
         Selection::File(p) | Selection::Dir(p) => p.clone(),
         Selection::Function(p, n) => format!("{}() in {p}", short_symbol(n)),
-        Selection::Crate(u) => format!("{u}'s crate"),
-        Selection::Attempt(u, a) => format!("attempt {} of {u}", short_id(a)),
+        Selection::Crate(u) => format!("{u}'s Rust"),
+        Selection::Attempt(u, a) => format!("try {} of {u}", short_id(a)),
         _ => node_name(app, sel),
     };
     // The tree's compact counts ("⚠1 ✓0/13"), said in words here.
     let word = match sel {
-        Selection::Project => app.files.rollup("").words(),
+        Selection::Project => project_count_words(app),
         Selection::Dir(d) => app.files.rollup(d).words(),
         _ => row_label(app, sel).1,
     };
@@ -1326,7 +1375,7 @@ fn unit_lead(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
     }
     // The Next step: the unit's (or the attempt's) one action, the cause
     // first when it needs attention.
-    if let Some(next) = app.advice(&app.selection) {
+    if let Some(next) = app.pane_next(&app.selection) {
         lines.extend(next_step(&next.line(), width));
     }
     lines
@@ -1354,7 +1403,7 @@ fn unit_record(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
             // The tree's words under a unit, said here once (finding 17).
             lines.extend(wrapped(
                 &format!(
-                    "An attempt is one try at this unit's Rust; {}: {}.",
+                    "A try is one go at this piece's Rust; {}: {}.",
                     r.outcome,
                     outcome_gloss(&r.outcome)
                 ),
@@ -1424,7 +1473,12 @@ fn unit_record(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
                 (None, true) if verdict != "none yet" => {
                     format!("No Rust yet · the judge's last check: {verdict}")
                 }
-                (None, _) => "No Rust yet".to_string(),
+                // A green try waits for the person's Accept: its Rust exists,
+                // it is not the unit's yet (the whole-journey check, item 5).
+                (None, _) => match crate::next::acceptable(unit) {
+                    Some(a) => format!("Its Rust: not accepted yet — try {} is green", short_id(a)),
+                    None => "No Rust yet".to_string(),
+                },
             };
             if let Some(marker) = coverage_marker(app, unit) {
                 origin.push_str(&format!(" · {marker}"));
@@ -1432,8 +1486,8 @@ fn unit_record(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
             lines.extend(wrapped(&origin, width, label_role()));
             if matches!(app.selection, Selection::Crate(_)) {
                 lines.extend(wrapped(
-                    "The crate is this unit's Rust in use now: what an Accept (or a hand edit) \
-                     put there, built in place of its C.",
+                    "This is the piece's Rust in use now: what an Accept (or a hand edit) put \
+                     there, built in place of its C.",
                     width,
                     notice(),
                 ));
@@ -1474,7 +1528,7 @@ fn outcome_gloss(outcome: &str) -> &'static str {
         "truncated" => "the model's answer was cut off before it was whole",
         "format" => "the model's answer was not in the shape asked for",
         "blocked" => "the model said it could not write it",
-        "in-progress" => "it has not finished",
+        "in-progress" => "it stopped to wait for your answer",
         "budget" => "it ran out of its budget",
         "thrash" => "it stopped repeating the same fix",
         _ => "how it ended",
@@ -1557,7 +1611,7 @@ fn unit_summary(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> 
 fn attempts_line(unit: &UnitView) -> String {
     let n = unit.attempts.len();
     if n == 0 {
-        return "Attempts: none yet".into();
+        return "Tries: none yet".into();
     }
     let count = |pick: &dyn Fn(&str) -> bool| {
         unit.attempts
@@ -1579,7 +1633,7 @@ fn attempts_line(unit: &UnitView) -> String {
         parts.push(format!("{running} unfinished"));
     }
     format!(
-        "Attempts: {n} — {} (listed under its row in the tree)",
+        "Tries: {n} — {} (listed under its row in the tree)",
         parts.join(", ")
     )
 }
@@ -1624,7 +1678,7 @@ fn coverage_marker(app: &App, unit: &UnitView) -> Option<String> {
     for reason in reasons {
         words.push(match reason.as_str() {
             "not-yet" if red => "not checked — the verdict stopped before them".into(),
-            "not-yet" => "not checked on this unit yet — Re-check it".into(),
+            "not-yet" => "not checked on this piece yet — Re-check it".into(),
             "changed" => "not checked since you changed them — Re-check it".into(),
             "invalid" if invalid_now => {
                 "not checked — features.toml has an error (fix it first)".into()
@@ -1684,19 +1738,31 @@ pub(crate) fn unit_features_line(app: &App, unit_id: &str) -> Option<String> {
     }
     let uf = model.by_unit.get(unit_id)?;
     if uf.outside {
-        return Some("Not part of the program your features run — its verdicts skip them.".into());
+        return Some(
+            "Not part of the program your features run — its checks leave them out.".into(),
+        );
     }
     if model.no_single_main {
         return Some(
             "Features need a program with one main() — this target's facts show none.".into(),
         );
     }
-    if !model.complete {
+    // Only scenarios that cannot run keep a current map from being
+    // complete: what the others ran is said, never what none runs (the
+    // whole-journey check, item 2).
+    const FIX: &str = "fix the scenario that cannot run (Features)";
+    let partial = !model.complete && model.complete_but_cannot_run;
+    if !model.complete && !partial {
         return Some("Which features run it: not known — map the features.".into());
+    }
+    if partial && uf.running.is_empty() {
+        return Some(format!(
+            "None of the scenarios that ran reached it; one that cannot run might — {FIX}."
+        ));
     }
     if uf.running.is_empty() {
         return Some(if uf.unwatched == 0 {
-            "None of your features runs this unit's functions, so their checks pass whatever \
+            "None of your features runs this piece's functions, so their checks pass whatever \
              its Rust does."
                 .into()
         } else {
@@ -1757,7 +1823,11 @@ pub(crate) fn unit_features_line(app: &App, unit_id: &str) -> Option<String> {
     } else if !has_rust {
         text.push_str(" · still C");
     }
-    text.push_str(" — see Features");
+    if partial {
+        text.push_str(&format!(" — {FIX}"));
+    } else {
+        text.push_str(" — see Features");
+    }
     Some(text)
 }
 
@@ -1929,9 +1999,9 @@ fn feature_check_note(app: &App, unit: &str, name: &str, passed: bool) -> Option
             .is_some_and(|uf| uf.running.iter().any(|(id, _)| id == fid));
         if !runs {
             text.push_str(if passed {
-                " (its feature does not run this unit's functions)"
+                " (its feature does not run this piece's functions)"
             } else {
-                " (its feature does not run this unit's functions — yet it failed: the map may \
+                " (its feature does not run this piece's functions — yet it failed: the map may \
                  be incomplete)"
             });
         }
@@ -1968,7 +2038,7 @@ fn features_reach_words(app: &App, v: &harness_core::Verdict) -> String {
                 .filter_map(|c| c.name.strip_prefix(harness_core::features::CHECK_PREFIX))
                 .filter(|rest| rest.split('/').next().is_some_and(|f| running.contains(f)))
                 .count();
-            format!(" ({n} run this unit)")
+            format!(" ({n} run this piece)")
         }
     }
 }
@@ -2055,7 +2125,7 @@ fn proposal_block(
 }
 
 fn next_lines(app: &App, sel: &Selection, width: usize) -> Vec<Line<'static>> {
-    let Some(next) = app.advice(sel) else {
+    let Some(next) = app.pane_next(sel) else {
         return Vec::new();
     };
     let mut lines = next_step(&next.line(), width);
@@ -2068,22 +2138,22 @@ fn next_lines(app: &App, sel: &Selection, width: usize) -> Vec<Line<'static>> {
 fn feature_mark_words(state: &featmap::FeatureState) -> String {
     use featmap::FeatureState as S;
     match state {
-        S::Failing => "✗ failing: a unit's check of it failed".into(),
+        S::Failing => "✗ failing: a piece's check of it failed".into(),
         S::ScenarioCannotRun => "⚑ a scenario cannot run as written".into(),
-        S::NeedsRecheck => "↻ needs a re-check: a unit with Rust was not checked on it".into(),
-        S::NotMapped => "⋯ not mapped yet: which units it runs is not known".into(),
+        S::NeedsRecheck => "↻ needs a re-check: a piece with Rust was not checked on it".into(),
+        S::NotMapped => "⋯ not mapped yet: which pieces it runs is not known".into(),
         S::MapOutOfDate => "≃ the map is out of date".into(),
         S::MapIncomplete => "◔ the map is incomplete for it".into(),
-        S::ReachesNoUnit => "∅ it reaches no unit".into(),
-        S::AllMigrated => "✓ all its units are in Rust, each checked alone".into(),
+        S::ReachesNoUnit => "∅ it reaches no piece".into(),
+        S::AllMigrated => "✓ all its pieces are in Rust, each checked alone".into(),
         S::HoldsSoFar { rust, of } => format!(
-            "◉ runs Rust now: {rust} of its {of} unit{} {} in Rust, and each passed this \
+            "◉ runs Rust now: {rust} of its {of} piece{} {} in Rust, and each passed this \
              feature's checks",
             plural_s(*of),
             if *rust == 1 { "is" } else { "are" }
         ),
-        S::AllC => "◌ still all C: none of the units it runs is in Rust yet".into(),
-        S::SeeUnits => "· its units differ: see them below".into(),
+        S::AllC => "◌ still all C: none of the pieces it runs is in Rust yet".into(),
+        S::SeeUnits => "· its pieces differ: see them below".into(),
     }
 }
 
@@ -2092,7 +2162,7 @@ fn feature_mark_words(state: &featmap::FeatureState) -> String {
 /// action, each a link.
 fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
-    if let Some(next) = app.next_step().map(|a| app.unless_chat_down(a)) {
+    if let Some(next) = app.pane_next(&Selection::Project) {
         lines.extend(next_step(&next.line(), width));
         lines.push(Line::from(""));
     }
@@ -2144,7 +2214,7 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
             .collect::<Vec<_>>()
             .join(" · ");
         lines.extend(headed(
-            &format!("Units ({}): {text}", app.snapshot.units.len()),
+            &format!("Pieces ({}): {text}", app.snapshot.units.len()),
             width,
         ));
     }
@@ -2290,7 +2360,7 @@ fn summary_features(
             let behind = model.recheck.len();
             if behind > 0 {
                 text.push_str(&format!(
-                    " · {behind} unit{} not re-checked",
+                    " · {behind} piece{} not re-checked",
                     plural_s(behind)
                 ));
             }
@@ -2417,8 +2487,8 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
         speed::Group::NoFile => {
             lines.extend(wrapped(
                 "Speed compares the C against the Rust in use: the program runs your \
-                 workloads — inputs you choose — first as the C, then with each unit's \
-                 Rust, many times each, and the harness says which is faster and by how much.",
+                 workloads — inputs you choose — first as the C, then with each piece's \
+                 Rust, many times each, and says which is faster and by how much.",
                 width,
                 Style::default(),
             ));
@@ -2499,7 +2569,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
             .push(Line::from(Span::styled("The original C", bold())));
         section.lines.extend(wrapped(
             "not measured yet — Measure speed on this row measures the C alone; measuring one \
-             unit does not",
+             piece does not",
             width,
             notice(),
         ));
@@ -2515,10 +2585,10 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
         let held = model.held.len();
         let left = model.left_out.len();
         let heading = if left == 0 {
-            format!("As it stands ({held} unit{})", plural_s(held))
+            format!("As it stands ({held} piece{})", plural_s(held))
         } else {
             format!(
-                "As it stands ({held} of {} units — {left} left out)",
+                "As it stands ({held} of {} pieces — {left} left out)",
                 held + left
             )
         };
@@ -2550,7 +2620,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
         lines.push(Line::from(""));
         lines.extend(wrapped(
             &format!(
-                "Results of units no longer in the plan (in {}/perf/units/): {}{more}",
+                "Results of pieces no longer in the plan (in {}/perf/units/): {}{more}",
                 model.ledger_rel,
                 model.orphans.join(", ")
             ),
@@ -2668,7 +2738,7 @@ fn features_view(
             lines.extend(wrapped(
                 "A feature is something a person does with the program and can see the \
                  result of. Each is one or more runs of the whole program; every Re-check \
-                 then runs them on the C and on the program with the unit's Rust.",
+                 then runs them on the C and on the program with the piece's Rust.",
                 width,
                 Style::default(),
             ));
@@ -2753,9 +2823,9 @@ fn features_view(
         let mut parts = vec![if !mapped {
             "not mapped".to_string()
         } else if !noted && inside == 0 {
-            "its units not known (map incomplete)".to_string()
+            "its pieces not known (map incomplete)".to_string()
         } else {
-            format!("{inside} unit{}", plural_s(inside))
+            format!("{inside} piece{}", plural_s(inside))
         }];
         if outside > 0 {
             parts.push(format!("{outside} outside the program"));
@@ -2897,9 +2967,9 @@ fn summary_count(key: &str, n: usize) -> String {
         "not-mapped" => "not mapped yet",
         "out-of-date" => "with the map out of date",
         "incomplete" => "with the map incomplete",
-        "no-unit" if one => "reaches no unit",
-        "no-unit" => "reach no unit",
-        "migrated" => "with all units migrated",
+        "no-unit" if one => "reaches no piece",
+        "no-unit" => "reach no piece",
+        "migrated" => "with all pieces migrated",
         "holds" if one => "holds so far",
         "holds" => "hold so far",
         "all-c" => "still all C",
@@ -2942,49 +3012,59 @@ fn result_words(row: &featmap::UnitRow) -> (String, Style) {
 fn feature_next(f: &featmap::FeatureView) -> Option<String> {
     use featmap::FeatureState as S;
     Some(match &f.state {
-        S::Failing => "Open the failing unit below and its verdict.".into(),
+        S::Failing => "Open the failing piece below and Show its checks.".into(),
         S::ScenarioCannotRun => {
-            let why = f
-                .scenarios
-                .iter()
-                .find_map(|s| s.skipped.map(|r| (s.id.clone(), r)));
-            match why {
-                Some((id, reason)) => format!(
-                    "Scenario {id}: {} — {}. Choose Edit the features file.",
-                    reason.words(),
-                    reason.what_to_do()
-                ),
-                None => "A scenario's C output differs between runs, or it did not exit — \
-                         change or remove it (Edit the features file)."
-                    .into(),
-            }
+            // The scenario's own reason, from wherever it is known: today's
+            // read of its input file, a verdict's skip, then the map's
+            // record — before any Re-check the map is all there is (the
+            // whole-journey check, item 3).
+            let why = f.scenarios.iter().find_map(|s| {
+                let why = s
+                    .unusable
+                    .clone()
+                    .or_else(|| {
+                        s.skipped
+                            .map(|r| format!("{} — {}", r.words(), r.what_to_do()))
+                    })
+                    .or_else(|| {
+                        let r = s.record.as_ref()?;
+                        if !r.stable {
+                            Some(
+                                "its C output differs between runs — change or remove it"
+                                    .to_string(),
+                            )
+                        } else if !r.end.starts_with("exit ") {
+                            Some(format!(
+                                "it did not exit ({}) — change or remove it",
+                                display::line(&r.end)
+                            ))
+                        } else {
+                            None
+                        }
+                    })?;
+                Some(format!("Scenario {}: {why}.", s.id))
+            });
+            why.unwrap_or_else(|| "A scenario cannot run as written — change or remove it.".into())
         }
-        S::NeedsRecheck => format!(
-            "Your features are not checked on {} yet — Re-check {}:",
-            if f.recheck.len() == 1 {
-                "this unit"
-            } else {
-                "these units"
-            },
-            if f.recheck.len() == 1 { "it" } else { "each" }
-        ),
+        // Said once, in the Next step (the whole-journey check, item 12).
+        S::NeedsRecheck => return None,
         S::NotMapped | S::MapOutOfDate => "Map the features (press Enter).".into(),
         S::MapIncomplete => "A scenario's run left no usable notes, or behaved differently \
                              with them — see its line below."
             .into(),
         S::ReachesNoUnit => format!(
-            "Its code is outside every unit ({} function{}), or the map could not watch it. \
-             Nothing to do — or add a scenario that reaches a unit.",
+            "Its code is outside every piece ({} function{}), or the map could not watch it. \
+             Nothing to do — or add a scenario that reaches a piece.",
             f.outside_units,
             plural_s(f.outside_units)
         ),
         S::AllMigrated | S::HoldsSoFar { .. } => {
-            let mut text = "Each unit was checked with only its own Rust swapped in — no build \
+            let mut text = "Each piece was checked with only its own Rust swapped in — no build \
                             has them all in Rust together yet."
                 .to_string();
             if matches!(f.state, S::AllMigrated) && f.outside_units > 0 {
                 text.push_str(&format!(
-                    " {} function{} it runs {} outside every unit and stay C.",
+                    " {} function{} it runs {} outside every piece and stay C.",
                     f.outside_units,
                     plural_s(f.outside_units),
                     if f.outside_units == 1 { "is" } else { "are" }
@@ -2993,7 +3073,7 @@ fn feature_next(f: &featmap::FeatureView) -> Option<String> {
             text
         }
         S::AllC => return None,
-        S::SeeUnits => "See its units below.".into(),
+        S::SeeUnits => "See its pieces below.".into(),
     })
 }
 
@@ -3013,23 +3093,27 @@ fn feature_view(
     if let Some(also) = &f.also {
         word.push_str(&format!(" · {also}"));
     }
+    // The id shows in each check's name, not here (the whole-journey
+    // check, item 15).
     lines.push(Line::from(clipped(
         vec![
             Span::styled(format!("{glyph} "), glyph_style(glyph)),
             Span::styled(word, bold()),
-            Span::styled(format!("  · id {}", f.id), label_role()),
         ],
         width,
     )));
-    // The mark in words, then the one thing to do.
-    lines.extend(wrapped(&feature_mark_words(&f.state), width, label_role()));
-    if let Some(next) = app.advice(&Selection::Feature(f.id.clone())) {
+    use featmap::FeatureState as S;
+    // The mark in words, then the one thing to do — a re-check said once,
+    // in the Next step (item 12).
+    if !matches!(f.state, S::NeedsRecheck) {
+        lines.extend(wrapped(&feature_mark_words(&f.state), width, label_role()));
+    }
+    if let Some(next) = app.pane_next(&Selection::Feature(f.id.clone())) {
         lines.extend(next_step(&next.line(), width));
     }
-    use featmap::FeatureState as S;
     if !matches!(
         f.state,
-        S::NotMapped | S::MapOutOfDate | S::Failing | S::SeeUnits
+        S::NotMapped | S::MapOutOfDate | S::Failing | S::SeeUnits | S::NeedsRecheck
     ) {
         if let Some(next) = feature_next(f) {
             lines.extend(wrapped(&next, width, Style::default()));
@@ -3042,7 +3126,7 @@ fn feature_view(
             lines.push(Line::from(clipped(
                 vec![
                     Span::raw(format!("  {u}")),
-                    Span::styled("  open it, then Re-check", label_role()),
+                    Span::styled("  open it", label_role()),
                 ],
                 width,
             )));
@@ -3173,7 +3257,7 @@ fn feature_view(
     if f.outside_units > 0 {
         lines.extend(wrapped(
             &format!(
-                "  Outside every unit: {} function{} (headers, files with no exported functions)",
+                "  Outside every piece: {} function{} (headers, files with no exported functions)",
                 f.outside_units,
                 plural_s(f.outside_units)
             ),
@@ -3346,7 +3430,7 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
             if app.unit_view().is_some() {
                 head.extend(wrapped(
                     &format!(
-                        "{}() is internal: compared through the unit's exported functions",
+                        "{}() is internal: compared through the piece's exported functions",
                         short_symbol(name)
                     ),
                     width,
@@ -3408,7 +3492,7 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
         if !internal.is_empty() {
             head.extend(wrapped(
                 &format!(
-                    "Internal: {} (compared through the unit's exported functions)",
+                    "Internal: {} (compared through the piece's exported functions)",
                     internal.join(", ")
                 ),
                 width,
@@ -3542,6 +3626,61 @@ fn hint_on_row_one(app: &App) -> bool {
     !app.running && app.chat_waits_why(app.now).is_none() && app.last.is_none()
 }
 
+/// Row 1's buttons while nothing runs: Try again, Details.
+fn idle_buttons(app: &App) -> Vec<(&'static str, &'static str)> {
+    let in_chat = app.focus == Focus::Chat;
+    let mut buttons = Vec::new();
+    if app.try_again.is_some() {
+        buttons.push((
+            if in_chat {
+                "[Try again]"
+            } else {
+                "[Try again t]"
+            },
+            "t",
+        ));
+    }
+    if app.run.is_some() {
+        buttons.push((if in_chat { "[Details]" } else { "[Details c]" }, "c"));
+    }
+    buttons
+}
+
+/// A menu's focused greyed item's reason, said whole over the two status
+/// rows: the part that fits `first` columns (row 1), and the rest, when
+/// there is any, for row 2. `None` without a menu on a greyed item, or
+/// while a command runs (row 1 is its own then).
+fn menu_reason_rows(app: &App, first: usize) -> Option<(String, Option<String>)> {
+    if app.running {
+        return None;
+    }
+    let Mode::Menu(m) = &app.mode else {
+        return None;
+    };
+    let it = m.items.get(m.focus)?;
+    let why = it.greyed.as_ref()?;
+    let text = display::line(&format!("{}: {why}", it.label));
+    if width_of(&text) <= first {
+        return Some((text, None));
+    }
+    let mut one = String::new();
+    let mut words = text.split(' ').peekable();
+    while let Some(w) = words.peek() {
+        let next = if one.is_empty() {
+            w.to_string()
+        } else {
+            format!("{one} {w}")
+        };
+        if width_of(&next) > first && !one.is_empty() {
+            break;
+        }
+        one = next;
+        words.next();
+    }
+    let rest = words.collect::<Vec<&str>>().join(" ");
+    Some((one, (!rest.is_empty()).then_some(rest)))
+}
+
 /// Row 1: the running command in words, or "Ready. Last: …", or the hint
 /// line; its buttons on the right.
 fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
@@ -3573,21 +3712,15 @@ fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
             )
         }
         _ => {
-            if app.try_again.is_some() {
-                buttons.push((
-                    if in_chat {
-                        "[Try again]"
-                    } else {
-                        "[Try again t]"
-                    },
-                    "t",
-                ));
-            }
-            if app.run.is_some() {
-                buttons.push((if in_chat { "[Details]" } else { "[Details c]" }, "c"));
-            }
+            buttons = idle_buttons(app);
             let mut style = status();
+            let taken: usize = buttons.iter().map(|(b, _)| width_of(b) + 1).sum();
+            let reason = menu_reason_rows(app, width.saturating_sub(taken + 1));
             let text = match (app.chat_waits_why(app.now), &app.last) {
+                // A focused greyed item's reason is never cut: it takes
+                // this row while the menu is open and goes on in the notice
+                // row (the whole-journey check, item 13).
+                _ if reason.is_some() => reason.map(|(first, _)| first).unwrap_or_default(),
                 (Some(why), _) => {
                     style = notice();
                     why.to_string()
@@ -3601,11 +3734,8 @@ fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
                 // not a dialog, a menu or the chat), until the first move.
                 (None, None) if first_screen(app) && !app.moved => READY_FIRST.to_string(),
                 // Then what the selected row is (§9.5).
-                (None, None) => {
-                    let taken: usize = buttons.iter().map(|(b, _)| width_of(b) + 1).sum();
-                    hint_words(app, width.saturating_sub(taken + 1))
-                        .unwrap_or_else(|| "Ready.".to_string())
-                }
+                (None, None) => hint_words(app, width.saturating_sub(taken + 1))
+                    .unwrap_or_else(|| "Ready.".to_string()),
             };
             (text, style)
         }
@@ -3672,6 +3802,15 @@ fn fit_status(text: &str, width: usize) -> String {
 
 /// Row 2: the notice, else the plan summary, else the hand-offs' state.
 fn notice_row(app: &App, width: usize) -> Line<'static> {
+    // The rest of a greyed item's reason, before anything else (item 13).
+    let taken: usize = idle_buttons(app).iter().map(|(b, _)| width_of(b) + 1).sum();
+    let reason = menu_reason_rows(app, width.saturating_sub(taken + 1));
+    if let Some((_, Some(rest))) = &reason {
+        return Line::from(Span::styled(
+            fit_status(&format!(" {rest}"), width),
+            status(),
+        ));
+    }
     if let Some(n) = &app.notice {
         return Line::from(Span::styled(
             ellipsis(&format!(" {}", n.text), width),
@@ -3728,8 +3867,9 @@ fn notice_row(app: &App, width: usize) -> Line<'static> {
     {
         return Line::from(Span::styled(ellipsis(&format!(" {n}"), width), notice()));
     }
-    // Last: the hint line, when row 1 holds a run or its `Last:` (§9.5).
-    if !hint_on_row_one(app) {
+    // Last: the hint line, when row 1 holds a run or its `Last:` (§9.5) —
+    // never a greyed item's reason row 1 holds whole already.
+    if !hint_on_row_one(app) && reason.is_none() {
         if let Some(h) = hint_words(app, width.saturating_sub(1)) {
             return Line::from(Span::styled(fit_status(&format!(" {h}"), width), status()));
         }
@@ -3854,6 +3994,7 @@ fn draw_hints(frame: &mut Frame, app: &mut App, area: Rect) {
     // In an overlay, only its keys; in the panes, the focused pane's, with
     // `? help` and `q quit` always last.
     type Keys = Vec<(&'static str, &'static str)>;
+    let panes = overlay_hints(app).is_none() && app.focus != Focus::Chat;
     let (list, tail): (Keys, Keys) = match overlay_hints(app) {
         Some(keys) => (keys, Vec::new()),
         // In the chat `?` and `q` are text: its own hints end in F1 and
@@ -3863,6 +4004,17 @@ fn draw_hints(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     let entry = |(k, v): &(&str, &str)| format!(" {k} {v} ");
     let tail_w: usize = tail.iter().map(|e| width_of(&entry(e)) + 1).sum();
+    // Too wide: the less useful keys go first, in this order, so `i what
+    // is this?` stays at 100 columns (the whole-journey check, item 17);
+    // then whole entries from the end, never one cut.
+    let mut list = list;
+    let total = |l: &Keys| tail_w + l.iter().map(|e| width_of(&entry(e)) + 1).sum::<usize>();
+    for least in ["g", "c", "Esc", "Tab", "]f", "←→"] {
+        if !panes || total(&list) <= width {
+            break;
+        }
+        list.retain(|(k, _)| *k != least);
+    }
     let mut chosen = Vec::new();
     let mut used = tail_w;
     for e in list {
@@ -4009,8 +4161,8 @@ const HELP_MOUSE: &[&str] = &[
 
 const HELP_KEYS: &[(&str, &str)] = &[
     ("↑ ↓", "move in the focused pane (tree: a row; View and details: scroll)"),
-    ("← →", "tree: fold / open, or to the parent / into the View (a unit's code opens on the way); View: open a unit's folded code, scroll sideways, ← at the edge back to Files"),
-    ("Enter", "tree: the action menu · View: open a unit's folded code, else the menu · menu: choose · dialog: the focused button"),
+    ("← →", "tree: fold / open, or to the parent / into the View (a piece's code opens on the way); View: open a piece's folded code, scroll sideways, ← at the edge back to Files"),
+    ("Enter", "tree: the action menu · View: open a piece's folded code, else the menu · menu: choose · dialog: the focused button"),
     ("Esc", "close a menu, dialog or overlay; View: back to Files; Files: back along your jumps"),
     ("Backspace", "back along your jumps"),
     ("Tab", "the other pane (below 80 columns: Files ⇄ View)"),
@@ -4022,8 +4174,13 @@ const HELP_KEYS: &[(&str, &str)] = &[
     ("q", "quit (a dialog while a command runs)"),
     ("m (in Help)", "the mouse on or off"),
     ("a m e E r R x d v", "shortcuts for the selection's menu items (Accept, Modify, Hand edit, kept edit, Retry, Resume, Cancel, Compare, Show the checks)"),
-    ("j k  ]f [f  J K", "also: move, next/previous pair, next/previous unit"),
+    ("j k  ]f [f  J K", "also: move, next/previous pair, next/previous piece"),
 ];
+
+/// The cockpit's two words, said once (the whole-journey check, item 14):
+/// every screen says piece and try; the commands and files keep their own.
+pub const HELP_WORDS: &str =
+    "Words: a piece is a unit in the commands and files; a try is an attempt.";
 
 const HELP_LEGEND: &[(&str, &str)] = &[
     ("✗", "failing: the judge's last check failed"),
@@ -4079,12 +4236,12 @@ const HELP_FEATURES: &[&str] = &[
      argument is a flag or a word — never a path: the program runs in an empty folder of its \
      own. Programs that fork are checked only up to the fork.",
     "Every Re-check (and every judged turn of a migration) runs each scenario on the C program \
-     and on the program with that unit's Rust swapped in, and compares the exit status, stdout \
-     and stderr. Each unit is checked with only its own Rust swapped in. A scenario the C \
+     and on the program with that piece's Rust swapped in, and compares the exit status, stdout \
+     and stderr. Each piece is checked with only its own Rust swapped in. A scenario the C \
      cannot run the same way twice is skipped and named — it never blocks a Re-check, and \
      neither does a features file with an error.",
     "Map the features runs each scenario on a scratch copy of the C in which every function \
-     notes that it ran: the map says which units each feature runs (\"runs\"), from the \
+     notes that it ran: the map says which pieces each feature runs (\"runs\"), from the \
      functions it could put a note in (\"watches\"). Changing a scenario makes verdicts made \
      before say \"not checked since you changed them\" until re-checked; renaming a feature does \
      not.",
@@ -4103,33 +4260,33 @@ const HELP_FEATURES: &[&str] = &[
 ];
 
 const HELP_FEATURE_LEGEND: &[(&str, &str)] = &[
-    ("✗", "failing: a unit's check of it failed"),
+    ("✗", "failing: a piece's check of it failed"),
     (
         "⚑",
         "a scenario cannot run as written — change or remove it",
     ),
     (
         "↻",
-        "needs a re-check: a unit with Rust was not checked on it",
+        "needs a re-check: a piece with Rust was not checked on it",
     ),
     ("⋯", "not mapped yet"),
     ("≃", "the map is out of date"),
     ("◔", "the map is incomplete for it"),
-    ("∅", "reaches no unit"),
-    ("✓", "all its units migrated, each checked alone"),
+    ("∅", "reaches no piece"),
+    ("✓", "all its pieces migrated, each checked alone"),
     (
         "◉",
-        "holds so far: it runs Rust now, and its migrated units pass",
+        "holds so far: it runs Rust now, and its migrated pieces pass",
     ),
-    ("◌", "still all C: none of its units is in Rust yet"),
-    ("·", "see its units: they differ"),
+    ("◌", "still all C: none of its pieces is in Rust yet"),
+    ("·", "see its pieces: they differ"),
 ];
 
 const HELP_SPEED: &[&str] = &[
     "Speed compares the C against the Rust in use. A workload is one run of the whole program \
      with arguments you choose and, at most, one input file of yours (inside the project). perf \
-     runs it as the C alone, then each verified unit's Rust swapped in alone, then the program \
-     as it stands (every verified unit together), the C and the Rust taking turns, many times \
+     runs it as the C alone, then each verified piece's Rust swapped in alone, then the program \
+     as it stands (every verified piece together), the C and the Rust taking turns, many times \
      each, and says which is faster and by how much — or that it cannot tell. It never changes \
      a verdict.",
     "perf compares what the program prints and how it ends: when the Rust prints or ends \
@@ -4143,10 +4300,10 @@ const HELP_SPEED: &[&str] = &[
      runs = 15). Enter on Speed: Write / Edit the workloads file, Measure speed; on a verified \
      unit, Measure this unit's speed. Keep the computer quiet while it measures. Commit \
      the ledger's perf/ to keep a history: measuring again replaces a row.",
-    "When a unit's Rust is slower and speed matters, change the Rust the way it was made: \
-     made by a model — Modify its attempt with a note about speed, Replace the verified crate \
-     with the new attempt, measure again, and Replace it back if it is not faster; a hand \
-     edit — Hand edit its crate, Replace the verified crate with the new attempt, measure \
+    "When a piece's Rust is slower and speed matters, change the Rust the way it was made: \
+     made by a model — Modify its try with a note about speed, Replace the verified crate \
+     with the new try, measure again, and Replace it back if it is not faster; a hand \
+     edit — Hand edit its crate, Replace the verified crate with the new try, measure \
      again, and Replace it back if it is not faster (a hand edit alone is recorded, never \
      accepted: perf would time the same crate); written outside the cockpit — commit the crate \
      first (git), edit it in your editor, run harness verify <unit> in a terminal (with \
@@ -4225,7 +4382,7 @@ const HELP_ROUTES: &[&str] = &[
     "Other routes for model work:",
     "  harness migrate <unit>: a fresh translation (the blind hand-off, or a live provider); \
      each command takes --tool <id> on a mapped tool",
-    "  harness-mcp in a separate Claude Code session: steer attempts (README)",
+    "  harness-mcp in a separate Claude Code session: steer tries (README)",
     "  harness override <unit> <dir>: record an outside edit as a hand edit",
     "Every act shows its exact command and waits until it is ready: keys typed or pasted ahead never answer it, and a held Enter never runs anything.",
 ];
@@ -4373,6 +4530,7 @@ fn help_rows(
     }
     rows.push(Line::from(""));
     rows.push(Line::from(Span::styled("States", section_role())));
+    rows.extend(wrapped(HELP_WORDS, width, Style::default()));
     for (g, v) in HELP_LEGEND {
         rows.extend(wrapped(&format!("{g:<3} {v}"), width, Style::default()));
     }
@@ -4439,7 +4597,14 @@ fn details_rows(app: &App, width: usize) -> Vec<Line<'static>> {
                 width,
                 label_role(),
             ));
-            for l in &run.lines {
+            // A command's own records (`[scenario] {"k":…}`) come after the
+            // plain lines that say the same in words (the whole-journey
+            // check, item 15): kept for whoever reads them, never first.
+            let raw = |l: &&crate::app::RunLine| {
+                l.tone == Tone::Dim && l.text.starts_with('[') && l.text.contains("] {")
+            };
+            let records: Vec<&crate::app::RunLine> = run.lines.iter().filter(raw).collect();
+            for l in run.lines.iter().filter(|l| !raw(l)) {
                 // A line's indent is kept (a command's own screen nests its
                 // lines), each wrapped row under it.
                 let body = l.text.trim_start_matches(' ');
@@ -4463,6 +4628,19 @@ fn details_rows(app: &App, width: usize) -> Vec<Line<'static>> {
                     tone(Tone::Warn)
                 };
                 lines.extend(wrapped(exit, width, style));
+            }
+            if !records.is_empty() {
+                lines.push(Line::from(""));
+                lines.extend(wrapped(
+                    "The command's own records, as it wrote them:",
+                    width,
+                    label_role(),
+                ));
+                for l in records {
+                    for row in hard_wrap(&display::line(&l.text), width) {
+                        lines.push(Line::from(Span::styled(row, tone(l.tone))));
+                    }
+                }
             }
         }
     }
@@ -4605,6 +4783,17 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect, m: &Menu) {
 
 fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
     let mouse = app.mouse;
+    let editor = match &app.mode {
+        Mode::Dialog(c)
+            if matches!(
+                c.purpose,
+                crate::app::Purpose::OpenEditor | crate::app::Purpose::EditAgain
+            ) =>
+        {
+            app.editor_command()
+        }
+        _ => None,
+    };
     let Mode::Dialog(c) = &mut app.mode else {
         return;
     };
@@ -4640,6 +4829,15 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
         // it does; this is for whoever reads commands (§9.4).
         let argv = Sanitizer::default().push(&format!("Command: {}", shell_line(&p.argv)));
         for row in hard_wrap(&argv, inner_w) {
+            rows.push(Line::from(Span::styled(row, label_role())));
+        }
+    }
+    // An editor's dialog names the editor's command, as an act's names its
+    // own (the whole-journey check, item 11).
+    if let Some(command) = editor {
+        rows.push(Line::from(""));
+        let line = Sanitizer::default().push(&format!("Command: {command}"));
+        for row in hard_wrap(&line, inner_w) {
             rows.push(Line::from(Span::styled(row, label_role())));
         }
     }
@@ -5129,7 +5327,7 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
             overlay(
                 frame,
                 rect,
-                " Hand edit: a note for the human attempt ",
+                " Hand edit: a note for your own try ",
                 &rows,
                 at,
                 Some("Enter continue · Esc keep for later"),
@@ -5410,7 +5608,7 @@ mod tests {
     const SECTION_ALLOWED: [(&str, &[&str]); 5] = [
         (
             "the tool's tree",
-            &["Units (", "Features (", "Speed", "Speed ("],
+            &["Pieces (", "Features (", "Speed", "Speed ("],
         ),
         ("the Project view's tree", &["Programs (", "Libraries ("]),
         ("a View", &["Checks"]),
@@ -5454,7 +5652,7 @@ mod tests {
     #[test]
     fn the_section_allow_list_says_no_to_rows_and_the_journey() {
         for ok in [
-            "Units (11)",
+            "Pieces (11)",
             "Features (7)",
             "Speed",
             "Speed (C only)",
@@ -6452,6 +6650,28 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         assert!(screen.contains("Next: 1 file changed since the scan"));
     }
 
+    /// The whole-journey check, item 13: a greyed item's reason is never
+    /// cut — what row 1 cannot hold goes on in the notice row, even with a
+    /// `Last:` standing.
+    #[test]
+    fn a_greyed_reason_is_never_cut() {
+        let mut app = app("greyed-long");
+        app.last = Some("Scan the project — done (1 s)".into());
+        app.open_menu();
+        let Mode::Menu(m) = &mut app.mode else {
+            panic!()
+        };
+        let long = "it waits for a long list of things to happen first, each one named here \
+                    so that a person reading it knows the whole way through, then Make the end";
+        m.items[0].greyed = Some(long.into());
+        let buffer = render(&mut app, 100, 30);
+        let screen = text(&buffer);
+        let rows: Vec<&str> = screen.lines().collect();
+        let n = rows.len();
+        let both = format!("{} {}", rows[n - 3].trim(), rows[n - 2].trim());
+        assert!(both.contains(long), "{screen}");
+    }
+
     fn running(app: &mut App) {
         let argv: Vec<OsString> = [
             "/opt/ruharness/bin/harness",
@@ -6755,7 +6975,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
             .iter()
             .find(|(_, h)| *h == Hit::Row(Selection::Unit("u-lib".into())))
             .map(|(r, _)| *r)
-            .expect("the unit row");
+            .expect("the piece row");
         let buffer = render(&mut app, 120, 30);
         let line: String = (row.x..row.x + row.width)
             .map(|x| buffer[(x, row.y)].symbol())
@@ -7033,7 +7253,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         click_on(&mut app, &fold, t);
         assert!(app.expansion.is_open(&unit));
         assert_eq!(app.selection, unit);
-        assert!(app.rows.len() > rows, "its crate and attempts show");
+        assert!(app.rows.len() > rows, "its crate and tries show");
         render(&mut app, 120, 30);
         click_on(&mut app, &fold, t + ms(1000));
         assert!(!app.expansion.is_open(&unit));
@@ -7892,7 +8112,8 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
             "{screen}"
         );
         assert!(
-            screen.contains("· 1 needs attention · 0 of 1 C file in Rust "),
+            screen
+                .contains("· its one piece that can move is not in Rust yet · 1 needs attention "),
             "the title's counts in words: {screen}"
         );
         assert!(screen.contains("Needs attention:"), "{screen}");
@@ -7905,7 +8126,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         let Mode::Menu(m) = &app.mode else {
             panic!("a menu")
         };
-        assert_eq!(m.items[0].label, "Open unit u-lib");
+        assert_eq!(m.items[0].label, "Open piece u-lib");
         assert_eq!(
             m.reason.as_deref(),
             Some("u-lib needs attention: status and verdict disagree")
@@ -7958,7 +8179,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
                     .unwrap_or_else(|| panic!("{needle} is not on screen at {width}×30:\n{screen}"))
             };
             let (units, features, speed, src) = (
-                row("▾ Units (11)"),
+                row("▾ Pieces (11)"),
                 row("Features (7)"),
                 row("Speed"),
                 row("▸ src/"),
@@ -7985,7 +8206,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         // A short terminal folds the features group first, never a heading.
         let mut app = app_of("targets/zopfli", "heads20");
         let screen = text(&render(&mut app, 80, 24));
-        for needle in ["Units (11)", "▸ Features (7)", "Speed", "▸ src/"] {
+        for needle in ["Pieces (11)", "▸ Features (7)", "Speed", "▸ src/"] {
             assert!(screen.contains(needle), "{needle}:\n{screen}");
         }
         // A jump to a file opens its folder; the needs-attention list jumps
@@ -8038,7 +8259,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         app.select(Selection::Crate(id.clone()));
         let screen = text(&render(&mut app, 160, 40));
         assert!(
-            screen.contains("The crate is this unit's Rust in use now"),
+            screen.contains("This is the piece's Rust in use now"),
             "{screen}"
         );
         let attempt = app.snapshot.units[0].attempts[0].record.clone();
@@ -8046,7 +8267,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         let screen = text(&render(&mut app, 160, 40));
         assert!(
             screen.contains(&format!(
-                "An attempt is one try at this unit's Rust; {}: {}.",
+                "A try is one go at this piece's Rust; {}: {}.",
                 attempt.outcome,
                 outcome_gloss(&attempt.outcome)
             )),
@@ -8199,7 +8420,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
             "Its C: 1 file — src/zopfli/cache.c",
             "No Rust yet",
             "5 of your features run it",
-            "Attempts: none yet",
+            "Tries: none yet",
         ] {
             assert!(screen.contains(words), "{words}:\n{screen}");
         }
@@ -8227,8 +8448,8 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         app.focus = Focus::Files;
         app.select(Selection::Unit("u-hash".into()));
         assert!(!app.code_open);
-        crate::app::tests::code(&mut app, KeyCode::Right);
-        assert!(!app.code_open, "→ opens the unit's row first");
+        // Nothing under it (no Rust, no tries: no ▸, item 18): → goes
+        // straight into its View, the code open.
         crate::app::tests::code(&mut app, KeyCode::Right);
         assert!(app.code_open && app.focus == Focus::View);
         // A file's View keeps its code: there is nothing else to say.
@@ -8276,7 +8497,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         let next = app.next_step().expect("a Next step");
         assert!(
             next.text
-                .ends_with("of the 11 can move to Rust now — open u-cache: Enter"),
+                .ends_with("1 of the 4 that can move is in Rust — open u-cache: Enter"),
             "{}",
             next.text
         );
@@ -8307,7 +8528,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         let next = app.next_step().expect("a Next step");
         assert!(
             next.text
-                .ends_with("of the 11 can move to Rust now — Migrate u-cache: Enter"),
+                .ends_with("1 of the 4 that can move is in Rust — Migrate u-cache: Enter"),
             "{}",
             next.text
         );
@@ -8930,6 +9151,11 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
 
     /// A current map in which gzip runs katajainen and main, help runs main.
     fn write_current_map(app: &App) {
+        write_map_with(app, |_| {});
+    }
+
+    /// [`write_current_map`], changed by `tweak` before it is written.
+    fn write_map_with(app: &App, tweak: impl Fn(&mut harness_core::features::FeatureMap)) {
         let read = crate::load::read(&app.config.target).unwrap();
         let now = read.map_now.expect("today's inputs");
         let record =
@@ -8949,7 +9175,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
                     .map(|(a, b)| (a.into(), b.into()))
                     .collect(),
             };
-        let map = harness_core::features::FeatureMap {
+        let mut map = harness_core::features::FeatureMap {
             schema: harness_core::features::MAP_SCHEMA_NAME.into(),
             schema_version: 1,
             inputs: now,
@@ -8967,6 +9193,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
                 record("help", "flag", vec![("src/zopfli/zopfli_bin.c", "main")]),
             ],
         };
+        tweak(&mut map);
         std::fs::write(
             harness_core::features::map_path(&harness_core::ledger::Ledger::new(
                 &app.config.target,
@@ -9312,7 +9539,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         app.select(Selection::Project);
         let screen = text(&render(&mut app, 160, 40));
         assert!(
-            screen.contains("Speed: 1 of 1 unit measured — 1 slower, 1 parallel — see Speed"),
+            screen.contains("Speed: 1 of 1 piece measured — 1 slower, 1 parallel — see Speed"),
             "{screen}"
         );
         let mut app = write_speed_results(&app, false);
@@ -9379,7 +9606,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         );
         assert!(
             find(&items, "Measure the program as it stands").is_none(),
-            "one measurable unit: {items:?}"
+            "one measurable piece: {items:?}"
         );
         let (_, short) = app.dialog_words(&p);
         assert!(short.len() <= 3, "{short:#?}");
@@ -9389,7 +9616,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         assert_eq!(
             body[0],
             "Runs your program on 2 workloads (big-text, many-small): the C alone, then the \
-             program with each verified unit's Rust alone (u001-katajainen) — 15 runs a side."
+             program with each verified piece's Rust alone (u001-katajainen) — 15 runs a side."
         );
         assert!(
             body[1].starts_with("Takes about ") && body[1].contains("builds included"),
@@ -9407,7 +9634,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         // A unit: its own command; nothing asks for more runs yet.
         app.select(Selection::Unit("u001-katajainen".into()));
         let items = app.menu_items();
-        let this = find(&items, "Measure this unit's speed").expect("on a verified unit");
+        let this = find(&items, "Measure this piece's speed").expect("on a verified piece");
         let argv = crate::app::tests::strs(&this.pending.unwrap().argv);
         assert_eq!(
             argv.last().map(String::as_str),
@@ -9416,8 +9643,8 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         assert!(find(&items, "Measure again with 31 runs").is_none());
         app.select(Selection::Unit("u-cache".into()));
         assert!(
-            find(&app.menu_items(), "Measure this unit's speed").is_none(),
-            "a unit still in C has no speed of its own"
+            find(&app.menu_items(), "Measure this piece's speed").is_none(),
+            "a piece still in C has no speed of its own"
         );
         // A row that cannot tell asks for 31 runs on its workload only.
         let perf =
@@ -9478,7 +9705,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
             "{screen}"
         );
         assert!(
-            screen.contains("Commit the unit's crate first (git) — replacing it deletes it"),
+            screen.contains("Commit the piece's crate first (git) — replacing it deletes it"),
             "{screen}"
         );
         // Now its row prints differently, both outputs kept.
@@ -9537,7 +9764,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
             "{screen}"
         );
         assert!(
-            screen.contains("Compare the outputs; then change the unit's Rust (below)"),
+            screen.contains("Compare the outputs; then change the piece's Rust (below)"),
             "{screen}"
         );
         assert!(
@@ -9644,13 +9871,13 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         let fact =
             "With u001-katajainen's Rust the program prints differently (stdout, byte 15) on \
                     big-text — verify does not run this workload";
-        let next = "Compare the outputs; then change the unit's Rust (below) and measure this \
-                    unit again";
+        let next = "Compare the outputs; then change the piece's Rust (below) and measure this \
+                    piece again";
         let advice = app.speed.advice(&unit, true);
         assert_eq!(
             advice.differences,
             [format!(
-                "{fact} — found before the unit's Rust changed — measure this unit again to \
+                "{fact} — found before the piece's Rust changed — measure this piece again to \
                  check"
             )]
         );
@@ -9658,7 +9885,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         app.select(Selection::Unit(id.into()));
         let screen = text(&render(&mut app, 300, 50));
         assert!(
-            screen.contains("found before the unit's Rust changed"),
+            screen.contains("found before the piece's Rust changed"),
             "{screen}"
         );
         assert!(
@@ -9729,7 +9956,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
                 "With the program as it stands (u001-katajainen) the program exits differently \
                  (exit 1 where the C has exit 0) on big-text"
                     .to_string(),
-                "no unit's Rust differs alone — it is how they work together".to_string()
+                "no piece's Rust differs alone — it is how they work together".to_string()
             )]
         );
         app.select(Selection::Project);
@@ -9769,7 +9996,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         assert_eq!(
             change_words(&unit, true, "migration"),
             "Modify a-13c9 with a note about speed (give these numbers), then Replace u-lib's \
-             verified crate with the new attempt, measure this unit again — and if it is not \
+             verified crate with the new try, measure this piece again — and if it is not \
              faster, Replace it back with a-13c9"
         );
         // No provider: Modify is greyed, said in the cockpit's own words
@@ -9795,8 +10022,8 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
             change_words(&unit, false, "migration"),
             format!(
                 "Modify is greyed: {} — with one, Modify a-13c9 with a note about speed (give \
-                 these numbers), then Replace u-lib's verified crate with the new attempt, \
-                 measure this unit again — and if it is not faster, Replace it back with a-13c9",
+                 these numbers), then Replace u-lib's verified crate with the new try, \
+                 measure this piece again — and if it is not faster, Replace it back with a-13c9",
                 crate::model::NO_PROVIDER
             )
         );
@@ -9828,15 +10055,15 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         };
         assert_eq!(
             change_words(&unit, true, "migration"),
-            "Hand edit u-lib's crate, then Replace u-lib's verified crate with the new attempt \
-             and measure this unit again — and if it is not faster, Replace it back with a-77b2"
+            "Hand edit u-lib's crate, then Replace u-lib's verified crate with the new try \
+             and measure this piece again — and if it is not faster, Replace it back with a-77b2"
         );
         // A crate without either file Hand edit opens: commit, edit, verify.
         for missing in ["src/ffi.rs", "src/logic.rs"] {
             std::fs::remove_file(dir.join(missing)).unwrap();
             assert!(
                 change_words(&unit, true, "migration")
-                    .starts_with("Commit the unit's crate first (git)"),
+                    .starts_with("Commit the piece's crate first (git)"),
                 "without {missing}"
             );
             std::fs::write(dir.join(missing), "").unwrap();
@@ -9845,7 +10072,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         // no attempt to Replace it back with.
         unit.provenance = P::None;
         assert!(change_words(&unit, true, "migration")
-            .starts_with("Commit the unit's crate first (git)"));
+            .starts_with("Commit the piece's crate first (git)"));
         assert!(change_words(&unit, true, "migration")
             .contains("run harness verify u-lib in a terminal"));
         // On a mapped tool the command carries its `--tool`.
@@ -9951,8 +10178,8 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         let this = app
             .menu_items()
             .into_iter()
-            .find(|i| i.label == "Measure this unit's speed")
-            .expect("on a verified unit");
+            .find(|i| i.label == "Measure this piece's speed")
+            .expect("on a verified piece");
         if cfg!(target_os = "macos") {
             assert_eq!(
                 this.greyed.as_deref(),
@@ -10069,7 +10296,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         app.select(Selection::Project);
         let screen = text(&render(&mut app, 160, 40));
         assert!(
-            screen.contains("Speed: 0 of 1 unit measured — 1 not measured — see Speed"),
+            screen.contains("Speed: 0 of 1 piece measured — 1 not measured — see Speed"),
             "{screen}"
         );
     }
@@ -10368,7 +10595,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
                 // The program as it stands is stored too: its held units
                 // are not checked either, said in the same line.
                 .any(|h| h
-                    == "the C and the units the program as it stands holds are not checked \
+                    == "the C and the pieces the program as it stands holds are not checked \
                         here: no facts — run harness scan"),
             "{:?}",
             app.speed.header
@@ -10438,7 +10665,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
             greyed(
                 &mut app,
                 Selection::Unit(id.into()),
-                "Measure this unit's speed"
+                "Measure this piece's speed"
             )
             .as_deref(),
             Some(
@@ -10477,7 +10704,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
             )
             .as_deref(),
             Some(
-                "the program as it stands needs two verified units — with one, that unit's own \
+                "the program as it stands needs two verified pieces — with one, that piece's own \
                  row measures the same program"
             )
         );
@@ -10497,8 +10724,8 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         }
         assert!(app.features.map.current());
         for line in [
-            "◉ Compress to gzip  holds so far · 1 of 10 units",
-            "◉ Compress to raw deflate  holds so far · 1 of 9 units",
+            "◉ Compress to gzip  holds so far · 1 of 10 pieces",
+            "◉ Compress to raw deflate  holds so far · 1 of 9 pieces",
             "◌ Show the help  still all C",
             "◌ Report a missing file  still all C",
             "Your features ran 108 of the 111 functions the map watches.",
@@ -10519,7 +10746,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         app.select(Selection::Feature(help));
         let screen = text(&render(&mut app, 160, 40));
         assert!(
-            screen.contains("◌ still all C: none of the units it runs is in Rust yet"),
+            screen.contains("◌ still all C: none of the pieces it runs is in Rust yet"),
             "{screen}"
         );
         let gzip = id_of(&app, "Compress to gzip");
@@ -10527,7 +10754,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         let screen = text(&render(&mut app, 160, 40));
         assert!(
             screen.contains(
-                "◉ runs Rust now: 1 of its 10 units is in Rust, and each passed this feature's \
+                "◉ runs Rust now: 1 of its 10 pieces is in Rust, and each passed this feature's \
                  checks"
             ),
             "{screen}"
@@ -10648,7 +10875,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         let screen = text(&render(&mut app, 160, 40));
         assert!(!screen.contains("functions no feature ran"), "{screen}");
         assert!(
-            screen.contains("its units not known (map incomplete)"),
+            screen.contains("its pieces not known (map incomplete)"),
             "{screen}"
         );
         app.select(Selection::Feature("gzip".into()));
@@ -10682,7 +10909,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
             .collect::<Vec<_>>()
             .join(" ");
         for words in [
-            "see its units: they differ",
+            "see its pieces: they differ",
             harness_core::features::SkipReason::CSideUnstable.words(),
             "[[scenario]] table per",
         ] {
@@ -10728,7 +10955,8 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         assert!(app.features.map.current());
         let next = app.next_step().expect("a next step");
         assert!(
-            next.text.starts_with("Re-check u001-katajainen"),
+            next.text
+                .starts_with("open u001-katajainen (under Pieces), then Re-check"),
             "{}",
             next.text
         );
@@ -10740,7 +10968,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         app.select(Selection::Unit("u001-katajainen".into()));
         let screen = text(&render(&mut app, 220, 40));
         assert!(
-            screen.contains("your features: not checked on this unit yet"),
+            screen.contains("your features: not checked on this piece yet"),
             "{screen}"
         );
         assert!(
@@ -10756,14 +10984,14 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
             "{screen}"
         );
         assert!(
-            screen.contains("2 units · 1 not re-checked · 1 still C"),
+            screen.contains("2 pieces · 1 not re-checked · 1 still C"),
             "{screen}"
         );
         assert!(
             screen.contains("↻ Show the help  needs a re-check"),
             "{screen}"
         );
-        assert!(screen.contains("1 unit · 1 still C"), "{screen}");
+        assert!(screen.contains("1 piece · 1 still C"), "{screen}");
         assert!(screen.contains("Your features ran 2 of the"), "{screen}");
         // Review C3: help touches only a C unit, yet needs the re-check of
         // u001 — its View names it, a link; the summary counts it.
@@ -10771,9 +10999,17 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         let mut links = Vec::new();
         let lines = feature_view(&app, "help", 160, &mut links);
         let screen: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        // The re-check said once, in the Next step (the whole-journey
+        // check, item 12); the unit below is its link.
         assert!(
-            screen.contains("Your features are not checked on this unit yet — Re-check it:"),
+            screen.contains("Next: Open u001-katajainen below, then Re-check"),
             "{screen}"
+        );
+        assert_eq!(screen.matches("Re-check").count(), 1, "{screen}");
+        assert_eq!(
+            screen.matches("re-check").count(),
+            1,
+            "the state line: {screen}"
         );
         assert!(
             links
@@ -10787,7 +11023,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
             screen.contains("Features: 2 — 2 need a re-check"),
             "{screen}"
         );
-        assert!(screen.contains("1 unit not re-checked"), "{screen}");
+        assert!(screen.contains("1 piece not re-checked"), "{screen}");
 
         // §8.4/§8.5: the acts' cards (`i` in their dialogs, §9.5) say what
         // the features do.
@@ -10917,8 +11153,246 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         app.select(Selection::Unit("u-cache".into()));
         let screen = text(&render(&mut app, 160, 40));
         assert!(
-            screen.contains("None of your features runs this unit's functions"),
+            screen.contains("None of your features runs this piece's functions"),
             "{screen}"
+        );
+    }
+
+    /// A try of `unit`'s stopped at a hand-off, as the command line leaves
+    /// it: its record in progress (a test program's when `driver`) and its
+    /// request with no answer yet.
+    fn waiting_try(app: &App, unit: &str, id: &str, driver: bool) {
+        let ledger = harness_core::ledger::Ledger::new(&app.config.target);
+        let seed = app
+            .snapshot
+            .unit("u001-katajainen")
+            .and_then(|u| u.attempts.first())
+            .expect("u001's try")
+            .record
+            .clone();
+        let record = harness_core::attempts::AttemptRecord {
+            id: id.into(),
+            unit: unit.into(),
+            stage: driver.then(|| "driver".to_string()),
+            outcome: "in-progress".into(),
+            turns: vec![],
+            candidate_digest: String::new(),
+            promoted: false,
+            seeded_from: None,
+            steer_note: None,
+            ..seed
+        };
+        let dir = if driver {
+            harness_core::attempts::driver_attempt_dir(&ledger, unit, id)
+        } else {
+            harness_core::attempts::attempt_dir(&ledger, unit, id)
+        };
+        std::fs::create_dir_all(&dir).unwrap();
+        record.store(&dir).unwrap();
+        let traces = ledger
+            .unit_dir(unit)
+            .join(if driver { "driver-traces" } else { "traces" });
+        std::fs::create_dir_all(&traces).unwrap();
+        std::fs::write(traces.join("0badf00d.request.json"), "{}").unwrap();
+    }
+
+    /// The whole-journey check, item 7: a test program waiting for its
+    /// answer is a waiting piece — the mark, the words, its answer file
+    /// and the command to run again — at the test program's stage.
+    #[test]
+    fn a_test_program_waiting_for_its_answer_shows() {
+        let mut app = app_of("targets/zopfli", "driver-waits");
+        waiting_try(&app, "u-cache", "d-000000000001", true);
+        assert!(app.reload(true));
+        let u = app
+            .snapshot
+            .units
+            .iter()
+            .position(|u| u.unit.id == "u-cache")
+            .unwrap();
+        assert_eq!(app.files.units[u].state, UnitState::Waiting);
+        assert_eq!(
+            crate::journey::unit_stage(&app.snapshot.units[u], &app.files.units[u].state),
+            Some(6)
+        );
+        app.select(Selection::Unit("u-cache".into()));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(screen.contains("⚑ u-cache"), "{screen}");
+        assert!(screen.contains("waiting for your answer"), "{screen}");
+        assert!(!screen.contains("◇ u-cache"), "{screen}");
+        let next = app.advice(&app.selection).unwrap().text;
+        assert!(
+            next.starts_with("waiting for your answer: ")
+                && next.contains("driver-traces/0badf00d.response.json")
+                && next.ends_with("then run the same gen-driver command again"),
+            "{next}"
+        );
+    }
+
+    /// The whole-journey check, item 6: a Rust try that waits says the
+    /// piece's waiting sentence on its own row and card — never "it has not
+    /// finished", never "in 0 turns" — and the card ends with the pane's
+    /// Next line (item 12).
+    #[test]
+    fn a_waiting_try_says_its_answer_file() {
+        let mut app = app_of("targets/zopfli", "try-waits");
+        crate::app::asks::tests::give_test_program(&mut app, "u-cache");
+        let id = "a-000000000001";
+        waiting_try(&app, "u-cache", id, false);
+        assert!(app.reload(true));
+        let sel = Selection::Attempt("u-cache".into(), id.into());
+        app.select(sel.clone());
+        let next = app.advice(&sel).unwrap().text;
+        assert!(
+            next.contains("traces/0badf00d.response.json")
+                && next.ends_with("then run the same migrate command again"),
+            "{next}"
+        );
+        let card = crate::explain::explain(&app, &sel).card;
+        assert!(!card.iter().any(|l| l.contains("0 turns")), "{card:?}");
+        assert_eq!(card.last(), Some(&app.pane_next(&sel).unwrap().line()));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(!screen.contains("has not finished"), "{screen}");
+    }
+
+    /// The whole-journey check, item 8: the tool's journey stays on its
+    /// earliest unfinished stage — a Re-check of a done piece is no reason
+    /// to say "Step 8 of 8" while other pieces have no test program.
+    #[test]
+    fn the_tools_journey_is_at_its_earliest_unfinished_stage() {
+        let app = zopfli_with_features("journey-earliest", FEATURES_TOML);
+        write_current_map(&app);
+        let mut app = crate::app::tests::app_of_path(&app.config.target);
+        app.select(Selection::Project);
+        let next = app.next_step().unwrap().text;
+        assert!(
+            next.starts_with("open u001-katajainen (under Pieces)"),
+            "{next}"
+        );
+        assert!(
+            app.journey()
+                .short()
+                .starts_with("Step 6 of 8: Test program"),
+            "{}",
+            app.journey().short()
+        );
+    }
+
+    /// The whole-journey check, items 17 and 18: at 100 columns the key
+    /// bar keeps `i what is this?`; Fold is offered only on a row with rows
+    /// under it; a piece shows ▸ only when its Rust or its tries are there.
+    #[test]
+    fn the_key_bar_keeps_i_and_only_rows_with_children_fold() {
+        let mut app = app("keys-100");
+        let screen = text(&render(&mut app, 100, 30));
+        assert!(screen.contains(" i what is this? "), "{screen}");
+        let folds = |app: &App| {
+            app.menu_items()
+                .iter()
+                .any(|i| i.label == "Fold" || i.label == "Unfold")
+        };
+        app.select(Selection::Features);
+        assert!(!folds(&app), "Features (none yet) has nothing to fold");
+        app.select(Selection::Units);
+        assert!(folds(&app));
+        let app = app_of("targets/zopfli", "fold-marks");
+        let expandable = |id: &str| {
+            app.rows
+                .iter()
+                .find(|r| r.selection() == Some(&Selection::Unit(id.into())))
+                .map(|r| r.expandable)
+                .unwrap()
+        };
+        assert!(!expandable("u-cache"), "no Rust, no tries: no ▸");
+        assert!(expandable("u001-katajainen"));
+    }
+
+    /// The whole-journey check, item 17: a selected feature row keeps its
+    /// state word whole — a shorter word, then the name cut — at 100 and
+    /// 80 columns.
+    #[test]
+    fn a_feature_row_never_cuts_its_state_word() {
+        let text_ = format!(
+            "{FEATURES_TOML}[[scenario]]\nfeature = \"gzip\"\nid = \"small\"\n\
+             args = [\"-c\", \"{{input}}\"]\ninput = \"tests/small.txt\"\n"
+        );
+        let mut app = zopfli_with_features("feat-row-word", &text_);
+        app.select(Selection::Feature("gzip".into()));
+        for w in [100, 80] {
+            let screen = text(&render(&mut app, w, 44));
+            let row = screen
+                .lines()
+                .find(|l| l.split('│').nth(1).is_some_and(|f| f.contains("⚑ C")))
+                .unwrap_or_else(|| panic!("{screen}"));
+            let files = row.split('│').nth(1).unwrap_or(row).trim_end();
+            assert!(
+                files.ends_with("a scenario cannot run") || files.ends_with("can't run"),
+                "{w}: {row}"
+            );
+        }
+    }
+
+    /// The whole-journey check, item 3: before any Re-check, a scenario
+    /// whose input file is missing is named with its own reason, never
+    /// "differs between runs".
+    #[test]
+    fn a_scenario_that_cannot_run_is_named_with_its_reason() {
+        let text = format!(
+            "{FEATURES_TOML}[[scenario]]\nfeature = \"gzip\"\nid = \"small\"\n\
+             args = [\"-c\", \"{{input}}\"]\ninput = \"tests/small.txt\"\n"
+        );
+        let mut app = zopfli_with_features("feat-input-missing", &text);
+        app.select(Selection::Feature("gzip".into()));
+        let mut links = Vec::new();
+        let lines = feature_view(&app, "gzip", 160, &mut links);
+        let screen: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        assert!(
+            screen.contains(
+                "Scenario small: its input tests/small.txt is not here — put the file back or \
+                 change the scenario."
+            ),
+            "{screen}"
+        );
+        assert!(!screen.contains("differs between runs"), "{screen}");
+    }
+
+    /// The whole-journey check, item 2: a current map that is incomplete
+    /// only because a scenario cannot run says what the others ran, and the
+    /// way out — never "not known — map the features" right after a map.
+    #[test]
+    fn a_scenario_that_cannot_run_leaves_what_the_others_ran() {
+        let app = zopfli_with_features("feat-cannot-run", FEATURES_TOML);
+        write_map_with(&app, |m| {
+            m.scenarios[1] = harness_core::features::ScenarioRecord::input_unusable(
+                "help",
+                "flag",
+                harness_core::perf::workloads::InputUnusable::Missing,
+            );
+        });
+        let mut app = crate::app::tests::app_of_path(&app.config.target);
+        assert!(!app.features.complete);
+        assert!(app.features.complete_but_cannot_run);
+        let line = unit_features_line(&app, "u001-katajainen").unwrap();
+        assert_eq!(
+            line,
+            "1 of your features runs it · 1 not re-checked — fix the scenario that cannot run (Features)"
+        );
+        app.select(Selection::Unit("u-cache".into()));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(!screen.contains("not known — map the features"), "{screen}");
+        assert!(
+            screen.contains("one that cannot run might — fix the scenario that cannot run"),
+            "{screen}"
+        );
+        // A scenario not mapped at all is still not known.
+        write_map_with(&app, |m| {
+            m.scenarios.pop();
+        });
+        let app = crate::app::tests::app_of_path(&app.config.target);
+        assert!(!app.features.complete_but_cannot_run);
+        assert_eq!(
+            unit_features_line(&app, "u-cache").as_deref(),
+            Some("Which features run it: not known — map the features.")
         );
     }
 
