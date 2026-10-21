@@ -1,9 +1,9 @@
-┌ Files ───────────────────────────────┐┌ u-lib's crate · from try a-13c9 ─────────────────────────────────────────────┐
+┌ Files ───────────────────────────────┐┌ u-lib's Rust · from try a-13c9 ──────────────────────────────────────────────┐
 │▾ harness-tui-hin…line-0000000000 ✓1/1││All 8 steps done ✓                                                            │
 │  ▾ Pieces (1)                        ││✓ u-lib done                                                                  │
 │    ▾ ✓ u-lib                     done││Next: In Rust and checked — nothing to do                                     │
-│        crate          from try a-13c9││Its Rust: from try a-13c9 · the judge says green, up to date                  │
-│        ✓ a-13c9          green in use││The crate is this piece's Rust in use now: what an Accept (or a hand edit) put│
+│        Rust           from try a-13c9││Its Rust: from try a-13c9 · the judge says green, up to date                  │
+│        ✓ a-13c9          green in use││This is the piece's Rust in use now: what an Accept (or a hand edit) put      │
 │        ✓ a-28d8      green superseded││there, built in place of its C.                                               │
 │        ✗ a-d2e5                   red││C  read_scalefactors (lib.c:17)       ⇄ Rust  read_scalefactors (src/ffi.rs:1…│
 │    Features (none yet)               ││17 void read_scalefactors(bs_t *bs, › │  11 pub unsafe extern "C" fn read_sca›│
@@ -23,7 +23,7 @@
 │                                      ││31         7.56931807e-07f / 511,   › │  25                                   │
 │                                      ││32         9.53674316e-07f / 1023,  › │  26     let scfcod_slice: &[u8] = if ›│
 │                                      ││Checks  – whole program not run  ✓ same exports  ✓ allowed calls only         │
-│                                      ││        ✓ driver shape  ✓ same outputs as C  ✓ sanitizers  ✓ boundary calls   │
+│                                      ││        ✓ test program shape  ✓ same outputs as C  ✓ sanitizers +1            │
 └──────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────┘
  Ready.
 

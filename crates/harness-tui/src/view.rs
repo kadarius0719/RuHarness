@@ -42,7 +42,7 @@ pub const SPLIT_VIEW_MIN: u16 = 78;
 pub const DIALOG_COLUMNS: u16 = 76;
 
 mod chat_pane;
-mod project_pane;
+pub(crate) mod project_pane;
 pub use chat_pane::{state_word, CHAT_COLUMN_FROM, CHAT_COLUMN_MAX, VIEW_KEEPS};
 
 // The roles (crate::theme): every style the view draws is one of these.
@@ -648,7 +648,7 @@ fn node_name(app: &App, sel: &Selection) -> String {
         Selection::Function(_, name) => format!("{}()", short_symbol(name)),
         Selection::Units => format!("Pieces ({})", app.snapshot.units.len()),
         Selection::Unit(id) => id.clone(),
-        Selection::Crate(_) => "crate".into(),
+        Selection::Crate(_) => "Rust".into(),
         Selection::Attempt(_, id) => short_id(id),
         Selection::Features => match &app.features.group {
             featmap::Group::NoFile => "Features (none yet)".into(),
@@ -863,6 +863,12 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
     // letters; the word's padding goes first, then the word gets short
     // (`no test`, `ready`, …), then the name is cut (fix pass, item 8).
     let unit_words = match sel {
+        // A feature's state word, likewise: never cut — a shorter word
+        // first, the name cut before it (the whole-journey check, item 17).
+        Selection::Feature(id) => app
+            .features
+            .feature(id)
+            .map(|f| (word.clone(), f.state.short_word().to_string())),
         Selection::Unit(_) | Selection::File(_) if !internal && !name_first => {
             let state = match sel {
                 Selection::File(p) => match app.files.file(p).map(|f| &f.state) {
@@ -879,8 +885,14 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
         _ => None,
     };
     let (mut name_text, pad, word_text) = if let Some((full, short)) = unit_words {
-        const KEEP: usize = 6;
-        let keep = name_w.min(KEEP);
+        // A feature's mark and word say its state; its name gives way
+        // further (to 4 columns) before the word goes (item 17).
+        let keep_at_least = if matches!(sel, Selection::Feature(_)) {
+            4
+        } else {
+            6
+        };
+        let keep = name_w.min(keep_at_least);
         let word_text = [full, short]
             .into_iter()
             .find(|w| keep + 1 + width_of(&display::line(w)) <= room)
@@ -1275,7 +1287,7 @@ fn view_title(app: &App) -> String {
     let name = match sel {
         Selection::File(p) | Selection::Dir(p) => p.clone(),
         Selection::Function(p, n) => format!("{}() in {p}", short_symbol(n)),
-        Selection::Crate(u) => format!("{u}'s crate"),
+        Selection::Crate(u) => format!("{u}'s Rust"),
         Selection::Attempt(u, a) => format!("try {} of {u}", short_id(a)),
         _ => node_name(app, sel),
     };
@@ -1474,8 +1486,8 @@ fn unit_record(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
             lines.extend(wrapped(&origin, width, label_role()));
             if matches!(app.selection, Selection::Crate(_)) {
                 lines.extend(wrapped(
-                    "The crate is this piece's Rust in use now: what an Accept (or a hand edit) \
-                     put there, built in place of its C.",
+                    "This is the piece's Rust in use now: what an Accept (or a hand edit) put \
+                     there, built in place of its C.",
                     width,
                     notice(),
                 ));
@@ -1726,7 +1738,9 @@ pub(crate) fn unit_features_line(app: &App, unit_id: &str) -> Option<String> {
     }
     let uf = model.by_unit.get(unit_id)?;
     if uf.outside {
-        return Some("Not part of the program your features run — its verdicts skip them.".into());
+        return Some(
+            "Not part of the program your features run — its checks leave them out.".into(),
+        );
     }
     if model.no_single_main {
         return Some(
@@ -2474,7 +2488,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
             lines.extend(wrapped(
                 "Speed compares the C against the Rust in use: the program runs your \
                  workloads — inputs you choose — first as the C, then with each piece's \
-                 Rust, many times each, and the harness says which is faster and by how much.",
+                 Rust, many times each, and says which is faster and by how much.",
                 width,
                 Style::default(),
             ));
@@ -3980,6 +3994,7 @@ fn draw_hints(frame: &mut Frame, app: &mut App, area: Rect) {
     // In an overlay, only its keys; in the panes, the focused pane's, with
     // `? help` and `q quit` always last.
     type Keys = Vec<(&'static str, &'static str)>;
+    let panes = overlay_hints(app).is_none() && app.focus != Focus::Chat;
     let (list, tail): (Keys, Keys) = match overlay_hints(app) {
         Some(keys) => (keys, Vec::new()),
         // In the chat `?` and `q` are text: its own hints end in F1 and
@@ -3989,6 +4004,17 @@ fn draw_hints(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     let entry = |(k, v): &(&str, &str)| format!(" {k} {v} ");
     let tail_w: usize = tail.iter().map(|e| width_of(&entry(e)) + 1).sum();
+    // Too wide: the less useful keys go first, in this order, so `i what
+    // is this?` stays at 100 columns (the whole-journey check, item 17);
+    // then whole entries from the end, never one cut.
+    let mut list = list;
+    let total = |l: &Keys| tail_w + l.iter().map(|e| width_of(&entry(e)) + 1).sum::<usize>();
+    for least in ["g", "c", "Esc", "Tab", "]f", "←→"] {
+        if !panes || total(&list) <= width {
+            break;
+        }
+        list.retain(|(k, _)| *k != least);
+    }
     let mut chosen = Vec::new();
     let mut used = tail_w;
     for e in list {
@@ -4571,7 +4597,14 @@ fn details_rows(app: &App, width: usize) -> Vec<Line<'static>> {
                 width,
                 label_role(),
             ));
-            for l in &run.lines {
+            // A command's own records (`[scenario] {"k":…}`) come after the
+            // plain lines that say the same in words (the whole-journey
+            // check, item 15): kept for whoever reads them, never first.
+            let raw = |l: &&crate::app::RunLine| {
+                l.tone == Tone::Dim && l.text.starts_with('[') && l.text.contains("] {")
+            };
+            let records: Vec<&crate::app::RunLine> = run.lines.iter().filter(raw).collect();
+            for l in run.lines.iter().filter(|l| !raw(l)) {
                 // A line's indent is kept (a command's own screen nests its
                 // lines), each wrapped row under it.
                 let body = l.text.trim_start_matches(' ');
@@ -4595,6 +4628,19 @@ fn details_rows(app: &App, width: usize) -> Vec<Line<'static>> {
                     tone(Tone::Warn)
                 };
                 lines.extend(wrapped(exit, width, style));
+            }
+            if !records.is_empty() {
+                lines.push(Line::from(""));
+                lines.extend(wrapped(
+                    "The command's own records, as it wrote them:",
+                    width,
+                    label_role(),
+                ));
+                for l in records {
+                    for row in hard_wrap(&display::line(&l.text), width) {
+                        lines.push(Line::from(Span::styled(row, tone(l.tone))));
+                    }
+                }
             }
         }
     }
@@ -8213,7 +8259,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         app.select(Selection::Crate(id.clone()));
         let screen = text(&render(&mut app, 160, 40));
         assert!(
-            screen.contains("The crate is this piece's Rust in use now"),
+            screen.contains("This is the piece's Rust in use now"),
             "{screen}"
         );
         let attempt = app.snapshot.units[0].attempts[0].record.clone();
@@ -8402,8 +8448,8 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         app.focus = Focus::Files;
         app.select(Selection::Unit("u-hash".into()));
         assert!(!app.code_open);
-        crate::app::tests::code(&mut app, KeyCode::Right);
-        assert!(!app.code_open, "→ opens the piece's row first");
+        // Nothing under it (no Rust, no tries: no ▸, item 18): → goes
+        // straight into its View, the code open.
         crate::app::tests::code(&mut app, KeyCode::Right);
         assert!(app.code_open && app.focus == Focus::View);
         // A file's View keeps its code: there is nothing else to say.
@@ -11230,6 +11276,60 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
             "{}",
             app.journey().short()
         );
+    }
+
+    /// The whole-journey check, items 17 and 18: at 100 columns the key
+    /// bar keeps `i what is this?`; Fold is offered only on a row with rows
+    /// under it; a piece shows ▸ only when its Rust or its tries are there.
+    #[test]
+    fn the_key_bar_keeps_i_and_only_rows_with_children_fold() {
+        let mut app = app("keys-100");
+        let screen = text(&render(&mut app, 100, 30));
+        assert!(screen.contains(" i what is this? "), "{screen}");
+        let folds = |app: &App| {
+            app.menu_items()
+                .iter()
+                .any(|i| i.label == "Fold" || i.label == "Unfold")
+        };
+        app.select(Selection::Features);
+        assert!(!folds(&app), "Features (none yet) has nothing to fold");
+        app.select(Selection::Units);
+        assert!(folds(&app));
+        let app = app_of("targets/zopfli", "fold-marks");
+        let expandable = |id: &str| {
+            app.rows
+                .iter()
+                .find(|r| r.selection() == Some(&Selection::Unit(id.into())))
+                .map(|r| r.expandable)
+                .unwrap()
+        };
+        assert!(!expandable("u-cache"), "no Rust, no tries: no ▸");
+        assert!(expandable("u001-katajainen"));
+    }
+
+    /// The whole-journey check, item 17: a selected feature row keeps its
+    /// state word whole — a shorter word, then the name cut — at 100 and
+    /// 80 columns.
+    #[test]
+    fn a_feature_row_never_cuts_its_state_word() {
+        let text_ = format!(
+            "{FEATURES_TOML}[[scenario]]\nfeature = \"gzip\"\nid = \"small\"\n\
+             args = [\"-c\", \"{{input}}\"]\ninput = \"tests/small.txt\"\n"
+        );
+        let mut app = zopfli_with_features("feat-row-word", &text_);
+        app.select(Selection::Feature("gzip".into()));
+        for w in [100, 80] {
+            let screen = text(&render(&mut app, w, 44));
+            let row = screen
+                .lines()
+                .find(|l| l.split('│').nth(1).is_some_and(|f| f.contains("⚑ C")))
+                .unwrap_or_else(|| panic!("{screen}"));
+            let files = row.split('│').nth(1).unwrap_or(row).trim_end();
+            assert!(
+                files.ends_with("a scenario cannot run") || files.ends_with("can't run"),
+                "{w}: {row}"
+            );
+        }
     }
 
     /// The whole-journey check, item 3: before any Re-check, a scenario

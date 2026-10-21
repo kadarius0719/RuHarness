@@ -497,10 +497,15 @@ impl App {
                 items.push(item(format!("Open piece {id}"), Action::OpenUnit(id), None));
             }
         }
-        if matches!(
-            sel,
-            Selection::Dir(_) | Selection::Units | Selection::Features
-        ) {
+        // Fold only on a row that has something under it (the
+        // whole-journey check, item 18): never on `Features (none yet)`.
+        let has_children = match sel {
+            Selection::Units => !self.snapshot.units.is_empty(),
+            Selection::Features => !self.features.features.is_empty(),
+            Selection::Dir(_) => true,
+            _ => false,
+        };
+        if has_children {
             items.push(item(
                 if self.expansion.is_open(sel) {
                     "Fold"

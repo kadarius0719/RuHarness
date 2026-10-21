@@ -106,6 +106,27 @@ impl FeatureState {
     }
 }
 
+impl FeatureState {
+    /// The state in a word or two, for a narrow tree row: the name is cut
+    /// before the state word, and this is the word's last form (the
+    /// whole-journey check, item 17).
+    pub fn short_word(&self) -> &'static str {
+        match self {
+            FeatureState::Failing => "failing",
+            FeatureState::ScenarioCannotRun => "can't run",
+            FeatureState::NeedsRecheck => "re-check",
+            FeatureState::NotMapped => "not mapped",
+            FeatureState::MapOutOfDate => "map old",
+            FeatureState::MapIncomplete => "map partial",
+            FeatureState::ReachesNoUnit => "no piece",
+            FeatureState::AllMigrated => "all Rust",
+            FeatureState::HoldsSoFar { .. } => "holds",
+            FeatureState::AllC => "all C",
+            FeatureState::SeeUnits => "see pieces",
+        }
+    }
+}
+
 fn plural(n: usize) -> &'static str {
     if n == 1 {
         ""

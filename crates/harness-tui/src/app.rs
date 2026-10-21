@@ -2990,7 +2990,7 @@ impl App {
                             if n == 1 { "" } else { "s" },
                             self.snapshot.ledger_rel()
                         ),
-                        "Changes no verdict.".into(),
+                        "It changes no check result and no code.".into(),
                     ],
                 )
             }
@@ -3032,8 +3032,8 @@ impl App {
                     vec![
                         format!(
                             "Makes this try {unit}'s Rust and runs the judge on it once more \
-                             (it writes {unit}'s crate, the judge's verdict files and {unit}'s \
-                             status in plan.toml; c shows them afterwards)."
+                             (it writes {unit}'s Rust, the judge's check and {unit}'s status in \
+                             the plan; c shows them afterwards)."
                         ),
                         "If the judge does not pass it there, the Rust it had is put back.".into(),
                     ]
@@ -3264,8 +3264,10 @@ impl App {
             ),
         };
         let mut dialog = Dialog::new(kind, self.now);
-        // Accept's button says what it does (fix pass, item 10).
-        if matches!(&purpose, Purpose::Act(p) if p.act == Act::Accept) {
+        // Accept's button says what it does (fix pass, item 10) — a
+        // program's Accept too (the whole-journey check, item 18).
+        if matches!(&purpose, Purpose::Act(p) if matches!(p.act, Act::Accept | Act::ProjectAccept))
+        {
             if let Some(b) = dialog.buttons.get_mut(1) {
                 b.label = "Accept".into();
             }
@@ -3903,6 +3905,42 @@ impl App {
         };
     }
 
+    /// What an act's card says beyond its dialog, for an act whose dialog
+    /// already says all its words: Map the project at length.
+    fn act_more(&self, p: &Pending) -> Vec<String> {
+        match p.act {
+            Act::ProjectMap => vec![
+                crate::view::project_pane::MAPPING_WORDS.to_string(),
+                "A program it finds is offered, never taken: Accept makes one a tool you can \
+                 open, scan, plan and move piece by piece."
+                    .into(),
+                "Map again whenever the build configuration or the project's files change; \
+                 the map says when it is out of date."
+                    .into(),
+            ],
+            Act::ProjectAsk => vec![
+                "The model reads what the map recorded — the files, the functions they define, \
+                 the build — and answers in a reply file; nothing is built."
+                    .into(),
+                "Its answer is advice: the card shows it beside each decision, with its why; \
+                 you still pick the file when you accept."
+                    .into(),
+                "Asked in the chat, the chat answers; asked here, the command stops at the \
+                 hand-off and says where the answer goes."
+                    .into(),
+            ],
+            Act::SaveFeatures | Act::SaveWorkloads => vec![
+                "Your draft becomes the file only now: the cockpit checked it when you left the \
+                 editor, and the command checks it again before it writes."
+                    .into(),
+                "It refuses when the file changed since you started the draft: nothing of yours \
+                 is overwritten."
+                    .into(),
+            ],
+            _ => vec!["The dialog says all this act does.".into()],
+        }
+    }
+
     /// A plan was made: its units, or a plan with none (review ENG-3) —
     /// not the note that no plan exists yet.
     pub fn plan_made(&self) -> bool {
@@ -3977,6 +4015,11 @@ impl App {
     pub fn act_explained(&self, p: &Pending) -> (String, Vec<String>) {
         let (title, short) = self.dialog_words(p);
         let (_, mut card) = self.act_words(p);
+        // A card that would say only what the dialog says says the rest
+        // (the whole-journey check, item 18): the dialog's lines go.
+        if card.iter().all(|l| short.contains(l)) {
+            card = self.act_more(p);
+        }
         // The full words, and what the dialog says that they do not: where
         // it writes, when they never name it.
         if !card.iter().any(|l| l.contains("rites")) {

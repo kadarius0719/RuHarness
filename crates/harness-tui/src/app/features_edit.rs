@@ -954,10 +954,10 @@ impl App {
             if f == 1 { "" } else { "s" }
         )];
         if new_digest.is_some() && new_digest == old_digest {
-            body.push("Only names changed: no verdict is affected.".into());
+            body.push("Only names changed: no check result is affected.".into());
         } else if n > 0 {
             body.push(
-                "From now on every Re-check runs them; verdicts made before show \"not checked \
+                "From now on every Re-check runs them; checks made before show \"not checked \
                  since you changed them\" until re-checked."
                     .into(),
             );

@@ -2,24 +2,24 @@
 │▾ harness…0000000 ✓1/4││Step 6 of 8: Test program                             │
 │  ▾ Pieces (11)       ││◇ u-cache no test program                             │
 │    ▸ ✓ u001…inen done││Next: Make the test program — run harness gen-driver  │
-│    ▸ ◇ u-c…he no test││u-cache (the chat is off)                             │
-│    ▸ ◇ u-hash no test││                                                      │
-│    ▸ · u-lz77 stays C││5 exported functions: ZopfliCacheToSublen (22 lines), │
-│    ▸ · u-tree stays C││ZopfliCleanCache (5 lines), ZopfliInitCache (19       │
-│    ▸ · u-b…ze stays C││lines), ZopfliMaxCachedSublen (11 lines),             │
-│    ▸ · u-g…er stays C││ZopfliSublenToCache (32 lines)                        │
-│    ▸ ◇ u-util no test││Its C: 1 file — src/zopfli/cache.c                    │
-│    ▸ · u-z…er stays C││No Rust yet                                           │
-│    ▸ · u-z…ib stays C││5 of your features run it · still C — see Features    │
-│    ▸ · u-z…in stays C││Tries: none yet                                       │
+│      ◇ u-c…he no test││u-cache (the chat is off)                             │
+│      ◇ u-hash no test││                                                      │
+│      · u-lz77 stays C││5 exported functions: ZopfliCacheToSublen (22 lines), │
+│      · u-tree stays C││ZopfliCleanCache (5 lines), ZopfliInitCache (19       │
+│      · u-b…ze stays C││lines), ZopfliMaxCachedSublen (11 lines),             │
+│      · u-g…er stays C││ZopfliSublenToCache (32 lines)                        │
+│      ◇ u-util no test││Its C: 1 file — src/zopfli/cache.c                    │
+│      · u-z…er stays C││No Rust yet                                           │
+│      · u-z…ib stays C││5 of your features run it · still C — see Features    │
+│      · u-z…in stays C││Tries: none yet                                       │
 │  ▾ Features (7)      ││                                                      │
-│      ◉ Compres…o gzip││▸ C source (Tab to the View, then Enter)              │
-│      ◉ Compres…o zlib││                                                      │
-│      ◉ Compres…eflate││                                                      │
-│      ◉ Say wha…t does││                                                      │
-│      ◉ Compres…uickly││                                                      │
-│      ◌ Show the help ││                                                      │
-│      ◌ Report …g file││                                                      │
+│      ◉ Comp…zip holds││▸ C source (Tab to the View, then Enter)              │
+│      ◉ Comp…lib holds││                                                      │
+│      ◉ Comp…ate holds││                                                      │
+│      ◉ Say …oes holds││                                                      │
+│      ◉ Comp…kly holds││                                                      │
+│      ◌ Show…elp all C││                                                      │
+│      ◌ Repo…ile all C││                                                      │
 │    Speed — not set up││                                                      │
 │  ▸ src/ ✓0/13 (+1 ✓?)││                                                      │
 │                      ││                                                      │
@@ -27,4 +27,4 @@
 └──────────────────────┘└──────────────────────────────────────────────────────┘
  u-cache: one piece of the program; it has no test program yet.
 
- ↑↓ move   ←→ fold/open   Enter actions   Tab pane   ? help   q quit
+ ↑↓ move   ←→ fold/open   Enter actions   i what is this?   ? help   q quit

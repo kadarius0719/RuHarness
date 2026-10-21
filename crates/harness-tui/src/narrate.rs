@@ -13,7 +13,7 @@ pub fn check_words(name: &str) -> String {
     match name {
         "symbol-set" => "same exports".into(),
         "capabilities" => "allowed calls only".into(),
-        "driver-shape" => "driver shape".into(),
+        "driver-shape" => "test program shape".into(),
         "rust-build" => "the Rust builds".into(),
         "differential-driver" => "same outputs as C".into(),
         "sanitizers" => "sanitizers".into(),

@@ -324,10 +324,22 @@ fn dir(app: &App, d: &str) -> Explained {
         ])
     } else {
         fit(&[
-            format!(
-                "{prefix}: a folder of {}; {owned} of them hold the C of a piece.",
-                plural(n, "file", "files")
-            ),
+            match (n, owned) {
+                (_, 0) => format!(
+                    "{prefix}: a folder of {}; none holds the C of a piece.",
+                    plural(n, "file", "files")
+                ),
+                (1, _) => format!("{prefix}: a folder of 1 file, which holds the C of a piece."),
+                (_, o) if o == n => {
+                    format!("{prefix}: a folder of {n} files; each holds the C of a piece.")
+                }
+                (_, 1) => {
+                    format!("{prefix}: a folder of {n} files; 1 of them holds the C of a piece.")
+                }
+                (_, o) => {
+                    format!("{prefix}: a folder of {n} files; {o} of them hold the C of a piece.")
+                }
+            },
             format!("A folder of {}.", plural(n, "file", "files")),
         ])
     };
@@ -425,14 +437,16 @@ fn file(app: &App, p: &str) -> Explained {
             ],
         ),
         FileState::NotInTool => {
-            let from = main_file(app)
-                .map(|m| base(&m).to_string())
-                .unwrap_or_else(|| "the program's own files".into());
+            // "what lzg.c links", "what the program's own files link".
+            let (from, links) = match main_file(app) {
+                Some(m) => (base(&m).to_string(), "links"),
+                None => ("the program's own files".to_string(), "link"),
+            };
             (
                 fit(&[
                     format!(
                         "{name} is in the project, but {tool} never calls into it: the map \
-                         followed what {from} links and this file is not reached."
+                         followed what {from} {links} and this file is not reached."
                     ),
                     format!(
                         "{name} is in the project, but {tool} never reaches it, so it is not \
@@ -442,7 +456,7 @@ fn file(app: &App, p: &str) -> Explained {
                 vec![
                     format!("{p}: a file of the project, not of {tool}."),
                     format!(
-                        "The map followed what {from} links; nothing it links reaches this file."
+                        "The map followed what {from} {links}; nothing linked reaches this file."
                     ),
                     "Nothing here acts on it. Another program of the project may use it: see \
                      the project view."

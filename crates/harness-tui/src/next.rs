@@ -372,7 +372,7 @@ impl App {
         Some(match r.outcome.as_str() {
             "green" => advice(
                 format!(
-                    "it passed every check (GREEN) — look over its code below, then Accept it into {}",
+                    "every check passed — look over its code below, then Accept it into {}",
                     unit.unit.id
                 ),
                 Some(Action::Act(Act::Accept)),

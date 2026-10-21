@@ -19,66 +19,66 @@
   @7-8 fg Green NONE "✓"
   @23-23 fg LightBlue BOLD "│"
   @25-38 fg - BOLD "u-cache: Enter"
-│    ▸ ◇ u-c…he no test││                                                      │
+│      ◇ u-c…he no test││                                                      │
   @0-0 fg LightBlue BOLD "│"
   @23-23 fg LightBlue BOLD "│"
-│    ▸ ◇ u-hash no test││26 files scanned                                      │
+│      ◇ u-hash no test││26 files scanned                                      │
   @0-0 fg LightBlue BOLD "│"
   @23-23 fg LightBlue BOLD "│"
-│    ▸ · u-lz77 stays C││Pieces (11): 1 ✓ done · 3 ◇ no test program · 7 ·     │
+│      · u-lz77 stays C││Pieces (11): 1 ✓ done · 3 ◇ no test program · 7 ·     │
   @0-0 fg LightBlue BOLD "│"
   @23-23 fg LightBlue BOLD "│"
   @25-36 fg - BOLD "Pieces (11):"
-│    ▸ · u-tree stays C││stays C                                               │
+│      · u-tree stays C││stays C                                               │
   @0-0 fg LightBlue BOLD "│"
   @23-23 fg LightBlue BOLD "│"
-│    ▸ · u-b…ze stays C││                                                      │
+│      · u-b…ze stays C││                                                      │
   @0-0 fg LightBlue BOLD "│"
   @23-23 fg LightBlue BOLD "│"
-│    ▸ · u-g…er stays C││Features: 7 — 5 hold so far, 2 still all C            │
+│      · u-g…er stays C││Features: 7 — 5 hold so far, 2 still all C            │
   @0-0 fg LightBlue BOLD "│"
   @23-23 fg LightBlue BOLD "│"
   @25-33 fg - BOLD "Features:"
-│    ▸ ◇ u-util no test││                                                      │
+│      ◇ u-util no test││                                                      │
   @0-0 fg LightBlue BOLD "│"
   @23-23 fg LightBlue BOLD "│"
-│    ▸ · u-z…er stays C││                                                      │
+│      · u-z…er stays C││                                                      │
   @0-0 fg LightBlue BOLD "│"
   @23-23 fg LightBlue BOLD "│"
-│    ▸ · u-z…ib stays C││                                                      │
+│      · u-z…ib stays C││                                                      │
   @0-0 fg LightBlue BOLD "│"
   @23-23 fg LightBlue BOLD "│"
-│    ▸ · u-z…in stays C││                                                      │
+│      · u-z…in stays C││                                                      │
   @0-0 fg LightBlue BOLD "│"
   @23-23 fg LightBlue BOLD "│"
 │  ▾ Features (7)      ││                                                      │
   @0-0 fg LightBlue BOLD "│"
   @5-16 fg LightBlue BOLD "Features (7)"
   @23-23 fg LightBlue BOLD "│"
-│      ◉ Compres…o gzip││                                                      │
+│      ◉ Comp…zip holds││                                                      │
   @0-0 fg LightBlue BOLD "│"
   @7-8 fg Green NONE "◉"
   @23-23 fg LightBlue BOLD "│"
-│      ◉ Compres…o zlib││                                                      │
+│      ◉ Comp…lib holds││                                                      │
   @0-0 fg LightBlue BOLD "│"
   @7-8 fg Green NONE "◉"
   @23-23 fg LightBlue BOLD "│"
-│      ◉ Compres…eflate││                                                      │
+│      ◉ Comp…ate holds││                                                      │
   @0-0 fg LightBlue BOLD "│"
   @7-8 fg Green NONE "◉"
   @23-23 fg LightBlue BOLD "│"
-│      ◉ Say wha…t does││                                                      │
+│      ◉ Say …oes holds││                                                      │
   @0-0 fg LightBlue BOLD "│"
   @7-8 fg Green NONE "◉"
   @23-23 fg LightBlue BOLD "│"
-│      ◉ Compres…uickly││                                                      │
+│      ◉ Comp…kly holds││                                                      │
   @0-0 fg LightBlue BOLD "│"
   @7-8 fg Green NONE "◉"
   @23-23 fg LightBlue BOLD "│"
-│      ◌ Show the help ││                                                      │
+│      ◌ Show…elp all C││                                                      │
   @0-0 fg LightBlue BOLD "│"
   @23-23 fg LightBlue BOLD "│"
-│      ◌ Report …g file││                                                      │
+│      ◌ Repo…ile all C││                                                      │
   @0-0 fg LightBlue BOLD "│"
   @23-23 fg LightBlue BOLD "│"
 │    Speed — not set up││                                                      │
@@ -97,10 +97,10 @@
   @0-23 fg LightBlue BOLD "└──────────────────────┘"
  Ready — ↑↓ to choose a row, Enter for what you can do
 
- ↑↓ move   ←→ fold/open   Enter actions   Tab pane   ? help   q quit
+ ↑↓ move   ←→ fold/open   Enter actions   i what is this?   ? help   q quit
   @0-2 fg - BOLD "↑↓"
   @10-12 fg - BOLD "←→"
   @25-30 fg - BOLD "Enter"
-  @41-44 fg - BOLD "Tab"
-  @52-53 fg - BOLD "?"
-  @61-62 fg - BOLD "q"
+  @41-42 fg - BOLD "i"
+  @59-60 fg - BOLD "?"
+  @68-69 fg - BOLD "q"

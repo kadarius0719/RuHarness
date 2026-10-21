@@ -10,7 +10,7 @@
 │                      ││Tries: 3 — 2 green, 1 red (listed under its row in the│
 │                      ││tree)                                                 │
 │                      ││Checks  – whole program not run  ✓ same exports       │
-│                      ││        ✓ allowed calls only  ✓ driver shape +3       │
+│                      ││        ✓ allowed calls only +4                       │
 │                      ││                                                      │
 │                      ││▾ C source                                            │
 │                      ││C    read_scalefactors (lib.c:17)                     │
@@ -27,4 +27,4 @@
 └──────────────────────┘└──────────────────────────────────────────────────────┘
  u-lib: one piece of the program; its Rust is done and passed the judge's check.
 
- ↑↓ move   ←→ fold/open   Enter actions   Tab pane   ? help   q quit
+ ↑↓ move   ←→ fold/open   Enter actions   i what is this?   ? help   q quit

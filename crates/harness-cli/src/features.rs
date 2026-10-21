@@ -201,6 +201,7 @@ pub(crate) fn cmd_map(target: TargetArg, allow_unsandboxed: bool) -> Result<u8> 
         display(&ctx.root, &path),
         match look {
             0 => String::new(),
+            1 => " (1 needs a look)".to_string(),
             n => format!(" ({n} need a look)"),
         }
     ));

@@ -1273,6 +1273,10 @@ fn after_an_accept_the_next_step_is_the_new_tool() {
     app.select(Selection::Program("t-lzg".into()));
     code(&mut app, KeyCode::Enter);
     choose(&mut app, "Accept this program");
+    // Its button says Accept, as a piece's does (the whole-journey check,
+    // item 18).
+    let screen = text(&render(&mut app, 120, 34));
+    assert!(screen.contains("[ Accept  y ]"), "{screen}");
     arm(&mut app);
     let Command::Spawn(p) = key(&mut app, 'y') else {
         panic!("y did not run it: {:?}", app.mode)
