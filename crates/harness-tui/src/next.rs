@@ -94,8 +94,8 @@ impl App {
                 }
             }
             Selection::Features => self.features_advice(),
-            Selection::Feature(id) => self.feature_advice(id),
-            Selection::Speed => self.speed_advice(),
+            Selection::Feature(id) => self.fix_advice(sel).or_else(|| self.feature_advice(id)),
+            Selection::Speed => self.fix_advice(sel).or_else(|| self.speed_advice()),
             Selection::MapProject
             | Selection::Program(_)
             | Selection::Tool(_)

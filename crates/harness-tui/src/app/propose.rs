@@ -112,7 +112,7 @@ impl App {
 
     /// Why a Propose item cannot be chosen now, if so: the chat unusable,
     /// a draft in its input, a draft of the person's kept, nothing scanned.
-    fn propose_greyed(&self, kind: DraftKind) -> Option<String> {
+    pub(crate) fn propose_greyed(&self, kind: DraftKind) -> Option<String> {
         self.chat_unavailable()
             .or_else(|| {
                 (!self.chat.input.is_empty())
@@ -600,5 +600,32 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:text\"\n\n\
         )
         .map_err(|e| format!("{e:?}"))
         .unwrap();
+    }
+
+    /// docs/FEATURES-DESIGN.md §14.2–14.3: the brief says which scenarios
+    /// cannot be checks, how to name a real input, and how to fix the file
+    /// (read it first, then propose the whole corrected file).
+    #[test]
+    fn the_brief_knows_what_cannot_be_a_check_and_how_to_fix_the_file() {
+        let flat = crate::chat::BRIEF
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        for words in [
+            "never propose one whose output carries timings, dates, random values, process ids \
+             or paths, unless the program has an option that silences them",
+            "(a benchmark), say so in one sentence, propose only its usage and wrong-input \
+             scenarios, and point the person at a workload",
+            "name a small file in the project if the unit's pairs show one",
+            "they must put that file there before the scenario can run",
+            "a small file in the project",
+            "at most 8 MiB",
+            "First read the file as it is with harness_features_file",
+            "propose the whole corrected file with harness_features_propose",
+            "read it with harness_workloads_file",
+        ] {
+            let words = words.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(flat.contains(&words), "the brief lacks: {words}");
+        }
     }
 }
