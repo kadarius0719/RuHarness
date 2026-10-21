@@ -553,4 +553,52 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:text\"\n\n\
             "The chat's proposal, 1 workload, opens in nano: read it, change what you like, save."
         );
     }
+
+    /// The brief holds both files' syntax as rules, what a feature and a
+    /// workload are, and that the chat proposes and the person writes; its
+    /// two examples are valid files.
+    #[test]
+    fn the_brief_teaches_both_files() {
+        let brief = crate::chat::BRIEF;
+        for words in [
+            "You PROPOSE, the person writes",
+            "harness_features_propose",
+            "harness_workloads_propose",
+            "A feature is something a person does with the program and can see the result of",
+            "three to six scenarios",
+            "one wrong input",
+            "half a second or more of the C",
+            "one sentence per scenario",
+            "features.toml, the rules:",
+            "workloads.toml, the rules:",
+            "^[a-z0-9][a-z0-9-]{0,23}$",
+            "sample:text",
+            "runs: 5 to 31",
+        ] {
+            // As read: its lines wrapped.
+            let flat = brief.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(flat.contains(words), "the brief lacks: {words}");
+        }
+        let section = brief
+            .split("features.toml, the rules:")
+            .nth(1)
+            .expect("the features rules");
+        let example = |after: &str| -> String {
+            let rest = after.split("Example:\n").nth(1).expect("an example");
+            rest.split("\n\n").next().unwrap().to_string()
+        };
+        harness_core::features::parse(
+            &example(section),
+            std::path::Path::new("features.toml"),
+            "migration",
+        )
+        .unwrap();
+        let section = brief.split("workloads.toml, the rules:").nth(1).unwrap();
+        harness_core::perf::workloads::parse(
+            &example(section),
+            std::path::Path::new("workloads.toml"),
+        )
+        .map_err(|e| format!("{e:?}"))
+        .unwrap();
+    }
 }
