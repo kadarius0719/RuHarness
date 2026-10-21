@@ -1195,6 +1195,9 @@ impl App {
         next.mouse = self.mouse;
         next.now = self.now;
         next.layout = self.layout.clone();
+        // The colours are the session's, not the screen's (the person's
+        // --theme dark went back to the terminal theme on Open tool).
+        next.palette = self.palette;
         next.rebuild_rows();
         next.refresh_view(true);
         next.notice = notice(format!(

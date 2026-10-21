@@ -1273,12 +1273,18 @@ fn after_an_accept_the_next_step_is_the_new_tool() {
     code(&mut app, KeyCode::Enter);
     assert_eq!(menu_labels(&app)[0], "Open tool t-lzg");
     assert_eq!(menu(&app).reason.as_deref(), Some("it is accepted"));
-    // Opened: the held choice is the project's Next step again.
+    // Opened: the held choice is the project's Next step again — and the
+    // colours stay the session's (the person's --theme dark fell back to
+    // the terminal theme on Open tool, 2026-10-20).
     app.mode = Mode::Normal;
+    let dark = crate::theme::Palette::of(crate::theme::Theme::Dark);
+    app.palette = dark;
     let read = crate::load::read_tool(&root, Some("t-lzg"));
     if let Ok(read) = read {
         app.open_tool("t-lzg".into(), read);
+        assert_eq!(app.palette, dark, "the palette follows into the tool");
         app.show_project();
+        assert_eq!(app.palette, dark, "and back");
         assert_eq!(
             app.project_next().unwrap().text,
             "Accept t-unlzg — Enter on its row, it asks for the file"
