@@ -2186,6 +2186,27 @@ step, spelled for the tool (`harness gen-driver <unit> --tool <id>`, `harness mi
 answer to give), then a program that links, then one that needs a decision; an accepted tool's
 card gives its progress from its ledger ("4 pieces · 1 done · 2 stay C").
 
+**Explain anything** (2026-10-20, docs/COCKPIT-WRAPPER-DESIGN.md §9.5). The status line under the
+panes keeps "Ready — ↑↓ to choose a row, Enter for what you can do" until the first move; then,
+when nothing runs and no "Last:" stands, it is the **hint line**: what the selected row is, in one
+sentence of under 160 characters, the longest form that fits ("u-encode calls u-checksum; in this
+version the judge tests each piece alone, so a piece that calls other pieces stays C"); under a
+run or a "Last:" it takes the row below, after any notice; in a menu, a focused greyed item's
+reason. `i` (and **What is this?**, the last item of every Enter menu, accelerator `i`) opens the
+row's card: three to eight lines (what it is, where it came from, why it is there, where its files
+live), then "Next: Enter, then <the menu's recommended item>", drawn like a dialog without
+buttons; Esc or `i` closes it. Both come from `crates/harness-tui/src/explain.rs`, one function per
+row kind; neither says `harness.toml` (but a tool's card, on its "Its build configuration:" path
+line), "stated", "held", "choice d1", "d1.1", "ledger", "oracle" or "verdict". An act's dialog
+holds at most three lines before `Command:` — what happens, what it writes, and the chat's line
+("Asked in chat by <model>; it answers the model's turns here, up to 4") or a model call's cost;
+running without the sandbox is always said there — and `i` in it opens the act's card with the
+rest; closing the card goes back to the dialog with its latch starting again. A greyed menu item
+shows its label only. In the chat, consecutive reads fold into one line ("· read the project's
+status and unit u-x — done") and an act is two lines: "asks: …" and its running line, updated in
+place ("running — the chat answers turn 1", "running — continued with the chat's answer to turn
+1, as you agreed") until its outcome.
+
 
 ## `harness project ask` (docs/PROJECT-MAP-DESIGN.md §3.4, §3.8, §5 step d)
 
