@@ -13,6 +13,7 @@ pub mod adopt;
 pub mod attempts;
 pub mod bench;
 pub mod config;
+pub mod deps;
 pub mod driver;
 pub mod error;
 pub mod facts;
