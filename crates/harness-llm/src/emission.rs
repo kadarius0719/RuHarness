@@ -449,6 +449,34 @@ pub fn deny_scan(logic: &str, ffi: &str) -> Vec<String> {
 /// stream. Every other rule is unchanged; with an empty `ffi_externs` this
 /// IS [`deny_scan`].
 pub fn deny_scan_with(logic: &str, ffi: &str, ffi_externs: &[&str]) -> Vec<String> {
+    deny_scan_allowing(logic, ffi, ffi_externs, &[])
+}
+
+/// Most names a refusal of a foreign block lists.
+const MAX_LISTED_NAMES: usize = 10;
+
+/// `names` joined, at most [`MAX_LISTED_NAMES`] of them, then `+N more`.
+fn listed_names(names: &[&str]) -> String {
+    let mut out: Vec<String> = names
+        .iter()
+        .take(MAX_LISTED_NAMES)
+        .map(|n| (*n).to_string())
+        .collect();
+    if names.len() > MAX_LISTED_NAMES {
+        out.push(format!("+{} more", names.len() - MAX_LISTED_NAMES));
+    }
+    out.join(", ")
+}
+
+/// [`deny_scan_with`] for a unit that also calls other pieces of the
+/// program (docs/BEYOND-LEAVES-DESIGN.md §3): `src/ffi.rs` may hold foreign
+/// blocks that declare nothing but `fn`s named in `stdio` (the C stdio
+/// output functions, for a unit that prints) or in `callees` (the symbols
+/// of the pieces the unit depends on). Any other foreign declaration stays
+/// refused; with both lists empty this IS [`deny_scan`].
+pub fn deny_scan_allowing(logic: &str, ffi: &str, stdio: &[&str], callees: &[&str]) -> Vec<String> {
+    let ffi_externs: Vec<&str> = stdio.iter().chain(callees).copied().collect();
+    let ffi_externs = ffi_externs.as_slice();
     /// (needle in the whitespace-free text, what to tell the model).
     const SUBSTRING_RULES: [(&str, &str); 11] = [
         (
@@ -503,12 +531,34 @@ pub fn deny_scan_with(logic: &str, ffi: &str, ffi_externs: &[&str]) -> Vec<Strin
             let stray = bodies
                 .iter()
                 .any(|body| !body.is_some_and(|body| declares_only(body, ffi_externs)));
-            if stray {
+            if stray && callees.is_empty() {
                 hits.push(format!(
                     "foreign `extern {{ … }}` block declaring something other than the C stdio \
                      output functions allowed under [STDOUT] ({}) — only `fn` declarations of \
                      those functions",
                     ffi_externs.join(", ")
+                ));
+            } else if stray {
+                let mut others: Vec<&str> = bodies
+                    .iter()
+                    .flat_map(|body| match body {
+                        Some(body) => undeclared(body, ffi_externs),
+                        None => vec!["(a block that is never closed)"],
+                    })
+                    .collect();
+                others.sort_unstable();
+                others.dedup();
+                hits.push(format!(
+                    "foreign `extern {{ … }}` block declaring {}, which is not a function of a \
+                     piece this unit calls — such a block may declare only `fn`s of those pieces \
+                     ({}){}",
+                    listed_names(&others),
+                    listed_names(callees),
+                    if stdio.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" or the C stdio output functions ({})", stdio.join(", "))
+                    }
                 ));
             }
         } else if has_foreign_extern_block(&squeezed) {
@@ -774,16 +824,31 @@ fn foreign_extern_bodies(squeezed: &str) -> Vec<Option<&str>> {
 /// `fn` declaration (optionally `pub`, then `safe` or `unsafe`) of a name
 /// in `allowed`.
 fn declares_only(body: &str, allowed: &[&str]) -> bool {
-    body.split(';').filter(|item| !item.is_empty()).all(|item| {
-        let item = item.strip_prefix("pub").unwrap_or(item);
-        let item = item
-            .strip_prefix("safe")
-            .or_else(|| item.strip_prefix("unsafe"))
-            .unwrap_or(item);
-        item.strip_prefix("fn")
-            .and_then(|rest| rest.split_once('('))
-            .is_some_and(|(name, _)| allowed.contains(&name))
-    })
+    undeclared(body, allowed).is_empty()
+}
+
+/// The items of a whitespace-free foreign-block `body` that are not a `fn`
+/// declaration of a name in `allowed`: the function's name, or the item as
+/// written (a `static`, say).
+fn undeclared<'a>(body: &'a str, allowed: &[&str]) -> Vec<&'a str> {
+    body.split(';')
+        .filter(|item| !item.is_empty())
+        .filter_map(|whole| {
+            let item = whole.strip_prefix("pub").unwrap_or(whole);
+            let item = item
+                .strip_prefix("safe")
+                .or_else(|| item.strip_prefix("unsafe"))
+                .unwrap_or(item);
+            match item
+                .strip_prefix("fn")
+                .and_then(|rest| rest.split_once('('))
+            {
+                Some((name, _)) if allowed.contains(&name) => None,
+                Some((name, _)) => Some(name),
+                None => Some(whole),
+            }
+        })
+        .collect()
 }
 
 /// True when `squeezed` invokes the macro `name` with any delimiter, not
@@ -1627,6 +1692,61 @@ mod tests {
             );
         }
         let violations = deny_scan_with(&format!("{LOGIC}{block}"), FFI, &STDIO_OUTPUT_FNS);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.starts_with("src/logic.rs: foreign `extern")),
+            "{violations:?}"
+        );
+    }
+
+    /// A unit that calls other pieces may declare their functions, and
+    /// only theirs (docs/BEYOND-LEAVES-DESIGN.md §3).
+    #[test]
+    fn callee_externs_are_allowed_and_nothing_else() {
+        let callees = ["_LZG_CalcChecksum"];
+        let block =
+            "extern \"C\" {\n    fn _LZG_CalcChecksum(data: *const u8, size: u32) -> u32;\n}\n";
+        let ffi = format!("{FFI}{block}");
+        assert!(deny_scan(LOGIC, &ffi)
+            .iter()
+            .any(|v| v.contains("foreign `extern { … }` block — declaring or calling C")));
+        assert_eq!(
+            deny_scan_allowing(LOGIC, &ffi, &[], &callees),
+            Vec::<String>::new()
+        );
+        // A function of no piece it calls: refused, by name.
+        let stray =
+            "extern \"C\" {\n    fn _LZG_CalcChecksum(data: *const u8, size: u32) -> u32;\n    \
+                     fn system(c: *const u8) -> i32;\n}\n";
+        let violations = deny_scan_allowing(LOGIC, &format!("{FFI}{stray}"), &[], &callees);
+        assert_eq!(
+            violations,
+            [
+                "src/ffi.rs: foreign `extern { … }` block declaring system, which is not a \
+              function of a piece this unit calls — such a block may declare only `fn`s of those \
+              pieces (_LZG_CalcChecksum)"
+            ],
+        );
+        // A static is refused as written; the stdio functions stay allowed
+        // beside the callees for a unit that prints.
+        let violations = deny_scan_allowing(
+            LOGIC,
+            &format!("{FFI}extern \"C\" {{ static TABLE: u8; fn putchar(c: i32) -> i32; }}\n"),
+            &STDIO_OUTPUT_FNS,
+            &callees,
+        );
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert!(
+            violations[0].contains("declaring staticTABLE:u8, which")
+                && violations[0].ends_with(
+                    "or the C stdio output functions (printf, puts, putchar, fputs, fputc, putc, \
+                     fwrite, fprintf, vprintf)"
+                ),
+            "{violations:?}"
+        );
+        // logic.rs may never hold one.
+        let violations = deny_scan_allowing(&format!("{LOGIC}{block}"), FFI, &[], &callees);
         assert!(
             violations
                 .iter()

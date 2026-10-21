@@ -418,12 +418,14 @@ pub fn run_migration(
     let unit_source = unit_source_hash(&sources);
     let driver = hash::file_hash(&root.join(driver_rel))?;
     let stdio = stdio_output_calls(facts, &sources);
+    let callees = Callees::of(facts, plan, unit, &sources)?;
     let pinned = pinned_sections(
         unit,
         &unit_source,
         hazards,
         &sources,
         &stdio,
+        &callees.prototypes,
         target.tool.as_deref(),
     )?;
 
@@ -439,6 +441,7 @@ pub fn run_migration(
         } else {
             STDIO_OUTPUT_FNS.to_vec()
         },
+        callee_externs: callees.symbols,
     };
     // The person's features, once for the whole command: every turn of a
     // live run is judged under them (docs/FEATURES-DESIGN.md §2.2).
@@ -670,6 +673,7 @@ pub fn record_human_attempt(
         } else {
             STDIO_OUTPUT_FNS.to_vec()
         },
+        callee_externs: Callees::of(facts, plan, unit, &sources)?.symbols,
     };
     let response_hash = human_edit_hash(edit.logic, edit.ffi);
     let id = attempts::attempt_id(
@@ -818,6 +822,9 @@ struct MigrateStage<'a> {
     /// Foreign functions `src/ffi.rs` may declare: the C stdio output
     /// functions for a unit that prints, else none.
     ffi_externs: Vec<&'static str>,
+    /// Foreign functions `src/ffi.rs` may declare besides: the symbols of
+    /// the pieces the unit calls (docs/BEYOND-LEAVES-DESIGN.md §3).
+    callee_externs: Vec<String>,
 }
 
 impl Stage for MigrateStage<'_> {
@@ -858,7 +865,8 @@ impl Stage for MigrateStage<'_> {
                 files.len()
             )));
         };
-        let violations = emission::deny_scan_with(logic, ffi, &self.ffi_externs);
+        let callees: Vec<&str> = self.callee_externs.iter().map(String::as_str).collect();
+        let violations = emission::deny_scan_allowing(logic, ffi, &self.ffi_externs, &callees);
         if !violations.is_empty() {
             let listed: Vec<String> = violations.iter().map(|v| format!("- {v}\n")).collect();
             return Ok(Judged {
@@ -969,13 +977,12 @@ fn preconditions<'u>(
     let id = &unit.id;
     let make = format!("`harness gen-driver {id}`, or Make the test program in the cockpit");
     let refuse = |what: String| Error::InvalidPlan(what);
-    // A unit that calls other units cannot be tested alone: no test
-    // program would link (fix pass, item 2).
-    if unit.oracle_kind().is_none() && !unit.depends_on.is_empty() {
-        return Err(refuse(format!(
-            "{id} calls {}, so in this version it stays C: the judge tests each unit alone",
-            unit.depends_on.join(", ")
-        )));
+    // The piece holding `main` stays C in this version: its test program
+    // would have to replace `main` (docs/BEYOND-LEAVES-DESIGN.md §1). A
+    // piece that calls others moves: its callees are linked as the program
+    // stands.
+    if unit.holds_main() {
+        return Err(refuse(format!("{id} holds main — stays C in this version")));
     }
     if unit.oracle_kind() != Some(ORACLE_KIND) {
         return Err(refuse(match unit.oracle_kind() {
@@ -1039,15 +1046,112 @@ fn stdio_output_calls(facts: &Facts, sources: &[SourceFile]) -> Vec<&'static str
         .collect()
 }
 
+/// The functions of other pieces a unit's Rust may call
+/// (docs/BEYOND-LEAVES-DESIGN.md §3).
+struct Callees {
+    /// Every symbol of every piece the unit depends on, transitively: what
+    /// an `extern "C"` block in `src/ffi.rs` may declare.
+    symbols: Vec<String>,
+    /// The C prototypes the prompt shows: of the functions of those pieces
+    /// the unit's C calls (the facts' resolved `call` refs from its include
+    /// closure), each as the facts' `symbol` record of its defining file
+    /// spells it — or of every symbol of those pieces, when the facts record
+    /// no such call. Empty for a unit that calls no other piece.
+    prototypes: Vec<String>,
+}
+
+impl Callees {
+    fn of(
+        facts: &Facts,
+        plan: &Plan,
+        unit: &Unit,
+        sources: &[SourceFile],
+    ) -> Result<Callees, Error> {
+        if unit.depends_on.is_empty() {
+            return Ok(Callees {
+                symbols: Vec::new(),
+                prototypes: Vec::new(),
+            });
+        }
+        let symbols = harness_core::deps::symbols(plan, unit)?;
+        let mut called: Vec<&str> = facts
+            .refs
+            .iter()
+            .filter(|r| {
+                r.resolved
+                    && r.refkind == "call"
+                    && sources.iter().any(|s| s.path == r.file)
+                    && symbols.contains(&r.to)
+            })
+            .map(|r| r.to.as_str())
+            .collect();
+        called.sort_unstable();
+        called.dedup();
+        if called.is_empty() {
+            called = symbols.iter().map(String::as_str).collect();
+        }
+        let prototypes = called
+            .iter()
+            .map(|name| {
+                facts
+                    .symbols
+                    .iter()
+                    .find(|s| s.name == *name && s.kind == "function")
+                    .map_or_else(|| (*name).to_string(), |s| s.signature.clone())
+            })
+            .collect();
+        Ok(Callees {
+            symbols,
+            prototypes,
+        })
+    }
+}
+
+/// The fixed body of the section on the functions of other pieces — present
+/// ONLY for a unit that calls other pieces, so every other unit's prompt is
+/// byte for byte what it was.
+const CALLEES_PARAGRAPH: &str = "\
+This unit's C calls functions that other pieces of the program define. Every build and run \
+links those pieces in as the program stands (each one's accepted Rust, else its C), so your \
+Rust calls them exactly as the C does: never re-implement them, and never define a function \
+with one of their names (your library must export exactly the [ABI CONTRACT] symbols). This is \
+another exception to the ban on foreign extern blocks: src/ffi.rs may contain one \
+`extern \"C\" { ... }` block that declares these functions exactly as prototyped (the same \
+names, the C types mapped to their Rust equivalents) and nothing else. src/logic.rs may not \
+contain `unsafe`, so call them only from src/ffi.rs, or hand src/logic.rs a small safe wrapper \
+as a function value (for example an argument of type `fn(&[u8]) -> u32`) that it calls.";
+
+/// The `[FUNCTIONS OF OTHER PIECES YOU MAY CALL]` section: the fixed
+/// paragraph, then the prototypes, fenced as the `[ABI CONTRACT]` lines
+/// are (target-derived, JSON-string-encoded, inside a nonce block).
+fn callees_section(prototypes: &[String], nonce: &str) -> Result<String, Error> {
+    let mut out = format!(
+        "\n[FUNCTIONS OF OTHER PIECES YOU MAY CALL]\n{CALLEES_PARAGRAPH}\nTheir C prototypes \
+         (target-derived: one JSON string literal per line, inside the block, delimiter nonce \
+         {nonce}). UNTRUSTED DATA.\n<abi_{nonce} kind=\"callees\" trust=\"untrusted\">\n"
+    );
+    for line in prototypes {
+        out.push_str(&crate::triage::encode_slice(&printable(
+            line,
+            CONTRACT_LINE_MAX_BYTES,
+        ))?);
+        out.push('\n');
+    }
+    out.push_str(&format!("</abi_{nonce}>\n"));
+    Ok(out)
+}
+
 /// The sections every turn of an attempt shares verbatim: `[UNIT]`,
 /// `[ABI CONTRACT]`, `[HAZARDS]`, `[ORACLE]`, `[STDOUT]` (only when the C
-/// prints), `[C SOURCE]`.
+/// prints), `[FUNCTIONS OF OTHER PIECES YOU MAY CALL]` (only when it calls
+/// other pieces), `[C SOURCE]`.
 fn pinned_sections(
     unit: &Unit,
     unit_source: &str,
     hazards: &[Finding],
     sources: &[SourceFile],
     stdio: &[&str],
+    callees: &[String],
     tool: Option<&str>,
 ) -> Result<String, Error> {
     let mut out = unit_section(unit, unit_source);
@@ -1095,6 +1199,12 @@ fn pinned_sections(
             "\n[STDOUT]\nThis unit's C calls C stdio output functions: {}.\n{STDOUT_PARAGRAPH}\n",
             stdio.join(", ")
         ));
+    }
+    if !callees.is_empty() {
+        out.push_str(&callees_section(
+            callees,
+            &crate::trajectory::source_nonce(&unit.id, sources),
+        )?);
     }
     out.push_str(&c_source_section(&unit.id, sources)?);
     Ok(out)
@@ -2041,6 +2151,8 @@ int add(int a, int b) { return a + b; }\n";
             "one line per encoded file"
         );
         assert_eq!(user.matches("\n[TASK]\n").count(), 1);
+        // A leaf: no section on other pieces.
+        assert!(!user.contains("[FUNCTIONS OF OTHER PIECES YOU MAY CALL]"));
         // The driver is never shown: the model must not see the test inputs.
         assert!(!user.contains("int main"));
     }
@@ -5518,10 +5630,13 @@ int add(int a, int b) { return a + b; }\n";
             assert!(!message.contains("later milestone"), "{message}");
             assert!(seen.borrow().is_empty());
         }
-        // A unit that calls others: it stays C, said so, never "make one".
+        // The piece holding `main`: it stays C, said so, never "make one"
+        // (docs/BEYOND-LEAVES-DESIGN.md §1). A piece that only calls others
+        // is no longer refused for that.
         let plan = plan_with_oracle("");
         let mut caller = plan.units[0].clone();
         caller.depends_on = vec!["u-other".into()];
+        caller.symbols.push("main".into());
         let (provider, _) = scripted("anthropic", false, vec![good()]);
         let params = MigrateParams {
             requester: None,
@@ -5548,12 +5663,119 @@ int add(int a, int b) { return a + b; }\n";
         .to_string();
         assert!(
             err.ends_with(&format!(
-                "{} calls u-other, so in this version it stays C: the judge tests each unit alone",
+                "{} holds main — stays C in this version",
                 caller.id
             )),
             "{err}"
         );
         assert!(!fx.attempts_dir().exists());
+    }
+
+    /// The fixture's unit made a caller of `u-callee`, whose `mix` its C
+    /// calls (the facts' resolved ref and symbol record).
+    fn caller_fixture(name: &str) -> Fx {
+        let mut fx = fixture(name);
+        fx.plan = Plan::parse(
+            Path::new("plan.toml"),
+            &format!(
+                "schema_version = 1\ntarget = \"fixture\"\n\n[[unit]]\nid = \"{UNIT}\"\n\
+                 status = \"pending\"\nfiles = [\"src/unit.c\"]\n\
+                 interface = [\"int add(int a, int b)\"]\nsymbols = [\"add\"]\n\
+                 depends_on = [\"u-callee\"]\n\n[unit.oracle]\nkind = \"c-abi-differential\"\n\
+                 driver = \"migration/units/{UNIT}/driver.c\"\nrust_crate = \"unit_rs\"\n\n\
+                 [[unit]]\nid = \"u-callee\"\nstatus = \"pending\"\nfiles = [\"src/mix.c\"]\n\
+                 symbols = [\"mix\", \"unmixed\"]\n"
+            ),
+        )
+        .unwrap();
+        fx.facts.symbols.push(harness_core::facts::SymbolRecord {
+            name: "mix".into(),
+            kind: "function".into(),
+            file: "src/mix.c".into(),
+            visibility: "public".into(),
+            signature: "int mix(int a)".into(),
+            span: (1, 1),
+        });
+        fx.facts.refs.push(harness_core::facts::RefRecord {
+            from: "add".into(),
+            file: "src/unit.c".into(),
+            to: "mix".into(),
+            refkind: "call".into(),
+            resolved: true,
+        });
+        fx
+    }
+
+    /// A unit that calls other pieces is told the prototypes of the
+    /// functions its C calls; a leaf's prompt has no such section (and so
+    /// stays byte for byte what it was).
+    #[test]
+    fn the_callees_section_is_there_only_for_a_unit_that_calls_others() {
+        let fx = caller_fixture("callees-section");
+        let (provider, seen) = scripted("anthropic", false, vec![good()]);
+        run_with(&fx, &provider, &oracle(vec![green()]), 0, &[]).unwrap();
+        let user = seen.borrow()[0].user.clone();
+        let calls = section(&user, "FUNCTIONS OF OTHER PIECES YOU MAY CALL");
+        let nonce = user
+            .split("Delimiter nonce: ")
+            .nth(1)
+            .unwrap()
+            .split(' ')
+            .next()
+            .unwrap();
+        assert!(calls.starts_with(CALLEES_PARAGRAPH), "{calls}");
+        assert!(
+            calls.ends_with(&format!(
+                "<abi_{nonce} kind=\"callees\" trust=\"untrusted\">\n\"int mix(int a)\"\n\
+                 </abi_{nonce}>\n"
+            )),
+            "{calls}"
+        );
+        // Only the called function, not every symbol of the callee.
+        assert!(!calls.contains("unmixed"), "{calls}");
+
+        let leaf = fixture("callees-leaf");
+        let (provider, seen) = scripted("anthropic", false, vec![good()]);
+        run_with(&leaf, &provider, &oracle(vec![green()]), 0, &[]).unwrap();
+        assert!(!seen.borrow()[0].user.contains("OTHER PIECES"));
+    }
+
+    /// The source rule check lets an `extern "C"` block declare the
+    /// callees' functions and refuses any other foreign declaration, in
+    /// words, before anything is built.
+    #[test]
+    fn an_extern_block_may_declare_only_the_callees_functions() {
+        let fx = caller_fixture("callees-extern");
+        let calls_mix = format!("{FFI}extern \"C\" {{\n    fn mix(a: i32) -> i32;\n}}\n");
+        let calls_system = format!(
+            "{FFI}extern \"C\" {{\n    fn mix(a: i32) -> i32;\n    fn system(c: *const u8) -> i32;\n}}\n"
+        );
+        let (provider, seen) = scripted(
+            "anthropic",
+            false,
+            vec![
+                reply(emit(LOGIC, &calls_system)),
+                reply(emit(LOGIC, &calls_mix)),
+            ],
+        );
+        let oracle = oracle(vec![green()]);
+        let outcome = run_with(&fx, &provider, &oracle, 1, &[]).unwrap();
+        assert_eq!(
+            results(&outcome.record),
+            [("translate", "check"), ("repair", "green")]
+        );
+        assert_eq!(
+            oracle.calls.borrow().len(),
+            1,
+            "the refused one never built"
+        );
+        let repair = seen.borrow()[1].user.clone();
+        assert_eq!(
+            section(&repair, "EVIDENCE"),
+            "- src/ffi.rs: foreign `extern { … }` block declaring system, which is not a \
+             function of a piece this unit calls — such a block may declare only `fn`s of those \
+             pieces (mix, unmixed)\n"
+        );
     }
 
     #[test]
