@@ -2908,10 +2908,14 @@ fn feature_view(
         let mut argv = vec![program.clone()];
         argv.extend(s.argv.iter().cloned());
         let mut text = format!("  {} · {}", s.id, argv.join(" "));
-        if let Some(input) = s.input {
-            text.push_str(&format!(" (the sample: {input})"));
+        if let Some(input) = &s.input {
+            text.push_str(&format!(" ({input})"));
         }
         lines.extend(wrapped(&text, width, Style::default()));
+        // Its input file cannot be used (§14.1): said before anything else.
+        if let Some(why) = &s.unusable {
+            lines.extend(wrapped(&format!("    ⚑ {why}"), width, attention()));
+        }
         if let Some(r) = &s.record {
             let stderr = if r.stderr_bytes == 0 {
                 "stderr empty".to_string()
@@ -2925,7 +2929,9 @@ fn feature_view(
                 width,
                 label_role(),
             ));
-            let flag = if !r.stable {
+            let flag = if s.unusable.is_some() {
+                None
+            } else if !r.stable {
                 Some("its output differs between runs — it cannot be a check".to_string())
             } else if !r.end.starts_with("exit ") {
                 // Before "compares little": a run that crashed or timed out
