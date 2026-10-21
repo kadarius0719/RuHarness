@@ -2242,7 +2242,8 @@ line.
 With the chat off (`--no-chat`) the Next line and the greyed model items name the command line's
 step, spelled for the tool (`harness gen-driver <unit> --tool <id>`, `harness migrate <unit>
 --no-promote --tool <id>`). The Project view prefers a tool with work waiting (Rust to accept, an
-answer to give), then a program that links, then one that needs a decision; an accepted tool's
+answer to give), then a tool with a piece ready to start (not scanned yet, or pieces to move),
+then a program that links, then one that needs a decision; an accepted tool's
 card gives its progress from its ledger ("4 pieces · 1 done · 2 stay C").
 
 **Explain anything** (2026-10-20, docs/COCKPIT-WRAPPER-DESIGN.md §9.5). The status line under the

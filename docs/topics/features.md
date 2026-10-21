@@ -6,7 +6,7 @@ By the end of this page you will know what a feature and its scenarios are, what
 
 The judge compares each translated piece with its C on its own. But what a person notices is the whole program: "compress this file", "show the version", "say the file is missing". Your **features** are those things, in your own words, and RuHarness checks them too.
 
-A feature is made of one or more **scenarios**: one run of the whole program with fixed arguments and, if you like, one of three sample files as input (`sample:text`, a page of English; `sample:rand`, 16 KiB of random bytes; `sample:empty`). The program runs in an empty folder of its own with nothing typed into it, so an argument is a **flag** (option starting with `-`) or a plain word, never a path; `{input}` stands for the sample's name. You write them in `migration/features/features.toml`, in the project's record folder:
+A feature is made of one or more **scenarios**: one run of the whole program with fixed arguments and, if you like, one of three sample files as input (`sample:text`, a page of English; `sample:rand`, 16 KiB of random bytes; `sample:empty`). The program runs in an empty folder of its own with nothing typed into it, so an argument is a **flag** (option starting with `-`) or a plain word, never a path; `{input}` stands for the sample's name. You write them in `migration/features/features.toml`, in the project's record folder (on a mapped project, each tool has its own: `migration/tools/<id>/features/features.toml`, such as `migration/tools/t-lzg/features/features.toml`; its map and proposal sit beside it the same way):
 
 ```toml
 [[feature]]

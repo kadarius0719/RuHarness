@@ -2638,8 +2638,8 @@ harness-tui --target targets/lzg
 
 **You should see** a full-screen view:
 
-- the **Files** pane on the left, with the project row `lzg`, then `Pieces (5)` with its five units under it, then `Features (none yet)`, `Speed — not set up`, and last the folder `src/`, folded (`▸`), its marks summed up at its right edge;
-- the **View** on the right, starting with a line that says where you are among the eight steps a program goes through: on a wide window `Map ✓ · Configure ✓ · Accept program ✓ · Scan ✓ · Plan ✓ · Test program 1/2 · Rust 0/2 ○ · Accept Rust 0/2` (two of the five pieces can move to Rust; one has its test program, from Part 3; the `○` sits on the step the Next line names), on a narrower one `Step 7 of 8: Rust 0/2`; then a line `Next: 2 of the 5 can move to Rust now — Migrate u-checksum: Enter`, then a summary such as `7 files scanned`, `Units (5): 1 ◈ test program ready · 3 · stays C · 1 ◇ no test program` and `Features: none yet — see Features`; its title says in words how many of the C files are in Rust (`0 of … C files in Rust`);
+- the **Files** pane on the left, with the project row `lzg` (`✓0/2` at its right edge: none of the 2 pieces that can move is in Rust yet), then `Pieces (5)` with its five pieces under it (the cockpit says **piece** for a unit), then `Features (none yet)`, `Speed — not set up`, and last the folder `src/`, folded (`▸`), its marks summed up at its right edge;
+- the **View** on the right, starting with a line that says where you are among the eight steps a program goes through: on a wide window `Map ✓ · Configure ✓ · Accept program ✓ · Scan ✓ · Plan ✓ · Test program 1/2 ○ · Rust 0/2 · Accept Rust 0/2` (two of the five pieces can move to Rust; one has its test program, from Part 3; the program as a whole is at its earliest step not done for both, so the `○` sits on the test program), on a narrower one `Step 6 of 8: Test program 1/2`; then a line `Next: None of the 2 that can move is in Rust yet — Migrate u-checksum: Enter` (the piece whose test program is ready goes first), then a summary such as `7 files scanned`, `Pieces (5): 1 ◈ test program ready · 3 · stays C · 1 ◇ no test program` and `Features: none yet — see Features`; its title says the same count in words (`none of the 2 that can move is in Rust yet`);
 - the line `Ready — ↑↓ to choose a row, Enter for what you can do` under the panes; once you move, that line says what the selected row is, in one sentence (press `i` for a card that says more, `Esc` to close it);
 - a key bar at the bottom, like `↑↓ move   ←→ fold/open   Enter actions   Tab pane   …   q quit`.
 
@@ -4640,7 +4640,7 @@ harness-tui --target targets/lzg
 
 **Do** these, one press at a time, and check the screen after each:
 
-1. Press `?`. **You should see** the help's first page: six keys (`↑ ↓`, `Enter`, `Tab`, `Esc`, `?`, `q`), the three marks you meet first (`◇` no Rust yet, `✓` done, `⚠` needs attention), and `↓ more: every key, the mouse, every mark, features, speed, the chat` at its foot.
+1. Press `?`. **You should see** the help's first page: seven keys (`↑ ↓`, `Enter`, `Tab`, `Esc`, `i`, `?`, `q`), the three marks you meet first (`◇` no test program yet — `◈` once it is ready —, `✓` done, `⚠` needs attention), and `↓ more: every key, the mouse, every mark, features, speed, the chat` at its foot.
 2. Press `↓`. **You should see** the rest: every key and every symbol the cockpit uses (`◉`, `◌` and more), each with its meaning. Whenever a symbol in this part is unclear, `?` then `↓` explains it.
 3. Press any other key (`Esc`, say). **You should see** the help close.
 4. Press `↑` until the first row, `lzg`, is highlighted (it usually is already). **You should see** at the right edge of that row a summary like `✓2/2`, and the View's title saying it in words: `lzg · all 2 that can move are in Rust`. The View starts with the step line, then a `Next:` line, then a summary: the files scanned, the units by state, and a line beginning `Features: 3 — …`.
@@ -6596,6 +6596,8 @@ Advice comes once the build configuration is written and the project mapped agai
    Why not: Accept waits for your build configuration: this map's is a guess (or came with the project) — choose Write the build configuration (or Ask for a proposal — ask in chat), then Map the project again
    ```
 
+   (Without Claude Code on this computer the reason names no chat item: `… — choose Write the build configuration, then Map the project again`.)
+
 3. Press `Esc` to close the menu.
 
 **What it means.** The cockpit keeps the same rule as Step 12.3: no accept under a guess. A greyed item always says why when you choose it. Items that ask a model sit under the `Uses a model` line; when the recommended item itself uses one, its `↳ recommended` line ends `· uses a model` instead. In the cockpit every model item goes through the chat: `Ask for a proposal — ask in chat` types `Propose the build configuration for this project from its Makefiles` into the chat for you to send (the command line's `harness project ask` of Steps 12.4 and 12.9 is the same question, answered by hand). If Claude Code is not installed or not signed in, a dialog says so and walks you through signing in (docs/topics/cockpit.md, "Signing in").
@@ -6607,16 +6609,17 @@ Advice comes once the build configuration is written and the project mapped agai
 **Do.** One key at a time:
 
 1. Press `Enter`. **You should see** the menu of Step 12.25, `Write the build configuration (in nano)` first and highlighted.
-2. Press `Enter`. **You should see** a dialog titled `Write the build configuration in nano?`:
+2. Press `Enter`. **You should see** a dialog titled `Write the build configuration in nano?`, three lines then the editor's command:
 
    ```text
-   nano opens migration/map/config.toml, filled in with the example the map suggests: one [[configuration]] with its name, from and flags.
-   In flags, put the -I and -D flags your build passes, each in quotes, like ["-Isrc/include"]; flags = [] says it needs none.
-   Type your changes. Ctrl-O then Enter saves; Ctrl-X leaves.
-   When you come back, the cockpit checks it and writes migration/map/config.toml; then choose Map the project again to map with it.
+   nano opens migration/map/config.toml, filled in with the example the map suggests.
+   In flags, put the -I and -D parts of your compile line, like ["-Isrc/include"].
+   Back here, the cockpit checks it and writes migration/map/config.toml; then Map the project again.
+
+   Command: nano /var/folders/<…>/harness-tui-config-<…>/config.toml
    ```
 
-   and at the bottom `[ Cancel  Esc ] [ Open nano  y ]`.
+   and at the bottom `[ Cancel  Esc ] [ Open nano  y ]`. Press `i` for the rest (what a configuration holds, `flags = []` for none, and how to save and leave nano), then `i` again to come back to the dialog.
 3. Wait for `ready: → then Enter, or y`, then press `y`. **You should see** nano, holding four lines:
 
    ```text
@@ -6657,7 +6660,7 @@ Map ✓ · Configure ✓ · Accept program ○ · then: scan, plan, and each pie
 Next: Accept t-lzg — Enter on its row
 ```
 
-and the card's last line says how advice comes: `No advice yet — Enter, then Ask for advice (the chat answers)` (with `--no-chat`: `ask a model with harness project ask on the command line`).
+and the card's last line says how advice comes: `No advice yet — Enter, then Ask for advice (the chat answers)` (with `--no-chat`: `No advice yet — run harness project ask (the models topic), or start the cockpit without --no-chat`; without Claude Code on this computer: `… or choose Check the chat's connection`).
 
 **What it means.** As in Step 12.3: programs can now be accepted. Press `c` to see the map's own screen, with `configuration: make, from make (stated in config.toml), …` as its second line; `c` again closes it.
 
@@ -6688,7 +6691,7 @@ and the card's last line says how advice comes: `No advice yet — Enter, then A
    It writes: the tool's build configuration, migration/tools/t-unlzg/harness.toml (a tool accepted before keeps its results and what you added to that file).
    ```
 
-   then `Command:` and the exact command, ending `harness project accept t-unlzg --target /Users/<you>/lzg-cockpit --keep d1=d1.2` (the command names the decision `d1` and the file you chose by its number in the map, `d1.2`).
+   then `Command:` and the exact command, ending `harness project accept t-unlzg --target /Users/<you>/lzg-cockpit --keep d1=d1.2` (the command names the decision `d1` and the file you chose by its number in the map, `d1.2`), and at the bottom `[ Cancel  Esc ] [ Accept  y ]`.
 
 5. Wait for `ready: → then Enter, or y`, then press `y`. **You should see** `Ready. Last: Accept t-unlzg — done (1 s); c for details`, and the left pane:
 
@@ -6702,7 +6705,7 @@ and the card's last line says how advice comes: `No advice yet — Enter, then A
    with `t-unlzg` still selected: an accepted program's row is its tool's row. The right pane begins `Map ✓ · Configure ✓ · Accept program ✓ · then: scan, plan, and each piece` and `Next: Open tool t-unlzg — Enter on its row` (the tool you just accepted comes first, until you move to another row), and the card says `Its build configuration: migration/tools/t-unlzg/harness.toml`.
 
 6. Press `Enter`. **You should see** a menu whose first item is `Open tool t-unlzg`, with `↳ recommended: it is accepted`.
-7. Press `Enter`. **You should see** the tool's screen: `Next: Nothing is scanned yet — press Enter and choose Scan the project`, and in Files, first, the row `◂ Back to the project view`. Under it come the tool, `Features` and `Speed`, then the project's folders and files, open (the tool has no units yet: once it has, the folders start folded and `Units` comes first). The project's files that are not part of the tool are greyed out and marked `⊖`.
+7. Press `Enter`. **You should see** the tool's screen: `Next: Nothing is scanned yet — press Enter and choose Scan the project`, and in Files, first, the row `◂ Back to the project view`. Under it come the tool, `Features` and `Speed`, then the project's folders and files, open (the tool has no pieces yet: once it has, the folders start folded and `Pieces` comes first). The project's files that are not part of the tool are greyed out and marked `⊖`.
 8. Press `↑` (to `◂ Back to the project view`), then `Enter`. **You should see** the Project view again, the row `t-unlzg` selected (the back row has only one thing to do, so `Enter` does it).
 
 **Do.** Press `q`.
@@ -6746,7 +6749,7 @@ with the card saying `not scanned and planned yet` under `Its build configuratio
 
 #### Step 12.30 — Open the tool, scan and plan
 
-**Do.** One key at a time: press `Enter` twice (the menu, then `Open tool t-lzg`). Then press `Enter`, choose `Scan the project`, wait for `ready`, press `y`. Then press `Enter`, choose `Refresh the plan`, wait for `ready`, press `y`.
+**Do.** One key at a time: press `Enter` twice (the menu, then `Open tool t-lzg`). Then press `Enter`, choose `Scan the project`, wait for `ready`, press `y`. Then press `Enter`, choose `Make the plan` (the first time it is not "Refresh"), wait for `ready`, press `y`.
 
 **You should see** first `Map ✓ · Configure ✓ · Accept program ✓ · Scan ○ · Plan`, then after the scan `… · Scan ✓ · Plan ○`, and after the plan:
 
@@ -6757,9 +6760,9 @@ Next: none of the 2 that can move is in Rust yet — open u-checksum: Enter
 
 and under `Pieces (4)`: `◇ u-checksum no test program`, `· u-encode stays C`, `◇ u-version no test program`, `· u-lzg stays C`.
 
-**What it means.** The tool is cut into four pieces; two can move to Rust (the counts are of those two), and the two that call other pieces stay C, as Part 7 explained. The `○` sits on the step the `Next:` line names.
+**What it means.** The tool is cut into four pieces; two can move to Rust (every count of moving is of those two: the tool's row shows `✓0/2`), and the two that call other pieces stay C, as Part 7 explained. The `○` sits on the step the `Next:` line names. The line under the panes said `plan changed 4 pieces — review the plan's changes with c` until your next key; `c` shows those lines.
 
-**If you do not see that.** `Refresh the plan` greyed (highlighted, the line under the panes says `nothing is scanned yet`): the scan did not finish; look at `c` for its words and scan again.
+**If you do not see that.** `Make the plan` greyed (highlighted, the line under the panes says `nothing is scanned yet`): the scan did not finish; look at `c` for its words and scan again.
 
 #### Step 12.31 — See the test program's step
 
@@ -6824,7 +6827,7 @@ jq -Rs '{text: ., input_tokens: 0, output_tokens: 0, stop_reason: "end_turn"}' ~
 harness migrate u-version --no-promote --tool t-lzg --model guide-written
 ```
 
-**You should see** last `migrate: green attempt recorded; not promoted (--no-promote)`.
+**You should see** last `migrate: green attempt recorded; not promoted (--no-promote)`; in the cockpit, after `g`, `✓? u-version Rust green — accept it`, its View saying `Its Rust: not accepted yet — try a-<4hex> is green`, and the tool's step line still on the earliest step not done for every piece (`Step 6 of 8: Test program 1/2` on a narrow window: `u-checksum` has no test program yet).
 
 **What it means.** A try that waits for an answer is its own state, so the cockpit never suggests starting a new try over it. The Rust passed every check, and waits for you.
 

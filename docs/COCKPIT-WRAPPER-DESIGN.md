@@ -821,6 +821,11 @@ about the harness. **One line.** The Next step is one short line: a verb phrase 
   `Next: nothing here — every program is a tool; open one` when all are accepted. Under 80
   characters each; the pane wraps the rest. The label `Next:` keeps the accent; the phrase is
   bold; nothing else on the pane is bold but the card's first line.
+  *Order (2026-10-21, the whole-journey check; DECISIONS of that date): work waiting in a tool
+  (Rust to accept, an answer to give) first, then a tool with a piece ready to start (not
+  scanned yet, or pieces to move: `Open tool t-lzg — Enter on its row (not scanned yet)`), then
+  a program that links, then one that needs a decision, then a tool whose features are not
+  written.*
 - **Words.** On screen, never: `harness.toml` (say "its build configuration", with the path only
   on the tool's card), `stated`, `held`, `choice d1`, `d1.1`, `d1.2`, a reason tag. The decision's
   files are numbered 1, 2, … on the card and in Accept's picker (`1  src/extra/lzgmini.c`); the
@@ -980,6 +985,9 @@ verified.
   view only the first three show, then `then: scan, plan, and each piece`. The Next step below it
   always names the current stage's action. At under 100 columns the line folds to the current
   stage alone: `Step 6 of 8: Test program`.
+  *2026-10-21 (the whole-journey check): on the tool's own row the current stage is the earliest
+  one not done for every piece that can move, even when the Next names a later piece's step —
+  never "Step 8 of 8" while another piece has not started.*
 - **A unit's state word says the stage**, not the mechanism: `◇ no test program`, `◇ test program
   ready`, `◐ Rust tried`, `✓? Rust green — accept it`, `✓ done`, besides `✗ failing`, `⚠ needs
   attention`, `⊘ blocked` as today. (`planned` and `tried` go: they said nothing about what to do.)
