@@ -291,6 +291,22 @@ pub fn stale_callees_words(stale: &[String]) -> Option<String> {
     }
 }
 
+/// The callees to name as out of date themselves beside `state`: the
+/// unit's [`crate::model::UnitView::stale_callees`], less those its own
+/// "a piece it calls changed" already names (one sentence per callee),
+/// none for the piece holding main.
+pub fn unsure_callees(stale: &[String], state: &UnitState) -> Vec<String> {
+    match state {
+        UnitState::HoldsMain => Vec::new(),
+        UnitState::Attention(Cause::CalleeChanged(changed)) => stale
+            .iter()
+            .filter(|id| !changed.contains(id))
+            .cloned()
+            .collect(),
+        _ => stale.to_vec(),
+    }
+}
+
 /// Who a migrated unit's crate is attributed to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Origin {

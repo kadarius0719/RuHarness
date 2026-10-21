@@ -1352,8 +1352,8 @@ fn unit_lead(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
         }
         // A callee linked as its Rust whose own check is out of date (the
         // live proof's first gap): said beside the state.
-        if let Some(more) = crate::files::stale_callees_words(&unit.stale_callees)
-            .filter(|_| *s != UnitState::HoldsMain)
+        if let Some(more) =
+            crate::files::stale_callees_words(&crate::files::unsure_callees(&unit.stale_callees, s))
         {
             spans.push(Span::styled(format!(" · {more}"), attention()));
         }
@@ -1457,7 +1457,17 @@ fn unit_record(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
                 (Some(g), false) => format!(
                     "{}, but out of date ({}) — re-check",
                     if *g { "green" } else { "red" },
-                    unit.report.verdict.stale.join(", ")
+                    unit.report
+                        .verdict
+                        .stale
+                        .iter()
+                        .map(|s| if s == "dependencies" {
+                            "a piece it calls changed"
+                        } else {
+                            s.as_str()
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ),
                 (None, _) => "none yet".to_string(),
             };

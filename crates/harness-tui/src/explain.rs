@@ -764,7 +764,8 @@ fn unit(app: &App, id: &str) -> Explained {
     };
     // A callee whose own check is out of date: said with the state (the
     // live proof's first gap).
-    let unsure = crate::files::stale_callees_words(&u.stale_callees);
+    let unsure_ids = crate::files::unsure_callees(&u.stale_callees, &state);
+    let unsure = crate::files::stale_callees_words(&unsure_ids);
     let hint = match &state {
         UnitState::HoldsMain => fit(&[
             format!("{id} holds main — stays C in this version: its test program would have to replace main."),
@@ -775,7 +776,7 @@ fn unit(app: &App, id: &str) -> Explained {
                 Some(more) => format!("{}; {more}", unit_state_clause(s)),
                 None => unit_state_clause(s),
             };
-            fit(&[
+            let mut forms = vec![
                 format!(
                     "{id} is one piece of the program: {funcs} in {} {moves}; {clause}.",
                     files_words(u)
@@ -785,8 +786,15 @@ fn unit(app: &App, id: &str) -> Explained {
                      {clause}."
                 ),
                 format!("{id}: one piece of the program; {clause}."),
-                format!("{id}: one piece of the program; {}.", s.word()),
-            ])
+            ];
+            // Which piece it calls changed, or is out of date itself, is
+            // kept before the shortest form drops it (§5: the hint says
+            // which).
+            if unsure.is_some() || matches!(s, UnitState::Attention(Cause::CalleeChanged(_))) {
+                forms.push(format!("{id}: {clause}."));
+            }
+            forms.push(format!("{id}: one piece of the program; {}.", s.word()));
+            fit(&forms)
         }
     };
     let state_clause = match &unsure {
@@ -808,12 +816,12 @@ fn unit(app: &App, id: &str) -> Explained {
     if let Some(calls) = calls_words(u) {
         card.push(format!("{calls}."));
     }
-    if !u.stale_callees.is_empty() {
+    if !unsure_ids.is_empty() {
         card.push(format!(
-            "Re-check {} first: this piece was checked with {}, which nobody has checked as it \
+            "Re-check {}: this piece was checked with {}, which the judge has not checked as it \
              is now.",
-            and_list(&u.stale_callees),
-            if u.stale_callees.len() == 1 {
+            and_list(&unsure_ids),
+            if unsure_ids.len() == 1 {
                 "its Rust"
             } else {
                 "their Rust"
@@ -1568,7 +1576,7 @@ mod tests {
         );
         assert!(
             card.iter()
-                .any(|l| l.starts_with("Re-check u-checksum first")),
+                .any(|l| l.starts_with("Re-check u-checksum: this piece was checked with its Rust")),
             "{card:#?}"
         );
         app.select(sel.clone());
@@ -1583,7 +1591,12 @@ mod tests {
             UnitState::Attention(crate::files::Cause::CalleeChanged(
                 vec!["u-checksum".into()],
             ));
-        app.snapshot.units[0].stale_callees.clear();
+        // The callee it names as changed is not named twice.
+        assert!(crate::files::unsure_callees(
+            &app.snapshot.units[0].stale_callees,
+            &app.files.units[0].state
+        )
+        .is_empty());
         let h = hint(&app, &sel);
         assert!(
             h.contains("the judge's check is out of date: a piece it calls changed: u-checksum"),

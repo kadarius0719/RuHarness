@@ -176,7 +176,12 @@ impl ToolProgress {
             parts.push(format!("{} waits for your answer", self.answer));
         }
         if self.stay_c > 0 {
-            parts.push(format!("{} stay C", self.stay_c));
+            // The piece holding main, which stays C in this version.
+            parts.push(if self.stay_c == 1 {
+                "1 holds main".to_string()
+            } else {
+                format!("{} hold main", self.stay_c)
+            });
         }
         parts.join(" · ")
     }
@@ -1265,5 +1270,28 @@ impl App {
         }
         self.scroll = 0;
         self.link = None;
+    }
+}
+
+#[cfg(test)]
+mod progress_tests {
+    use super::ToolProgress;
+
+    /// Only the piece holding main stays C: the card says so in those
+    /// words, and the pieces that call others count among those that can
+    /// move (docs/BEYOND-LEAVES-DESIGN.md §5).
+    #[test]
+    fn the_card_names_the_piece_holding_main() {
+        let p = ToolProgress {
+            planned: true,
+            pieces: 4,
+            done: 1,
+            stay_c: 1,
+            ..ToolProgress::default()
+        };
+        assert_eq!(p.words(), "4 pieces · 1 done · 1 holds main");
+        assert_eq!(p.row_word(), "1/3 in Rust");
+        let two = ToolProgress { stay_c: 2, ..p };
+        assert!(two.words().ends_with("· 2 hold main"));
     }
 }

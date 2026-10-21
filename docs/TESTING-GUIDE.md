@@ -18,7 +18,7 @@ The guide was walked on a Mac with an Apple chip. "About this guide's run", just
 | [Plan B](#plan-b-appendix-to-part-4--translate-on-the-command-line) | Only if the chat does not work: Part 4 on the command line | about 20 min | **yes** |
 | [5](#part-5--check-it-yourself-and-read-every-check) | Check it yourself, read every check, then break it on purpose and watch the harness catch the bug | 20 min | no |
 | [6](#part-6--the-second-unit-u-version) | Do the same for a second piece (`u-version`) | 20–30 min | **yes** (only the translation) |
-| [7](#part-7--why-the-other-three-units-stay-in-c) | Learn why the other three pieces stay in C | 5 min | no |
+| [7](#part-7--a-piece-that-calls-another-piece) | Move a piece that calls another piece (`u-encode`), and see it go out of date when that piece changes | about 30 min | **yes** (only the translation) |
 | [8](#part-8--features-check-what-a-person-actually-sees) | Add features: runs of the whole program that the harness re-checks every time | 20 min | no |
 | [9](#part-9--tour-the-cockpit-on-the-finished-project) | Tour the cockpit on the finished project | 15 min | no |
 | [10](#part-10--check-the-status-and-resume-later) | Check the status, and pick up again another day | 5 min | no |
@@ -1720,7 +1720,7 @@ git branch -D practice-lzg
 | Signature | A function's first line: its name, what it takes and what it gives back. |
 | Plan | The harness's proposal of units and of the order to move them in. |
 | Fingerprint, hash | A code computed from a file's bytes. If any byte changes, the code changes. The harness writes them as `blake3:` and 64 characters. |
-| Leaf unit | A unit whose C calls nothing in the project's other `.c` files. In this version of RuHarness only leaf units can be migrated. |
+| Leaf unit | A unit whose C calls nothing in the project's other `.c` files. Leaf units move first; a unit that calls others moves after them (Part 7). |
 
 **Where.** Run these two boxes, **the folder boxes**, before Step 2.1. They put Terminal in the RuHarness folder and on your practice branch. Later parts send you back to them whenever you open a new Terminal window.
 
@@ -1999,7 +1999,7 @@ Fill in the two note fields of `u-checksum`, for example `test_strategy = "diffe
 
 ### Step 2.6 — Find the units that can move first
 
-In this version of RuHarness, **only a leaf unit can be migrated**: a unit with `depends_on = []`.
+A unit moves to Rust after the units it calls: first the **leaf units**, with `depends_on = []`, then the units that call them. Only the unit that holds `main` stays C in this version.
 
 **Run.** This only reads.
 
@@ -2022,7 +2022,7 @@ id = "u-lzg"
 depends_on = ["u-encode", "u-version"]
 ```
 
-**What it means.** Two units call no other unit: `u-checksum` and `u-version`. You start with **`u-checksum`**: it is one small function over a piece of data and its length; it calls nothing at all, not even C's standard functions; it keeps nothing between calls; and its result is written into bytes 11–14 of every compressed file, so the whole-program check really runs the Rust. `u-decode` and `u-encode` call `checksum.c`'s function, and `u-lzg` holds `main`; Part 7 explains why those three stay in C.
+**What it means.** Two units call no other unit: `u-checksum` and `u-version`. You start with **`u-checksum`**: it is one small function over a piece of data and its length; it calls nothing at all, not even C's standard functions; it keeps nothing between calls; and its result is written into bytes 11–14 of every compressed file, so the whole-program check really runs the Rust. `u-decode` and `u-encode` call `checksum.c`'s function, so they can move once `u-checksum` has (Part 7 moves `u-encode`). `u-lzg` holds `main`, and stays C in this version.
 
 **If you do not see that.**
 
@@ -2033,7 +2033,7 @@ depends_on = ["u-encode", "u-version"]
 
 ### Answer
 
-What did the harness find, and which pieces can move first? It found 7 files, 20 functions and 13 hazard findings, none of them a blocker (Steps 2.1 and 2.3), and planned five units. Two of them, `u-checksum` and `u-version`, depend on nothing and can move to Rust (Step 2.6).
+What did the harness find, and which pieces can move first? It found 7 files, 20 functions and 13 hazard findings, none of them a blocker (Steps 2.1 and 2.3), and planned five units. Two of them, `u-checksum` and `u-version`, depend on nothing and can move first; `u-decode` and `u-encode` can move after `u-checksum` (Step 2.6).
 
 ### Checkpoint
 
@@ -2065,7 +2065,7 @@ Then start again at Step 2.1. If you had already made Step 2.5's commit, that co
 
 - **The other functions in Step 2.1's list** are the public functions of `decode.c` and `encode.c`; the `internal` (static) helpers of `encode.c`; and `ShowProgress` and `ShowUsage` in `lzg.c`, just before `main`, which show as `public` because liblzg does not mark them `static`.
 - **How the order is chosen.** At each step the planner takes the alphabetically first unit whose dependencies are already placed. `u-checksum` and `u-version` depend on nothing, and `u-checksum` sorts first. Placing it makes `u-decode` and `u-encode` ready too, and both sort before `u-version`. `u-lzg` needs `u-encode` and `u-version`, so it comes last.
-- **Why only leaf units.** When the judge tests a unit, it links the test program with only that unit's own C file (or only its Rust), and nothing else (**linking** is the last part of building, where every function a file calls must be found). The Rust translation is not allowed to call C. So a unit that calls another unit's functions could never be linked, or tested, on its own.
+- **Why leaves first.** When the judge tests a unit, it links the test program with that unit's own C file (or its Rust) and with the units it calls, as the program stands: their Rust once accepted, else their C (**linking** is the last part of building, where every function a file calls must be found). Taking the units in the plan's order, leaves first, means each unit is tested with the Rust of the units it calls, as the finished program will run it.
 - **The plan's fields.**
 
   | Field | Meaning | Who writes it |
@@ -2638,8 +2638,8 @@ harness-tui --target targets/lzg
 
 **You should see** a full-screen view:
 
-- the **Files** pane on the left, with the project row `lzg` (`✓0/2` at its right edge: none of the 2 pieces that can move is in Rust yet), then `Pieces (5)` with its five pieces under it (the cockpit says **piece** for a unit), then `Features (none yet)`, `Speed — not set up`, and last the folder `src/`, folded (`▸`), its marks summed up at its right edge;
-- the **View** on the right, starting with a line that says where you are among the eight steps a program goes through: on a wide window `Map ✓ · Configure ✓ · Accept program ✓ · Scan ✓ · Plan ✓ · Test program 1/2 ○ · Rust 0/2 · Accept Rust 0/2` (two of the five pieces can move to Rust; one has its test program, from Part 3; the program as a whole is at its earliest step not done for both, so the `○` sits on the test program), on a narrower one `Step 6 of 8: Test program 1/2`; then a line `Next: None of the 2 that can move is in Rust yet — Migrate u-checksum: Enter` (the piece whose test program is ready goes first), then a summary such as `7 files scanned`, `Pieces (5): 1 ◈ test program ready · 3 · stays C · 1 ◇ no test program` and `Features: none yet — see Features`; its title says the same count in words (`none of the 2 that can move is in Rust yet`);
+- the **Files** pane on the left, with the project row `lzg` (`✓0/4` at its right edge: none of the 4 pieces that can move is in Rust yet), then `Pieces (5)` with its five pieces under it (the cockpit says **piece** for a unit), then `Features (none yet)`, `Speed — not set up`, and last the folder `src/`, folded (`▸`), its marks summed up at its right edge;
+- the **View** on the right, starting with a line that says where you are among the eight steps a program goes through: on a wide window `Map ✓ · Configure ✓ · Accept program ✓ · Scan ✓ · Plan ✓ · Test program 1/4 ○ · Rust 0/4 · Accept Rust 0/4` (four of the five pieces can move to Rust, the fifth, `u-lzg`, holds `main`; one has its test program, from Part 3; the program as a whole is at its earliest step not done for all four, so the `○` sits on the test program), on a narrower one `Step 6 of 8: Test program 1/4`; then a line `Next: None of the 4 that can move is in Rust yet — Migrate u-checksum: Enter` (the piece whose test program is ready goes first), then a summary such as `7 files scanned`, `Pieces (5): 1 ◈ test program ready · 3 ◇ no test program · 1 · holds main` and `Features: none yet — see Features`; its title says the same count in words (`none of the 4 that can move is in Rust yet`);
 - the line `Ready — ↑↓ to choose a row, Enter for what you can do` under the panes; once you move, that line says what the selected row is, in one sentence (press `i` for a card that says more, `Esc` to close it);
 - a key bar at the bottom, like `↑↓ move   ←→ fold/open   Enter actions   Tab pane   …   q quit`.
 
@@ -3323,7 +3323,8 @@ status:   attempts: 1 (1 bound to current source) [a-<12hex>:external:green]
 status: u-decode [pending] plan=fresh verdict=no verdict
 status: u-encode [pending] plan=fresh verdict=no verdict
 status: u-version [pending] plan=fresh verdict=no verdict
-status: u-lzg [pending] plan=fresh verdict=no verdict
+status: u-lzg [pending] holds main — stays C in this version plan=fresh verdict=no verdict
+status: the program as it stands: 1 of 5 pieces in Rust (u-lzg holds main)
 ```
 
 **What it means.** For `u-checksum`:
@@ -3333,7 +3334,7 @@ status: u-lzg [pending] plan=fresh verdict=no verdict
 - `verdict=green (fresh)` means the last verdict is GREEN and matches today's C, driver and Rust (if one of them changed it would say `STALE: …` and name which);
 - the `attempts` line lists every translation attempt: its id, how it was answered (`external`) and how it ended (`green`); `1 bound to current source` means it was made against today's C.
 
-Part 10 explains all the status words.
+`u-lzg` holds the program's `main()`, so it stays C in this version (Part 7 says why). The last line counts how much of the program, as it stands, is Rust. Part 10 explains all the status words.
 
 **If you do not see that.**
 
@@ -4075,83 +4076,735 @@ rm -rf targets/lzg/migration/units/u-version
 
 ---
 
-## Part 7 — Why the other three units stay in C
+## Part 7 — A piece that calls another piece
 
-**The question.** Why do only two of liblzg's five units move to Rust?
+**The question.** Can a piece whose C calls another piece's function move to Rust, and what happens to it when the piece it calls changes?
 
-**You will know the answer when** you can say, for each of `u-decode`, `u-encode` and `u-lzg`, why the judge cannot test it on its own (the table below), and you have seen the harness refuse one of them (Step 7.1).
+**You will know the answer when** `u-encode`, which calls `u-checksum`'s function, is verified GREEN with `u-checksum`'s Rust linked in (Steps 7.11–7.12), and you have seen it go out of date when `u-checksum`'s Rust changed, and come back with a re-check (Steps 7.15–7.17).
 
-**Takes** about 5 minutes. **Uses Claude:** no.
+**Takes** about 30 minutes. **Uses Claude:** **yes**, only for the translation (Step 7.9).
+
+`u-encode` is liblzg's compressor: five functions in `encode.c`. To write a compressed file's header it calls `_LZG_CalcChecksum`, the function in `checksum.c` that `u-checksum` holds. Part 2's plan already says so: `depends_on = ["u-checksum"]`. A piece like this moves **after** the pieces it calls, and the judge tests it with them **as the program stands**: their Rust once you have accepted it, else their C.
 
 ### Before you start
 
-- Part 6's checkpoint is ticked.
-- You are in `~/code/RuHarness` on the branch `practice-lzg` (run the folder boxes of Part 2's "Before you start" if you opened a new window).
+- Part 6's checkpoint is ticked: `u-checksum` and `u-version` are verified.
+- Use **one Terminal window** for Steps 7.1–7.10: `REQ` and `RESP` live only in it (Plan B's Steps B.4–B.5 use a second one, as before).
+- **This part works on a side branch.** Parts 8 to 11 start from the end of Part 6, so that their screens match yours; Step 7.18 takes you back. What you do here is kept on the side branch.
 - New words in this part:
 
 | Word | Plain meaning |
 |---|---|
-| **Link** | The last part of building a program, where every function one file asks for must be found in some other file. If one is missing, the build fails. |
-| **Function pointer** | Handing a function to another function, so that it can be called back later, instead of calling it directly. |
+| **Callee** | The piece whose function another piece calls. Here `u-checksum` is `u-encode`'s callee. |
+| **As the program stands** | Each piece in the form the program runs it today: its Rust once you have accepted it, else its C. |
+| **Out of date** | A verdict is out of date when something it was made from has changed since; here, the Rust of a piece it calls. |
 
-### The reason, unit by unit
-
-| Unit | Why it stays in C |
-|---|---|
-| `u-decode` | It calls the checksum function in `checksum.c` (its plan line says `depends_on = ["u-checksum"]`). |
-| `u-encode` | It also calls `checksum.c`, and it hands functions to other functions (a sort helper and a progress report). |
-| `u-lzg` | It holds `main()`, the place where the program starts. |
-
-In plain words: **the judge builds each unit's test program with only that unit's own C file.** A unit that needs another unit's file cannot be built alone, so it cannot be tested this way. And a driver is a program with its own `main()`, so the unit that holds the program's `main()` can never be tested this way either.
+**Where.** Still in the Terminal window you used for Part 6? Then you are already in `~/code/RuHarness` on the branch `practice-lzg`. In a new window, first run the folder boxes of Part 2's "Before you start".
 
 ---
 
-### Step 7.1 — See the harness refuse (optional)
-
-This step is **meant to stop with the word `error`**. The harness refuses before any model call, and nothing that git tracks changes. The message does not mean you broke anything: it says why this unit cannot move.
+### Step 7.1 — Start a side branch
 
 **Run.**
 
 ```bash
-harness migrate u-encode --target targets/lzg
+git switch -c practice-lzg-encode
 ```
 
 **You should see.**
 
 ```text
-error: u-encode calls u-checksum, so in this version it stays C: the judge tests each unit alone
+Switched to a new branch 'practice-lzg-encode'
+```
+
+**What it means.** Your commits in this part go to `practice-lzg-encode`; `practice-lzg` stays at the end of Part 6.
+
+**If you do not see that.** `fatal: a branch named 'practice-lzg-encode' already exists`: an earlier try left it. Do "If you need to start this part again" at the end of this part, then this step.
+
+---
+
+### Step 7.2 — See which pieces can move
+
+**Run.**
+
+```bash
+harness state status --target targets/lzg
+```
+
+**You should see.**
+
+```text
+status: facts fresh (7 files, 0 stale vs tree)
+status: u-checksum [verified] plan=fresh verdict=green (fresh)
+status:   attempts: 1 (1 bound to current source) [a-<12hex>:external:green]
+status: u-decode [pending] plan=fresh verdict=no verdict
+status: u-encode [pending] plan=fresh verdict=no verdict
+status: u-version [verified] plan=fresh verdict=green (fresh)
+status:   attempts: 1 (1 bound to current source) [a-<12hex>:external:green]
+status: u-lzg [pending] holds main — stays C in this version plan=fresh verdict=no verdict
+status: the program as it stands: 2 of 5 pieces in Rust (u-lzg holds main)
+```
+
+**What it means.** Two pieces are Rust. `u-decode` and `u-encode` both call `u-checksum`, which is placed before them, so either can move now. `u-lzg` holds the program's `main()`, where it starts: a test program is a program with its own `main()`, so in this version that piece stays C (Step 7.14). The last line counts how much of the program is Rust.
+
+**If you do not see that.** `attempts: 2` on a line: you tried more than once in Part 4 or 6; that is fine. `STALE` on a line: re-verify that unit as in Step 5.1.
+
+---
+
+### Step 7.3 — Ask the harness for `u-encode`'s driver
+
+This step is **meant to stop with the word `error`**, as Step 6.1 did.
+
+**Run.**
+
+```bash
+harness gen-driver u-encode --target targets/lzg --model guide-written
+```
+
+**You should see** `awaiting response: …`, the long `gen-driver: external provider mode …` line, and:
+
+```text
+error: awaiting response: /Users/<you>/code/RuHarness/targets/lzg/migration/units/u-encode/driver-traces/<key>.response.json
+```
+
+**What it means.** The question is written; the harness waits for your answer, as in Step 6.1.
+
+**If you do not see that.** `error: u-encode calls u-checksum, so in this version it stays C …`: your RuHarness is older than this guide. Update it (Part 10, Steps 10.6 to 10.8), then run this step again.
+
+---
+
+### Step 7.4 — Write the driver
+
+**Run.** One command down to the line `EOF`; copy it whole.
+
+```bash
+cat > ~/lzg-practice/encode-driver.c <<'EOF'
+#include <stdio.h>
+#include <string.h>
+#include "internal.h"
+static unsigned char in[80000];
+static unsigned char out[80100];
+static unsigned char work[1 << 21];
+static unsigned int rng = 12345u;
+int main(void)
+{
+    lzg_encoder_config_t cfg;
+    unsigned int i, j, n, level, pos, len, dist, h;
+    unsigned int sizes[] = {0, 1, 5, 100, 1000, 3000};
+    unsigned int big[] = {20000, 70000};
+    for (i = 0; i < 3000; i++) {
+        in[i] = (unsigned char)("the quick brown fox jumps over the lazy dog "[(i * 7u + i / 50u) % 44u]);
+        if (i % 97u < 5u) in[i] = (unsigned char)(i & 0xffu);
+    }
+    printf("max encoded 0=%u 10=%u 3000=%u\n", LZG_MaxEncodedSize(0), LZG_MaxEncodedSize(10), LZG_MaxEncodedSize(3000));
+    LZG_InitEncoderConfig(&cfg);
+    printf("default config level=%d fast=%d cb=%d ud=%d\n", (int)cfg.level, (int)cfg.fast,
+           cfg.progressfun != NULL, cfg.userdata != NULL);
+    printf("workmem default=%u\n", LZG_WorkMemSize(NULL));
+    for (level = 0; level <= 10; level++) {
+        cfg.level = (lzg_int32_t)level - 1;
+        cfg.fast = LZG_FALSE;
+        printf("workmem level=%d slow=%u\n", (int)cfg.level, LZG_WorkMemSize(&cfg));
+        cfg.fast = LZG_TRUE;
+        printf("workmem level=%d fast=%u\n", (int)cfg.level, LZG_WorkMemSize(&cfg));
+    }
+    for (level = 1; level <= 4; level++) {
+        cfg.level = (lzg_int32_t)level;
+        cfg.fast = LZG_FALSE;
+        cfg.progressfun = NULL;
+        cfg.userdata = NULL;
+        for (n = 0; n < sizeof(sizes) / sizeof(sizes[0]); n++) {
+            lzg_uint32_t r;
+            memset(out, 0xaa, sizeof(out));
+            if (level == 2 && LZG_WorkMemSize(&cfg) <= sizeof(work))
+                r = LZG_EncodeFull(in, sizes[n], out, sizes[n] + 16u, &cfg, work);
+            else
+                r = LZG_Encode(in, sizes[n], out, sizes[n] + 16u, &cfg);
+            printf("level=%u size=%u encoded=%u:", level, sizes[n], (unsigned int)r);
+            for (j = 0; j < r; j++) printf("%02x", out[j]);
+            printf("\n");
+        }
+        printf("level=%u small-out=%u\n", level, LZG_Encode(in, 100, out, 50, &cfg));
+        memset(out, 0xaa, sizeof(out));
+        {
+            lzg_uint32_t r = LZG_Encode(in, 200, out, 216, &cfg);
+            printf("level=%u tight=%u:", level, (unsigned int)r);
+            for (j = 0; j < r; j++) printf("%02x", out[j]);
+            printf("\n");
+        }
+    }
+    /* random bytes with copies of every length 3..130 at near, short, mid and far distances */
+    for (i = 0; i < sizeof(in); i++) {
+        rng = rng * 1103515245u + 12345u;
+        in[i] = (unsigned char)(rng >> 16);
+    }
+    pos = 300;
+    for (len = 3; len <= 130 && pos + len < 20000; len++) {
+        unsigned int dists[] = {1, 2, 5, 8, 9, 40, 71, 72, 300, 2055, 2056, 2100, 9000};
+        dist = dists[len % 13u];
+        if (dist <= pos) {
+            for (j = 0; j < len; j++) in[pos + j] = in[pos + j - dist];
+        }
+        pos += len + 7u + (len % 5u);
+    }
+    /* a long run */
+    memset(in + 15000, 'z', 400);
+    for (level = 1; level <= 5; level += 2) {
+        cfg.level = (lzg_int32_t)level;
+        cfg.fast = LZG_FALSE;
+        for (n = 0; n < 2; n++) {
+            lzg_uint32_t r;
+            if (n == 1 && level != 1) continue;
+            memset(out, 0xaa, sizeof(out));
+            r = LZG_EncodeFull(in, big[n], out, sizeof(out), &cfg, work);
+            h = 2166136261u;
+            for (j = 0; j < r; j++) h = (h ^ out[j]) * 16777619u;
+            printf("big level=%u size=%u encoded=%u hash=%08x head:", level, big[n], (unsigned int)r, h);
+            for (j = 0; j < 40 && j < r; j++) printf("%02x", out[j]);
+            printf("\n");
+            if (n == 0) {
+                for (j = 16; j < r; j++) printf("%02x", out[j]);
+                printf("\n");
+            }
+        }
+    }
+    printf("null in=%u\n", LZG_Encode(NULL, 10, out, sizeof(out), &cfg));
+    return 0;
+}
+EOF
+```
+
+**Run.** Count its lines.
+
+```bash
+wc -l < ~/lzg-practice/encode-driver.c
+```
+
+**You should see** `92` (with spaces in front of it).
+
+**What it means.** The driver calls all five of `u-encode`'s functions: sizes, settings, and the compressed bytes of small inputs at four levels and of large ones with copies at every distance the format has. Every compressed result carries a checksum, so the driver also exercises `u-checksum`'s function, through `u-encode`.
+
+**If you do not see that.** Stuck at `heredoc>`: type `EOF`, press Return and paste the box again. Another number: paste the box again.
+
+---
+
+### Step 7.5 — Put the driver into the answer file
+
+**Run.** Of the four boxes below, the first, second and fourth print nothing; the third prints the answer file's name.
+
+```bash
+REQ=$(ls -t targets/lzg/migration/units/u-encode/driver-traces/*.request.json | head -n 1)
 ```
 
 **Run.**
 
 ```bash
-echo "exit=$?"
+RESP="${REQ%.request.json}.response.json"
 ```
 
-**You should see** `exit=1`: the harness refused.
+**Run.**
 
-**What it means.** `u-encode` calls `checksum.c`'s function, so no test program of its own could be built, and the harness says so before anything runs. The cockpit shows such a unit as `· stays C` (its card: `It calls u-checksum, so in this version it stays C`), greys Make the test program and Migrate on it, and leaves it out of the step line's counts.
+```bash
+echo "$RESP"
+```
 
-**If you do not see that.** Anything that starts `awaiting response:` means the harness is about to ask a model: that should not happen for `u-encode`. Run `git status --short`; if it lists files, run `git restore targets/lzg` and ask for help.
+**You should see** `targets/lzg/migration/units/u-encode/driver-traces/<key>.response.json`, with the key from Step 7.3.
+
+**Run.** Copy the line whole.
+
+````bash
+jq -n --rawfile d ~/lzg-practice/encode-driver.c '{text: ("driver.c\n```c\n" + $d + "```\nRUHARNESS_END_OF_OUTPUT\n"), input_tokens: 0, output_tokens: 0, stop_reason: "end_turn"}' > "$RESP"
+````
+
+**What it means.** The answer is in its envelope, next to the question, as in Step 6.5.
+
+**If you do not see that.** `.response.json` alone, or `no matches found`: run `cd ~/code/RuHarness` and repeat the boxes. `quote>` or `dquote>`: press Ctrl-C and paste the last line again.
+
+---
+
+### Step 7.6 — Run the same command again
+
+**Run.** About 20–30 seconds.
+
+```bash
+harness gen-driver u-encode --target targets/lzg --model guide-written
+```
+
+**You should see.**
+
+```text
+gen-driver: checking the driver against the original C (it is built and run several times; this can take a minute) …
+gen-driver: turn 1 generate -> green
+gen-driver: u-encode attempt d-<12hex> via `external` (external) model `guide-written` -> GREEN
+gen-driver: checking it once more where it now lives …
+gen-driver: promoted migration/units/u-encode/driver.c and recorded /Users/<you>/code/RuHarness/targets/lzg/migration/units/u-encode/driver-validation.json
+```
+
+**Run.** Read the first check, and what the test program was built with.
+
+```bash
+jq -r '.checks[0].detail' targets/lzg/migration/units/u-encode/driver-validation.json
+```
+
+**You should see** a line ending `links against 1 unit file(s) and 1 C file(s) of the pieces it calls`.
+
+**Run.**
+
+```bash
+jq -r '.inputs.dependencies[] | "\(.unit) \(.kind)"' targets/lzg/migration/units/u-encode/driver-validation.json
+```
+
+**You should see.**
+
+```text
+u-checksum c
+```
+
+**What it means.** The test program could be built because the piece it calls was linked in: `checksum.c`, the **original C**. A test program is always checked against the original C program, and only `u-encode`'s own C is changed by the planted bugs of the mutation check. So accepting more Rust later never makes this test program out of date.
+
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| a new `awaiting response:` line | Follow "If Step 3.9 asked again" in Part 3, with `u-encode` in place of `u-checksum`. |
+| `undefined symbol` or `Undefined symbols` with `_LZG_CalcChecksum` | Your RuHarness is older than this guide: update it (Part 10, Steps 10.6 to 10.8) and run Step 7.3 again. |
+| anything else | Start this part again (below), or look in [Troubleshooting](#troubleshooting). |
+
+---
+
+### Step 7.7 — Save the driver
+
+**Run.**
+
+```bash
+git add targets/lzg
+```
+
+**Run.**
+
+```bash
+git commit -m "lzg: validated driver for u-encode"
+```
+
+**You should see** `[practice-lzg-encode <hash>] lzg: validated driver for u-encode` and `<number> files changed`.
+
+**What it means.** The driver and its records are saved on the side branch.
+
+**If you do not see that.** `nothing to commit`: you already committed; go on.
+
+---
+
+### Step 7.8 — Start the translation and read the new part of the question
+
+This step is **meant to stop with the word `error`**, as Plan B's Step B.1 did. You translate on the command line here, so that you can read what the question says about the piece `u-encode` calls.
+
+**Run.**
+
+```bash
+harness migrate u-encode --target targets/lzg --model my-claude-code --no-promote
+```
+
+**You should see** as the last line:
+
+```text
+error: awaiting response: /Users/<you>/code/RuHarness/targets/lzg/migration/units/u-encode/traces/<key>.response.json
+```
+
+**Run.** The first two boxes print nothing; the third lists the question's parts.
+
+```bash
+REQ=$(ls -t targets/lzg/migration/units/u-encode/traces/*.request.json | head -n 1)
+```
+
+**Run.**
+
+```bash
+RESP="${REQ%.request.json}.response.json"
+```
+
+**Run.**
+
+```bash
+jq -r .user "$REQ" | grep '^\['
+```
+
+**You should see.**
+
+```text
+[UNIT]
+[ABI CONTRACT]
+[HAZARDS]
+[ORACLE]
+[FUNCTIONS OF OTHER PIECES YOU MAY CALL]
+[C SOURCE]
+[TASK]
+```
+
+**Run.** Read that new part.
+
+```bash
+jq -r .user "$REQ" | sed -n '/^\[FUNCTIONS OF OTHER PIECES/,/^<\/abi/p'
+```
+
+**You should see** it begin:
+
+```text
+[FUNCTIONS OF OTHER PIECES YOU MAY CALL]
+This unit's C calls functions that other pieces of the program define. Every build and run links those pieces in as the program stands (each one's accepted Rust, else its C), so your Rust calls them exactly as the C does: never re-implement them, and never define a function with one of their names (your library must export exactly the [ABI CONTRACT] symbols).
+```
+
+then a sentence allowing one `extern "C" { ... }` block in `src/ffi.rs` for these functions and nothing else, and, between two `abi_<12hex>` lines, the one function it may call:
+
+```text
+"lzg_uint32_t _LZG_CalcChecksum(const unsigned char *data, lzg_uint32_t size)"
+```
+
+**What it means.** A piece that calls nothing gets no such part; this one is told exactly which functions of other pieces its Rust may call, and how. Anything else of the program it tried to call would fail the `capabilities` check.
+
+**If you do not see that.** No `[FUNCTIONS OF OTHER PIECES YOU MAY CALL]` line: your RuHarness is older than this guide (update it, Part 10). `error: u-encode has no test program yet`: Step 7.6 did not finish; do it again.
+
+---
+
+### Step 7.9 — Have Claude Code write the Rust
+
+> **Uses your Claude subscription.**
+
+**Do.** Plan B's Steps B.3 to B.8, exactly as written: they work on whatever `REQ` and `RESP` name, now `u-encode`'s question and answer file. Step B.3 removes the earlier answer first, so `u-checksum`'s can never be sent again.
+
+**You should see** at the end of Step B.8 the number `1`: one end marker.
+
+**What it means.** Claude Code answered `u-encode`'s question; its answer is in its envelope, next to the question. It may take a few minutes: `encode.c` is about 500 lines.
+
+**If you do not see that.** Use the "If you do not see that" of the Plan B step where it went wrong.
+
+---
+
+### Step 7.10 — Run the same command again, and promote
+
+**Run.** Exactly the command of Step 7.8.
+
+```bash
+harness migrate u-encode --target targets/lzg --model my-claude-code --no-promote
+```
+
+**You should see.**
+
+```text
+migrate: turn 1 translate -> green (tokens in/out: ?/?)
+migrate: u-encode attempt a-<12hex> via `external` (external) model `my-claude-code` -> GREEN
+migrate: green attempt recorded; not promoted (--no-promote)
+```
+
+**Run.** The first box prints nothing.
+
+```bash
+ATT=$(ls -t targets/lzg/migration/units/u-encode/attempts | head -n 1)
+```
+
+**Run.**
+
+```bash
+harness promote u-encode "$ATT" --target targets/lzg
+```
+
+**You should see.**
+
+```text
+promote: u-encode attempt a-<12hex> promoted and verified — status set to verified
+```
+
+**What it means.** The Rust passed every check against the C, with `u-checksum`'s Rust linked in, and is now `u-encode`'s Rust.
+
+**If you do not see that.**
+
+| You see | Do this |
+|---|---|
+| `-> RED` | Look at why with `harness state status --target targets/lzg` and the checks (Step 5.2), then ask Claude Code again: Step 7.8's three `REQ`/`RESP` boxes, then Step 7.9. |
+| `rust-build` among the checks, `does not link` | The Rust names a function wrongly (not `_LZG_CalcChecksum`). Ask again, as in the row above. |
+| a new `awaiting response:` | The answer did not arrive: do Step 7.9 again. |
+
+---
+
+### Step 7.11 — Verify it yourself
+
+**Run.**
+
+```bash
+harness verify u-encode --target targets/lzg
+```
+
+**You should see.**
+
+```text
+verify: [PASS] symbol-set — 5 exported symbol(s) match the unit's symbols exactly
+verify: [PASS] capabilities — no capability beyond the C unit's (allowed: none); no asm
+verify: [PASS] driver-shape — driver object defines only main, references only the unit and allowlisted libc; source lint clean
+verify: [PASS] differential-driver — 87905 bytes identical
+verify: [PASS] whole-program:sample_text.txt — 808 bytes identical
+verify: [PASS] whole-program:sample_rand.bin — 16400 bytes identical
+verify: [PASS] whole-program:sample_empty — 0 bytes identical (stderr: 21 bytes identical)
+verify: [PASS] sanitizers — asan+ubsan clean
+verify: u-encode GREEN — status set to verified
+```
+
+**What it means.** Unlike `u-version`'s, these whole-program runs really run this Rust: compressing a file is `u-encode`'s job. The program they ran had three pieces of Rust in it: `u-encode`'s, and the accepted `u-checksum` and `u-version`.
+
+**If you do not see that.** A `[FAIL]` line: read it as in Step 5.2; if it names the whole program, run Step 7.10's promote again.
+
+---
+
+### Step 7.12 — See what it was checked with
+
+**Run.**
+
+```bash
+jq '.inputs.dependencies' targets/lzg/migration/units/u-encode/oracle-latest.json
+```
+
+**You should see.**
+
+```text
+[
+  {
+    "unit": "u-checksum",
+    "kind": "rust",
+    "digest": "blake3:<64 characters>"
+  }
+]
+```
+
+**Run.**
+
+```bash
+grep -rn '_LZG_CalcChecksum' targets/lzg/migration/units/u-encode/u_encode_rs/src
+```
+
+**You should see** one or more lines in `src/ffi.rs`, one of them declaring it, like `fn _LZG_CalcChecksum(data: *const u8, size: u32) -> u32;`.
+
+**What it means.** The verdict records the piece it calls, in which form (`rust`: its accepted Rust, as the program stands), and a fingerprint of that Rust. Its Rust calls the checksum through an `extern "C"` block, as the question allowed. If `u-checksum`'s Rust changes, the fingerprint no longer matches, and the verdict is out of date (Step 7.16).
+
+**If you do not see that.** `"kind": "c"`: `u-checksum` is not verified any more; run `harness verify u-checksum --target targets/lzg`, then Step 7.11 again.
+
+---
+
+### Step 7.13 — The program's status, and save
+
+**Run.**
+
+```bash
+harness state status --target targets/lzg
+```
+
+**You should see.**
+
+```text
+status: facts fresh (7 files, 0 stale vs tree)
+status: u-checksum [verified] plan=fresh verdict=green (fresh)
+status:   attempts: 1 (1 bound to current source) [a-<12hex>:external:green]
+status: u-decode [pending] plan=fresh verdict=no verdict
+status: u-encode [verified] plan=fresh verdict=green (fresh)
+status:   attempts: 1 (1 bound to current source) [a-<12hex>:external:green]
+status: u-version [verified] plan=fresh verdict=green (fresh)
+status:   attempts: 1 (1 bound to current source) [a-<12hex>:external:green]
+status: u-lzg [pending] holds main — stays C in this version plan=fresh verdict=no verdict
+status: the program as it stands: 3 of 5 pieces in Rust (u-lzg holds main)
+```
+
+**Run.**
+
+```bash
+git add targets/lzg
+```
+
+**Run.**
+
+```bash
+git commit -m "lzg: u-encode migrated and verified"
+```
+
+**What it means.** Three of the five pieces are Rust now. You save it, so Step 7.17 can put everything back.
+
+**If you do not see that.** `attempts: 2` on `u-encode`'s line: you asked twice; that is fine.
+
+---
+
+### Step 7.14 — The piece that holds `main`
+
+This step is **meant to stop with the word `error`**.
+
+**Run.**
+
+```bash
+harness migrate u-lzg --target targets/lzg
+```
+
+**You should see.**
+
+```text
+error: u-lzg holds main — stays C in this version
+```
+
+**What it means.** A test program is a small program with its own `main()`, so it cannot test the piece that holds the program's `main()`. That piece waits for a later version of RuHarness, which will move the end of the program as a whole. The harness refused before any model call; nothing changed.
+
+**If you do not see that.** Anything starting `awaiting response:` means the harness is about to ask a model: that should not happen. Run `git status --short`; if it lists files, run `git restore targets/lzg`.
+
+---
+
+### Step 7.15 — Change `u-checksum`'s Rust
+
+You change the Rust of the piece `u-encode` calls, without changing what it computes: `1` becomes `0x1`, the same number written in hex. It is `u-checksum`'s **Rust** you change, not `checksum.c`: once its Rust is accepted, the program runs the Rust, and `checksum.c` no longer matters to `u-encode` (changing it would make only `u-checksum`'s own verdict out of date).
+
+**Run.** The first prints nothing.
+
+```bash
+sed -i '' 's/let mut a: u16 = 1;/let mut a: u16 = 0x1;/' targets/lzg/migration/units/u-checksum/u_checksum_rs/src/logic.rs
+```
+
+**Run.**
+
+```bash
+grep -n 'let mut a' targets/lzg/migration/units/u-checksum/u_checksum_rs/src/logic.rs
+```
+
+**You should see** one line ending `let mut a: u16 = 0x1;` (its number may differ from Part 5's).
+
+**What it means.** `u-checksum`'s Rust has new bytes, and computes the same thing.
+
+**If you do not see that.** It still ends `= 1;`: your Rust writes that line differently; open the file with `nano -w` as in Part 5, change that `1` to `0x1`, save and leave.
+
+---
+
+### Step 7.16 — See `u-encode` go out of date
+
+**Run.**
+
+```bash
+harness state status --target targets/lzg
+```
+
+**You should see** these three lines among the others:
+
+```text
+status: u-checksum [verified] plan=fresh verdict=green (STALE: rust-crate)  << CONTRADICTION: status and verdict evidence disagree
+status: u-encode [verified] plan=fresh verdict=green (out of date: a piece it calls changed)
+status: the program as it stands: 3 of 5 pieces in Rust (u-lzg holds main)
+```
+
+**What it means.** `u-checksum`'s own verdict no longer matches its Rust (Part 10 explains `CONTRADICTION`). And `u-encode`'s verdict was made with the old `u-checksum` Rust, so it is out of date too, though nothing of `u-encode` changed. The cockpit says the same on `u-encode`: `needs attention: its verdict is out of date (a piece it calls changed: u-checksum)`, with Re-check as its next step.
+
+**If you do not see that.** `u-encode … (fresh)`: the edit of Step 7.15 did not happen; do it again.
+
+---
+
+### Step 7.17 — Re-check `u-encode`, then put everything back
+
+**Run.**
+
+```bash
+harness verify u-encode --target targets/lzg
+```
+
+**You should see** the nine lines of Step 7.11, ending `verify: u-encode GREEN — status set to verified`.
+
+**Run.**
+
+```bash
+harness state status --target targets/lzg
+```
+
+**You should see** `u-encode`'s line `verdict=green (fresh)` again, while `u-checksum`'s still says `(STALE: rust-crate)`.
+
+**What it means.** `u-encode` was checked again, this time with `u-checksum`'s new Rust, and is up to date. But that Rust has not been checked itself yet: the cockpit says so on `u-encode`, `a piece it calls is out of date itself (u-checksum)`, so that you re-check `u-checksum` too. Here you put the old Rust back instead.
+
+**Run.** This puts back everything as Step 7.13 saved it; it prints nothing.
+
+```bash
+git restore targets/lzg
+```
+
+**Run.**
+
+```bash
+harness state status --target targets/lzg
+```
+
+**You should see** the lines of Step 7.13 again: every verdict `green (fresh)`.
+
+**If you do not see that.** A `STALE` line after `git restore`: run `harness verify` on that unit.
+
+---
+
+### Step 7.18 — Go back to the main practice branch
+
+**Run.**
+
+```bash
+git switch practice-lzg
+```
+
+**You should see** `Switched to branch 'practice-lzg'`.
+
+**Run.** This removes the build leftovers of `u-encode` that git does not track (it prints nothing).
+
+```bash
+rm -rf targets/lzg/migration/units/u-encode
+```
+
+**Run.**
+
+```bash
+harness state status --target targets/lzg
+```
+
+**You should see** the lines of Step 7.2: `u-encode [pending]`, and `2 of 5 pieces in Rust`.
+
+**What it means.** You are back at the end of Part 6. `practice-lzg-encode` keeps `u-encode`'s Rust; `git switch practice-lzg-encode` brings it back whenever you like.
+
+**If you do not see that.** `error: Your local changes … would be overwritten`: Step 7.17's `git restore` did not run; run it, then this step again.
 
 ---
 
 ### Answer
 
-Why do only two units move? Because the judge tests each unit alone: `u-decode` and `u-encode` cannot be built without `checksum.c`, and `u-lzg` holds the program's `main()`. Two of five is the expected finish for liblzg, not a failure.
+Can a piece that calls another piece move? Yes, after the pieces it calls: `u-encode` went GREEN with `u-checksum`'s Rust linked in (Steps 7.11–7.12), and its verdict records the form and fingerprint of what it was checked with. When that Rust changed, `u-encode` went out of date and came back with one re-check (Steps 7.16–7.17). Only `u-lzg`, which holds `main()`, stays C in this version.
 
 ### Checkpoint
 
-- [ ] Step 7.1 printed a line starting ``error: invalid plan: unit `u-encode` `` and `exit=1`.
+- [ ] Step 7.6 ended GREEN, and the test program linked `1 C file(s) of the pieces it calls`.
+- [ ] Step 7.8 showed `[FUNCTIONS OF OTHER PIECES YOU MAY CALL]` with `_LZG_CalcChecksum`.
+- [ ] Step 7.11 printed 8 `[PASS]` lines; Step 7.12 showed `"kind": "rust"`.
+- [ ] Step 7.14 printed `error: u-lzg holds main — stays C in this version`.
+- [ ] Step 7.16 showed `u-encode`'s `verdict=green (out of date: a piece it calls changed)`.
+- [ ] Step 7.18 showed `2 of 5 pieces in Rust` on `practice-lzg`.
 
 ### If you need to start this part again
 
-Nothing to undo: this part changes nothing.
+**Run.** Back to the main practice branch (if it says `Already on 'practice-lzg'`, that is fine).
+
+```bash
+git switch practice-lzg
+```
+
+**Run.** Remove the side branch and `u-encode`'s leftovers; both print nothing, or `Deleted branch practice-lzg-encode (was <hash>).`
+
+```bash
+git branch -D practice-lzg-encode
+```
+
+**Run.**
+
+```bash
+rm -rf targets/lzg/migration/units/u-encode
+```
+
+Then start again at Step 7.1.
 
 ### For the curious (optional)
 
-- **The Rust side may not call C at all.** That stays true even though `u-checksum` is Rust now, because each unit is built and tested on its own.
-- `u-lzg` also depends on `u-encode` and `u-version` (`depends_on = ["u-encode", "u-version"]` in `plan.toml`).
+- **`u-decode` can move the same way.** It also calls `u-checksum`. None of the features of Part 8 runs it, which the cockpit says on its row (Part 9).
+- **The order.** The cockpit's `Next:` names the first piece in the plan's order that can move (Step 2.6's "How the order is chosen"): after `u-checksum` that is `u-decode`, then `u-encode`, then `u-version`. You can take them in another order: a piece moved before a piece it calls is simply checked again once that one's Rust is accepted (its verdict goes out of date, as in Step 7.16).
+- **Why the test program links the original C.** It is checked against the original program, and the planted bugs of the mutation check go only into the piece's own C. So a callee's accepted Rust leaves it valid, and no model has to write it again.
+- **Two Rust pieces in one program.** Each piece is its own small Rust library; the program links all of them, each where its C was. Making them one Rust library, and moving the piece that holds `main()`, is the end of the journey, for a later version.
 
 ---
 
@@ -4643,16 +5296,16 @@ harness-tui --target targets/lzg
 1. Press `?`. **You should see** the help's first page: seven keys (`↑ ↓`, `Enter`, `Tab`, `Esc`, `i`, `?`, `q`), the three marks you meet first (`◇` no test program yet — `◈` once it is ready —, `✓` done, `⚠` needs attention), and `↓ more: every key, the mouse, every mark, features, speed, the chat` at its foot.
 2. Press `↓`. **You should see** the rest: every key and every symbol the cockpit uses (`◉`, `◌` and more), each with its meaning. Whenever a symbol in this part is unclear, `?` then `↓` explains it.
 3. Press any other key (`Esc`, say). **You should see** the help close.
-4. Press `↑` until the first row, `lzg`, is highlighted (it usually is already). **You should see** at the right edge of that row a summary like `✓2/2`, and the View's title saying it in words: `lzg · all 2 that can move are in Rust`. The View starts with the step line, then a `Next:` line, then a summary: the files scanned, the units by state, and a line beginning `Features: 3 — …`.
+4. Press `↑` until the first row, `lzg`, is highlighted (it usually is already). **You should see** at the right edge of that row a summary like `✓2/4`, and the View's title saying it in words: `lzg · 2 of the 4 that can move are in Rust`. The View starts with the step line, then a `Next:` line, then a summary: the files scanned, the units by state, and a line beginning `Features: 3 — …`.
 
-**What it means.** The other 3 units stay in C in this version of RuHarness (Part 7 explains why).
+**What it means.** `u-decode` and `u-encode` can move too (Part 7 moved `u-encode` on a side branch); `u-lzg` holds `main()` and stays C in this version. The `Next:` line names `u-decode`, the next in the plan's order.
 
 **If you do not see that.**
 
 | You see | Do this |
 |---|---|
 | nothing happened after `?` | The cockpit may have been busy loading: wait a second and press `?` again. |
-| `✓1/5` | One unit is no longer counted as migrated: quit (`q`) and run `harness state status --target targets/lzg` as in Step 10.4. |
+| `✓1/4` | One unit is no longer counted as migrated: quit (`q`) and run `harness state status --target targets/lzg` as in Step 10.4. |
 
 ### Step 9.3 — Find `checksum.c` and see the C next to the Rust
 
@@ -4754,7 +5407,7 @@ Ready. Last: Re-check u-checksum — GREEN — all 11 checks passed (<time>)
 
 **Do.** Press `↑` to highlight `u-decode`.
 
-**You should see** `· stays C`, the View's line `It calls u-checksum, so in this version it stays C — the judge tests each piece alone`, and the View says something like `None of your features runs this unit's functions, so their checks pass whatever its Rust does.`
+**You should see** `◇ u-decode no test program`, and the View says `None of your features runs this piece's functions, so their checks pass whatever its Rust does.`
 
 **What it means.** The cockpit warns you before you migrate a unit your features would not test (Part 8 found this).
 
@@ -4809,7 +5462,7 @@ Does the cockpit show the same truth as the command line? Yes: its re-check in S
 
 ### Checkpoint — the cockpit is working if…
 
-- [ ] The Files list showed `u-checksum` and `u-version` as `✓ done`, and the other three units as `· stays C`.
+- [ ] The Files list showed `u-checksum` and `u-version` as `✓ done`, `u-decode` and `u-encode` as `◇ no test program`, and `u-lzg` as `· holds main`.
 - [ ] Step 9.6 ended `Ready. Last: Re-check u-checksum — GREEN — all 11 checks passed`.
 - [ ] The `Features (3)` group listed `compress`, `version` and `no-file`.
 - [ ] Step 9.11 printed `0`.
@@ -4904,10 +5557,11 @@ status: u-decode [pending] plan=fresh verdict=no verdict
 status: u-encode [pending] plan=fresh verdict=no verdict
 status: u-version [verified] plan=fresh verdict=green (fresh) features=current
 status:   attempts: 1 (1 bound to current source) [a-<12hex>:external:green]
-status: u-lzg [pending] plan=fresh verdict=no verdict
+status: u-lzg [pending] holds main — stays C in this version plan=fresh verdict=no verdict
+status: the program as it stands: 2 of 5 pieces in Rust (u-lzg holds main)
 ```
 
-**What it means.** The first line says whether the scan still matches the C files. Then each unit has one line: its status in brackets, whether its plan and verdict are fresh, and whether the verdict included your features. Lines that are all `fresh`, `green` and `current` need nothing.
+**What it means.** The first line says whether the scan still matches the C files. Then each unit has one line: its status in brackets, whether its plan and verdict are fresh, and whether the verdict included your features. Lines that are all `fresh`, `green` and `current` need nothing; `holds main — stays C in this version` marks the piece that holds `main()`. The last line counts how much of the program, as it stands, is Rust.
 
 **If you do not see that.** Find the words on your screen in this table and do what it says. In the commands, change `u-checksum` to `u-version` when it is `u-version` that the line names.
 
@@ -4916,6 +5570,7 @@ status: u-lzg [pending] plan=fresh verdict=no verdict
 | `` facts STALE — run `harness scan` `` | A C file changed since the scan. | `harness scan --target targets/lzg`, then `harness plan --target targets/lzg`, then read `git diff targets/lzg/migration/plan.toml`. |
 | `plan=SOURCE-STALE` | This unit's C changed since planning. | The same as the row above, then `harness verify u-checksum --target targets/lzg`. |
 | `verdict=green (STALE: rust-crate)` (or `source`, `driver`) | Something the verdict tested has changed since. | `harness verify u-checksum --target targets/lzg` |
+| `verdict=green (out of date: a piece it calls changed)` | A piece this unit calls has new Rust, or its Rust was accepted, since the verdict (Part 7). | Re-verify this unit, as in Step 7.17: `harness verify u-encode --target targets/lzg` for `u-encode`. |
 | `<< CONTRADICTION: status and verdict evidence disagree` | The status says verified, but there is no fresh GREEN verdict (or the other way round). | `harness verify u-checksum --target targets/lzg` |
 | `features=behind(…)` | The verdict was not made with your current features. | `harness verify u-checksum --target targets/lzg` (the words in brackets are explained under "For the curious"). |
 | `<< promotion of … interrupted — the next writing command recovers it` | An Accept was cut off, for example by closing the window. | `harness verify u-checksum --target targets/lzg`. It first prints a `recover: …` line. |
@@ -6408,7 +7063,8 @@ status: u-checksum [pending] plan=fresh verdict=no verdict
 status: u-encode [pending] plan=fresh verdict=no verdict
 status: u-version [verified] plan=SOURCE-STALE verdict=green (STALE: source)  << CONTRADICTION: status and verdict evidence disagree
 status:   attempts: 1 (0 bound to current source) [a-<12hex>:external:green]
-status: u-lzg [pending] plan=fresh verdict=no verdict
+status: u-lzg [pending] holds main — stays C in this version plan=fresh verdict=no verdict
+status: the program as it stands: 1 of 4 pieces in Rust (u-lzg holds main)
 ```
 
 **What it means.** The first line is the map's note. `u-version`'s C changed after it was verified, so its verdict no longer describes today's file: the status says `SOURCE-STALE` and `CONTRADICTION` (Part 10's table explains both). The next four steps settle it.
@@ -6754,13 +7410,13 @@ with the card saying `not scanned and planned yet` under `Its build configuratio
 **You should see** first `Map ✓ · Configure ✓ · Accept program ✓ · Scan ○ · Plan`, then after the scan `… · Scan ✓ · Plan ○`, and after the plan:
 
 ```text
-Map ✓ · Configure ✓ · Accept program ✓ · Scan ✓ · Plan ✓ · Test program 0/2 ○ · Rust 0/2 · Accept Rust 0/2
-Next: none of the 2 that can move is in Rust yet — open u-checksum: Enter
+Map ✓ · Configure ✓ · Accept program ✓ · Scan ✓ · Plan ✓ · Test program 0/3 ○ · Rust 0/3 · Accept Rust 0/3
+Next: None of the 3 that can move is in Rust yet — open u-checksum: Enter
 ```
 
-and under `Pieces (4)`: `◇ u-checksum no test program`, `· u-encode stays C`, `◇ u-version no test program`, `· u-lzg stays C`.
+and under `Pieces (4)`: `◇ u-checksum no test program`, `◇ u-encode no test program`, `◇ u-version no test program`, `· u-lzg holds main`.
 
-**What it means.** The tool is cut into four pieces; two can move to Rust (every count of moving is of those two: the tool's row shows `✓0/2`), and the two that call other pieces stay C, as Part 7 explained. The `○` sits on the step the `Next:` line names. The line under the panes said `plan changed 4 pieces — review the plan's changes with c` until your next key; `c` shows those lines.
+**What it means.** The tool is cut into four pieces; three can move to Rust (every count of moving is of those three: the tool's row shows `✓0/3`), `u-encode` after `u-checksum`, which it calls, as in Part 7; `u-lzg` holds `main` and stays C in this version. The `○` sits on the step the `Next:` line names. The line under the panes said `plan changed 4 pieces — review the plan's changes with c` until your next key; `c` shows those lines.
 
 **If you do not see that.** `Make the plan` greyed (highlighted, the line under the panes says `nothing is scanned yet`): the scan did not finish; look at `c` for its words and scan again.
 
@@ -6827,7 +7483,7 @@ jq -Rs '{text: ., input_tokens: 0, output_tokens: 0, stop_reason: "end_turn"}' ~
 harness migrate u-version --no-promote --tool t-lzg --model guide-written
 ```
 
-**You should see** last `migrate: green attempt recorded; not promoted (--no-promote)`; in the cockpit, after `g`, `✓? u-version Rust green — accept it`, its View saying `Its Rust: not accepted yet — try a-<4hex> is green`, and the tool's step line still on the earliest step not done for every piece (`Step 6 of 8: Test program 1/2` on a narrow window: `u-checksum` has no test program yet).
+**You should see** last `migrate: green attempt recorded; not promoted (--no-promote)`; in the cockpit, after `g`, `✓? u-version Rust green — accept it`, its View saying `Its Rust: not accepted yet — try a-<4hex> is green`, and the tool's step line still on the earliest step not done for every piece (`Step 6 of 8: Test program 1/3` on a narrow window: `u-checksum` and `u-encode` have no test program yet).
 
 **What it means.** A try that waits for an answer is its own state, so the cockpit never suggests starting a new try over it. The Rust passed every check, and waits for you.
 
@@ -6847,7 +7503,7 @@ harness migrate u-version --no-promote --tool t-lzg --model guide-written
 
 **Do.** Press `↑` until `◂ Back to the project view` is highlighted, then `Enter`. Press `↓` until `t-lzg` is highlighted.
 
-**You should see** the card end with `4 pieces · 1 done · 2 stay C`, and `Enter: Open tool t-lzg`. Press `q` to leave the cockpit.
+**You should see** the card end with `4 pieces · 1 done · 1 holds main`, and `Enter: Open tool t-lzg`. Press `q` to leave the cockpit.
 
 **What it means.** The project view keeps each tool's progress one row away; a tool with Rust waiting for your Accept, or a try waiting for an answer, would be the project's `Next:` before any program to accept.
 
@@ -6866,7 +7522,7 @@ Can the cockpit take a program from map to accepted Rust? Yes: scan, plan and Ac
 - [ ] Step 12.21 ended `verify: u-version GREEN — status set to verified`.
 - [ ] Step 12.26 wrote `migration/map/config.toml` from the cockpit, and after Step 12.27's map the Next step said `Next: Accept t-lzg — Enter on its row` (a program that links comes before one that needs a decision).
 - [ ] Step 12.28's dialog showed `harness project accept t-unlzg --target … --keep d1=d1.2`.
-- [ ] Step 12.30's step line showed `Test program 0/2 ○` with two pieces `stays C`.
+- [ ] Step 12.30's step line showed `Test program 0/3 ○`, with `u-lzg` as `holds main`.
 - [ ] Step 12.33 showed `⚑ u-version waiting for your answer` before the answer.
 - [ ] Step 12.34 ended `✓ u-version done` with every step ticked.
 
