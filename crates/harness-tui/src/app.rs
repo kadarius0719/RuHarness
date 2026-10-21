@@ -2688,6 +2688,7 @@ impl App {
         let (title, full) = self.act_words(p);
         let mut short = self.short_words(p, &full);
         if p.argv.iter().any(|a| a == "--allow-unsandboxed") {
+            short.retain(|l| l != UNSANDBOXED_WORDS);
             short.truncate(2);
             short.push(UNSANDBOXED_WORDS.into());
         }
@@ -3873,9 +3874,12 @@ impl App {
     /// included.
     pub fn act_explained(&self, p: &Pending) -> (String, Vec<String>) {
         let (title, short) = self.dialog_words(p);
-        let (_, full) = self.act_words(p);
-        let mut card = short.clone();
-        card.extend(full.into_iter().filter(|l| !short.contains(l)));
+        let (_, mut card) = self.act_words(p);
+        // The full words, and what the dialog says that they do not: where
+        // it writes, when they never name it.
+        if !card.iter().any(|l| l.contains("rites")) {
+            card.extend(short.into_iter().filter(|l| l.starts_with("Writes:")));
+        }
         (title, card)
     }
 

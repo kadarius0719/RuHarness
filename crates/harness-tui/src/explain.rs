@@ -687,7 +687,11 @@ fn unit(app: &App, id: &str) -> Explained {
         .unwrap_or(UnitState::Other(String::new()));
     let n = u.unit.symbols.len();
     let funcs = plural(n, "function", "functions");
-    let moves = if n == 1 { "that moves" } else { "that move" };
+    let moves = if n == 1 {
+        "that moves to Rust"
+    } else {
+        "that move to Rust together"
+    };
     let hint = match &state {
         UnitState::StaysC(deps) => fit(&[
             format!(
@@ -701,12 +705,11 @@ fn unit(app: &App, id: &str) -> Explained {
             let clause = unit_state_clause(s);
             fit(&[
                 format!(
-                    "{id} is one piece of the program: {funcs} in {} {moves} to Rust \
-                     together; {clause}.",
+                    "{id} is one piece of the program: {funcs} in {} {moves}; {clause}.",
                     files_words(u)
                 ),
                 format!(
-                    "{id} is one piece of the program: {funcs} {moves} to Rust together; \
+                    "{id} is one piece of the program: {funcs} {moves}; \
                      {clause}."
                 ),
                 format!("{id}: one piece of the program; {clause}."),
@@ -716,7 +719,7 @@ fn unit(app: &App, id: &str) -> Explained {
     };
     let mut card = vec![
         format!(
-            "One piece of the program: {funcs} in {} {moves} to Rust together.",
+            "One piece of the program: {funcs} in {} {moves}.",
             files_words(u)
         ),
         format!("Now: {}.", unit_state_clause(&state)),
@@ -1032,6 +1035,7 @@ fn feature(app: &App, id: &str) -> Explained {
              {}.",
             f.state.word()
         ),
+        format!("{name}: one of your features; {}.", f.state.word()),
         format!("One of your features; {}.", f.state.word()),
     ]);
     let card = vec![
