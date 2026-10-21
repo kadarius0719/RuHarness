@@ -182,6 +182,11 @@ args = ["-h"]
 - `input`: optional; `sample:text` (about 30 000 bytes of English text), `sample:rand` (16 KiB
   of pseudo-random bytes) or `sample:empty` — the whole-program check's deterministic
   samples, the same bytes. The cockpit describes them in words, never by the token alone.
+  Or (§14.1, 2026-10-21) a small file in the project, by its relative path — the workloads
+  file's rule (relative, no control character, no part starting with `.` or `-`, not under
+  `migration/`), its basename `^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`; read once per `verify` /
+  `features map`, at most 8 MiB, copied into the run's folder under that basename, which
+  `{input}` names. A value starting with `sample:` is always a sample (or refused).
 - Limits: ≤ 16 features; ≤ 8 scenarios per feature and ≤ 16 in all; the file ≤ 64 KiB; every
   feature has at least one scenario. A file with no features at all is valid (a starter).
 - **Strict**: an unknown key, a wrong type, a duplicate or unknown id, a limit passed is
@@ -686,6 +691,7 @@ The reasons in words (the marker, the messages, the feature View, F2's next step
 | `c-side-exec-failed` | the C program could not be started | a sandbox or harness problem — see the details |
 | `c-side-build-failed` | the whole C program does not build | fix the build (the details show the compiler's words) |
 | `not-in-program` | this unit's files are not part of the program | nothing to do: its verdicts skip the features |
+| `input-unusable` | its input file cannot be used (§14.1; the map and Features say why: "its input bench/small.lzg is not here — …") | put the file back or change the scenario |
 
 Every scenario runs for every unit — also a scenario whose map says it never runs the unit:
 the map is advisory, and a verdict must not depend on it. The cockpit uses the map to say

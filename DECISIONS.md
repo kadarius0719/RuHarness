@@ -90,6 +90,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-10-20 — **The chat can read a test program's hand-off; the terminal theme's sections are bright blue** — the first-request check knows driver attempts; plain blue was navy on black.
 - 2026-10-20 — **Explain anything: the hint line, the explanation card, dialogs in one breath, the chat as a conversation** — every row says what it is in a sentence and a card (`i`); dialogs hold three lines; menus stay narrow; the chat folds its reads.
 - 2026-10-20 — **A model proposes the features and the workloads** — two cockpit-mode harness-mcp tools write a checked proposal beside the person's file; Propose items on the Features and Speed rows; Write opens the proposal as the draft; the brief holds both files' syntax.
+- 2026-10-21 — **A project file as a scenario's input; the chat's fix** — `input` may name a small file in the project (the workloads' rules, 8 MiB), read once, copied under its basename; a file the run cannot use is the scenario's `input-unusable`; the brief's stability and real-input rules; Fix the features (workloads) file — ask in chat, with read tools for both files.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -3901,3 +3902,71 @@ same file that is not a plan symbol; a live run will say whether that matters.
 **Open.** Rebuild harness-mcp beside the cockpit (its tool list changed: the out-of-date dialog
 says so otherwise). The brief changed: the live chat tests once, and a live proposal on
 t-benchmark or liblzg to see the chat's scenarios and sentences.
+
+## 2026-10-21 — A project file as a scenario's input; the chat's fix
+
+Built from docs/FEATURES-DESIGN.md §14, after the person's first features proposed by the chat:
+on t-unlzg every decode scenario could only feed text or random bytes (no sample is LZG data), and
+on t-benchmark four of eight scenarios printed timings and could never be checks.
+
+- **A file from the project as the input.** `input` accepts, besides `sample:text|rand|empty`, a
+  relative path in the project, under the workloads file's rule as written (relative, no control
+  character, no part starting with `.` or `-`, not under `migration/`) plus a plain basename
+  (`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`, refused at the loader with "name the file so its name is
+  plain"). A value starting with `sample:` is a sample or refused, as before. Where the path leads
+  is checked when it is read — the workloads' own confined read (`read_input_capped`, the cap a
+  parameter now: 8 MiB here, 64 MiB for a workload), canonically inside the project, outside the
+  ledger and any `.git`, a regular file, never through a link.
+- **Read once.** The snapshot reads each file once (`Features::read_inputs`, called by
+  `FeatureSnapshot::load`): the digest and every run of `verify` and `features map` take those
+  bytes. The digest covers the input's basename and bytes, not its path (as a workload's); a file
+  that cannot be used is hashed as absent, never as empty bytes. Samples hash as before (the
+  pinned digests did not move).
+- **The run.** The bytes are written into the run's own `run/` folder under the basename, with the
+  samples' fixed modification time; `{input}` is the basename. Done differently from §14.1's
+  words: the design says the copy sits in the build folder beside `sample_text.txt` and the sandbox
+  profile names it. The scenario runs as built never did that — a scenario's sample is written
+  from memory straight into the run's temp folder, which the profile already lets it read, and
+  `sample_text.txt` in the build folder belongs to the whole-program check. The file input
+  follows the scenarios' way: no build-folder copy, nothing new in the profile, and the project
+  itself stays out of a sandboxed run's reach.
+- **A file the run cannot use is the scenario's problem.** A new skip reason, `input-unusable`
+  ("its input file cannot be used"), marked as the `c-side-*` reasons are (the scenario cannot be
+  a check as written); every other scenario still runs. The map records such a scenario as
+  `end = "not run"`, `noted = "unavailable"`, `reason = "input-unusable: <token>"` — no new field,
+  so the cockpit's existing rule (an end that is not `exit N` cannot run) marks it `⚑`; the reader
+  accepts that record only exactly as written. The cockpit also marks it from today's read, before
+  any map, with the sentence: "its input tests/small.lzg is not here — put the file back or change
+  the scenario" (and the link, outside, folder, 8 MiB, migration/ and permission sentences).
+  `harness features map` prints the same sentence on that scenario's line ("mapped png/zoidberg
+  (1 of 2) — not run, 0 functions — its input go/zopflipng/testdata/gone.png is not here — …"),
+  seen on a scratch copy of zopfli, where the same scenario on zopfli's own test PNG ran (99
+  functions).
+- **The brief.** The proposing section gains the stability rule (never a scenario whose output
+  carries timings, dates, random values, process ids or paths unless an option silences them; a
+  benchmark gets its usage and wrong-input scenarios and a pointer to a workload), the real-input
+  rule (name a small file the unit's pairs show, or write the name it would need and tell the
+  person to put it there), and how to answer a fix: read the file first, change only what the
+  question names, propose the whole file.
+- **The chat's fix.** On a feature whose state is "a scenario cannot run" (any §6.1 reason but
+  `not-in-program`), **Fix the features file — ask in chat** under the model separator, greyed as
+  Propose is, recommended by the Next step when the chat can be used, before Edit the features
+  file. It types one line per scenario: "Scenario decode/small cannot be a check: its input file
+  cannot be used. Change or remove it, and propose the corrected features file". For
+  `input-unusable` the question says "its input file cannot be used", never the path: the path is
+  the target's text and the question reaches a model; the chat reads the file itself. **How the
+  cockpit knows a proposal is a fix:** a proposal that exists while the person's own file exists,
+  on a row where something still cannot run. The Next step then reads "Read the chat's fix — Enter,
+  then Edit from the chat's proposal", and the feature's menu lists **Edit from the chat's
+  proposal…** too. On the Speed row, **Fix the workloads file — ask in chat** for a workload whose
+  input cannot be used today, or whose C-alone row perf marked `input-unusable` or a C failure.
+- **Read tools for both files.** `harness_features_file` (as designed) and, beyond §14,
+  `harness_workloads_file`: without it the workloads fix would ask the chat to correct a file it
+  cannot see, and its proposal would drop the person's other workloads. Both are cockpit-mode
+  only, read-only, the file's text unparsed (a file that does not validate is what a fix is for),
+  read as a regular file under its own 64 KiB cap; the cockpit's permission check passes them as
+  reads. COCKPIT_TOOLS and the recorded chat fixtures list them.
+
+**Open.** Rebuild harness-mcp beside the cockpit (its tool list changed). The brief changed: the
+live chat tests once, and a live fix on t-benchmark (the timing scenarios) and t-unlzg (a real
+LZG file in the project).

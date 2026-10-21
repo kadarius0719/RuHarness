@@ -135,7 +135,17 @@ pub(crate) fn cmd_map(target: TargetArg, allow_unsandboxed: bool) -> Result<u8> 
              project first"
         );
     }
-    let mut progress = Progress;
+    let mut progress = Progress {
+        unusable: features
+            .scenarios
+            .iter()
+            .filter_map(|s| {
+                features
+                    .input_unusable(s)
+                    .map(|why| (format!("{}/{}", s.feature, s.id), why))
+            })
+            .collect(),
+    };
     let map = match harness_oracle::map_features(&ctx, &facts, &features, &digest, &mut progress) {
         Ok(map) => map,
         Err(e) => {
@@ -198,7 +208,11 @@ pub(crate) fn cmd_map(target: TargetArg, allow_unsandboxed: bool) -> Result<u8> 
 }
 
 /// The progress of a map: human lines and `scenario` events (§5.5).
-struct Progress;
+struct Progress {
+    /// `feature/scenario` → why its input file cannot be used, in its own
+    /// sentence (docs/FEATURES-DESIGN.md §14.1).
+    unusable: std::collections::BTreeMap<String, String>,
+}
 
 impl harness_oracle::MapProgress for Progress {
     fn message(&mut self, text: &str) {
@@ -206,6 +220,10 @@ impl harness_oracle::MapProgress for Progress {
     }
 
     fn scenario(&mut self, record: &features::ScenarioRecord, n: usize, of: usize) {
+        let unusable = self
+            .unusable
+            .get(&format!("{}/{}", record.feature, record.scenario))
+            .filter(|_| record.unusable().is_some());
         out(format!(
             "features: mapped {}/{} ({n} of {of}) — {}, {} function{}{}",
             record.feature,
@@ -213,14 +231,16 @@ impl harness_oracle::MapProgress for Progress {
             record.end,
             record.functions.len(),
             if record.functions.len() == 1 { "" } else { "s" },
-            if !record.stable {
-                " — its output differs between runs"
+            if let Some(why) = unusable {
+                format!(" — {why}")
+            } else if !record.stable {
+                " — its output differs between runs".into()
             } else if !record.probe_agrees {
-                " — the run with notes behaved differently"
+                " — the run with notes behaved differently".into()
             } else if record.noted != "complete" {
-                " — no notes were recorded"
+                " — no notes were recorded".into()
             } else {
-                ""
+                String::new()
             }
         ));
         #[derive(serde::Serialize)]

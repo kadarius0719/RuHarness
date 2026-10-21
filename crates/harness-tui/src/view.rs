@@ -3942,7 +3942,9 @@ const HELP_FEATURES: &[&str] = &[
      per feature (id = \"zlib\", name = \"Compress to zlib\") and a [[scenario]] table per \
      run (feature = \"zlib\", id = \"text\", args = [\"--zlib\", \"-c\", \"{input}\"], \
      input = \"sample:text\"). Ids are lowercase letters, digits and dashes; \"{input}\" \
-     stands for the sample's file name.",
+     stands for the input's file name. An input may also be a small file of the project \
+     (input = \"tests/small.lzg\": a real file, at most 8 MiB, not under migration/) — commit \
+     it, so a fresh clone can run the scenario.",
     "Enter on Features: Write / Edit the features file (in your editor — the cockpit says how \
      to save and leave: in nano, Ctrl-O then Enter saves and Ctrl-X leaves; in vi, press i to \
      type, then Esc and :wq and Enter to save and leave), Map the features. Edited it outside \

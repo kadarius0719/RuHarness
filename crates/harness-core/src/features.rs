@@ -1587,14 +1587,17 @@ pub fn starter(config: &TargetConfig) -> String {
     format!(
         "# Your features: things a person does with the program and sees the result of.\n\
          # Each feature has one or more scenarios: one run of the whole program with\n\
-         # fixed arguments and, optionally, one of three sample files as its input.\n\
+         # fixed arguments and, optionally, an input: a sample file or a file of yours.\n\
          # Every Re-check runs each scenario on the C program and on the program with\n\
          # the unit's Rust swapped in, and compares exit status, stdout and stderr.\n\
          #\n\
          # Samples: sample:text (about 30 000 bytes of English text),\n\
          #          sample:rand (16 KiB of pseudo-random bytes), sample:empty.\n\
+         # Or a small file of the project, by its path from the project's top\n\
+         # (tests/small.lzg): a real file, at most 8 MiB, not under migration/, with\n\
+         # a plain name. Commit it with the project, so a fresh clone can run it.\n\
          # Arguments: flags (-c, --level=3) or words (9, compress); none may contain\n\
-         # \"/\" or \"..\". \"{{input}}\" stands for the sample's file name. The program\n\
+         # \"/\" or \"..\". \"{{input}}\" stands for the input's file name. The program\n\
          # runs in an empty folder of its own.\n\
          {whole_program}\
          \n\

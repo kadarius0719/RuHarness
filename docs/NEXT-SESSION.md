@@ -146,6 +146,22 @@ file exists), the person saves it as any edit, and the proposal goes. The brief 
 syntax. Open from it: rebuild harness-mcp beside the cockpit; the live chat tests once; a live
 proposal on a real program.
 
+## Done (2026-10-21): file inputs and the chat's fix
+
+Built from FEATURES-DESIGN §14 (DECISIONS 2026-10-21, "A project file as a scenario's input; the
+chat's fix"): a scenario's `input` may name a small file in the project (the workloads' rules, at
+most 8 MiB, committed with the project), read once per verify or map, copied into the run's folder
+under its own name; a file the run cannot use is the scenario's `input-unusable`, with its
+sentence ("its input tests/small.lzg is not here — put the file back or change the scenario"),
+and the other scenarios still run. The chat's brief knows which scenarios cannot be checks
+(timings, dates, random values, process ids, paths) and how to name a real input. A feature whose
+scenario cannot run offers **Fix the features file — ask in chat** (the Speed row **Fix the
+workloads file — ask in chat**); the chat reads the file with harness-mcp's new
+`harness_features_file` (and `harness_workloads_file`) and proposes the corrected whole file; the
+Next step then reads "Read the chat's fix — Enter, then Edit from the chat's proposal". Open from
+it: rebuild harness-mcp beside the cockpit; the live chat tests once; a live fix on t-benchmark
+and t-unlzg.
+
 ## The work, in order
 
 1. **The person's own cold-start run.** docs/FIRST-HOUR.md as written (liblzg), then lz4 through
