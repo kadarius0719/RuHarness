@@ -692,7 +692,8 @@ resolved the same way. A promoted attempt is bound to the CURRENT `unit_source` 
   error (incl. awaiting external responses, stale refusals, truncated-by-server).
 - `harness verify` gains `--allow-unsandboxed` (see Trust boundaries).
 - `harness state status` additionally flags a done-claiming status whose verdict is
-  STALE as a CONTRADICTION, and prints a per-unit attempts summary.
+  STALE as a CONTRADICTION (on the human line, not when it is out of date only because a
+  piece it calls changed: "Beyond the leaves"), and prints a per-unit attempts summary.
 
 ---
 
@@ -978,8 +979,9 @@ runner}` + `heldout/tools/…` (never inside a target root), `scores.json`.
   exit 1) in words naming the missing stage, without an "invalid plan:" prefix (the plan is
   fine; fix pass 2026-10-20): "error: <unit> has no test program yet: make one first (`harness
   gen-driver <unit> [--tool …] [--target …] [--model <the run's --model>]`, or Make the test
-  program in the cockpit)"; a unit that calls others: "error: <unit> calls <units>, so in this
-  version it stays C: the judge tests each unit alone"; a kind other than `c-abi-differential`,
+  program in the cockpit)"; the unit holding `main`: "error: <unit> holds main — stays C in
+  this version" (a unit that calls others moves, "Beyond the leaves" below); a kind other than
+  `c-abi-differential`,
   a table with no `driver` and one with no `rust_crate` each say what is missing the same way
   (§9.4). The `--json` error's kind for these is `harness`.
 - `harness bench vendor --suite DIR --from CHECKOUT` — checkout's detached HEAD must
@@ -2144,8 +2146,8 @@ program is as far as this version goes — write features and workloads for what
 (2026-10-20; an accepted tool's row says its progress where the state word is: "not scanned
 yet", "2/4 in Rust", "done"). On a tool's screen with every piece that can move done, the Next is
 one line: "Write your features — Enter on the Features row", then "Name a workload for Speed —
-Enter on the Speed row", then "Done as far as this version goes — N pieces stay C" (why they stay
-is the Units row's hint and card). Then a card for the selection: its id (bold) and state; its file and what
+Enter on the Speed row", then "Done as far as this version goes — 1 piece stays C" (the piece
+holding `main`; why is the Units row's hint and card). Then a card for the selection: its id (bold) and state; its file and what
 the map knows it is and why ("src/tools/lzg.c · looks like a tool (it is not in a test, example or
 benchmark folder)", "looks like a library (nothing in it has a main)"; only the path once
 accepted); a model's label from the
@@ -2199,17 +2201,26 @@ map opens that tool, with the same first row. harness-mcp never runs these acts.
 **The guided path** (2026-10-20, docs/COCKPIT-WRAPPER-DESIGN.md §9.4). Every View's first line
 is the journey line of the eight stages — Map, Configure, Accept program (the project's), Scan,
 Plan (the tool's), Test program, Rust, Accept Rust (each unit's): on a unit's screen its own last
-three, on the tool's whole screen the pieces that can move past each ("Test program 2/2 · Rust
-1/2 ○ · Accept Rust 1/2"; none before a plan, "Scan ○" or "Plan ○" alone), the `○` on the stage
+three, on the tool's whole screen the pieces that can move past each ("Test program 2/4 · Rust
+1/4 ○ · Accept Rust 1/4": every piece but the one holding `main` and the blocked; none before a plan, "Scan ○" or "Plan ○" alone), the `○` on the stage
 the Next line's act belongs to (fix pass 2026-10-20), "Map again" while the build configuration is
 newer than the map, folded to "Step N of 8: <stage>" under 100 columns or where it does not fit.
 A unit's state word says its stage: "◇ no test program", "◇ test program out of date", "◈ test
 program ready", "◐ Rust tried", "⚑ waiting for your answer" (a try in progress), "✓? Rust green —
 accept it", "✓ done" (with "(steered)", "(asked in chat)", "(by hand)"; a verified one no try is
-known to have made is "✓ done" too, its card saying "origin not recorded"), "· stays C" (it has `depends_on`; its card: "It calls <units>, so in this version it stays C — the
-judge tests each piece alone"), besides "✗ failing", "⚠ needs attention" and "⊘ blocked"; under
-about 36 columns the short forms "no test", "outdated", "ready", "tried", "waiting", "accept?",
-"done", "stays C". The
+known to have made is "✓ done" too, its card saying "origin not recorded"), "· holds main"
+(its plan symbols name `main`; its View and card: "It holds main — stays C in this version: its
+test program would have to replace main"), besides "✗ failing", "⚠ needs attention" and "⊘
+blocked"; under about 36 columns the short forms "no test", "outdated", "ready", "tried",
+"waiting", "accept?", "done", "stays C" (for "holds main"). A piece that calls others has the
+stage words like any other (docs/BEYOND-LEAVES-DESIGN.md §5); the tool's Next names the first
+piece in the plan's execution order that can move. A caller's card says what it is checked
+with ("It calls u-checksum: its test program and its Rust are checked with u-checksum as the
+program stands — its Rust once accepted, else its C"); a verdict out of date only for its
+callees names which ("its verdict is out of date (a piece it calls changed: u-checksum)", from
+the report's `changed_callees`); and a callee linked as its accepted Rust whose own verdict is
+not fresh and green is named on the caller's state line, hint and card ("a piece it calls is
+out of date itself (u-checksum)"), unless the caller's own cause already names it. The
 read model's `UnitView.driver` is `None | Validated | Stale` (from the plan's `[unit.oracle]` —
 kind, driver, rust_crate — and `driver-validation.json`; a driver with neither a validation nor
 driver attempts is one written by hand: Validated), and harness-mcp's `harness_unit` and
@@ -2244,13 +2255,13 @@ step, spelled for the tool (`harness gen-driver <unit> --tool <id>`, `harness mi
 --no-promote --tool <id>`). The Project view prefers a tool with work waiting (Rust to accept, an
 answer to give), then a tool with a piece ready to start (not scanned yet, or pieces to move),
 then a program that links, then one that needs a decision; an accepted tool's
-card gives its progress from its ledger ("4 pieces · 1 done · 2 stay C").
+card gives its progress from its ledger ("4 pieces · 1 done · 1 holds main").
 
 **Explain anything** (2026-10-20, docs/COCKPIT-WRAPPER-DESIGN.md §9.5). The status line under the
 panes keeps "Ready — ↑↓ to choose a row, Enter for what you can do" until the first move; then,
 when nothing runs and no "Last:" stands, it is the **hint line**: what the selected row is, in one
-sentence of under 160 characters, the longest form that fits ("u-encode calls u-checksum; in this
-version the judge tests each piece alone, so a piece that calls other pieces stays C"); under a
+sentence of under 160 characters, the longest form that fits ("u-lzg holds main — stays C in
+this version: its test program would have to replace main."); under a
 run or a "Last:" it takes the row below, after any notice; in a menu, a focused greyed item's
 reason. `i` (and **What is this?**, the last item of every Enter menu, accelerator `i`) opens the
 row's card: three to eight lines (what it is, where it came from, why it is there, where its files
@@ -2584,10 +2595,27 @@ leaf's builds, prompts and records are byte for byte what they were.
   validation holds a test program to the original C program. It is fresh only when the
   list equals today's (as are `unit_source` and `driver`); `migrate`'s R6 rule reads it so.
 - **Freshness.** `state status` recomputes the list as the program stands; a mismatch adds
-  `dependencies` to the verdict's stale inputs (`verdict=green (STALE: dependencies)`), so
-  accepting a callee's Rust makes its callers' verdicts out of date until a Re-check tests
-  them against that Rust. The cockpit's read model words a verdict stale on `dependencies`
-  alone as `out of date (a piece it calls changed)`, with Re-check as its step.
+  `dependencies` to the verdict's stale inputs, so accepting a callee's Rust makes its
+  callers' verdicts out of date until a Re-check tests them against that Rust. The human line
+  says it in the cockpit's words (pass B): `verdict=green (out of date: a piece it calls
+  changed)` when it is the only reason, with no `<< CONTRADICTION` marker on that line (the
+  `contradiction` field is unchanged); among other reasons `(STALE: rust-crate, a piece it
+  calls changed)`. The report (and the `--json` `unit` event) gains `changed_callees` (the
+  unit ids whose entry differs, today's order first; omitted when empty) and `holds_main`
+  (true for the piece holding `main`; omitted when false), whose line reads `status: u-lzg
+  [pending] holds main — stays C in this version plan=… verdict=…`. After the units, `state
+  status` prints one line: `status: the program as it stands: 3 of 4 pieces in Rust (u-lzg
+  holds main)` — the pieces not blocked, of them those whose Rust is accepted (verified or
+  merged, crate present). The cockpit's read model words a verdict stale on `dependencies`
+  alone as `out of date (a piece it calls changed: <ids>)`, with Re-check as its step.
+- **The features' `program` digest** (pass B). A verdict's `inputs.program` is the program as
+  it stands for its unit: the C program's digest (`program_digest_now`), with every OTHER
+  accepted piece's (unit id, crate digest) folded in, in execution order — `blake3` of
+  `{"v":1,"program":<C digest>,"rust":[[id,digest],…]}` — computed once the crates are built.
+  With no other piece accepted (or a `facts-stale` C digest) it is the C digest itself, so
+  earlier verdicts keep their bytes. Coverage (`features=…`) compares it per unit, so a
+  changed accepted Rust, or a piece accepted since, makes the other pieces'
+  `features=behind(program)`. The features map and perf keep the C digest.
 
 ## Builds
 

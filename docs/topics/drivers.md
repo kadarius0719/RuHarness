@@ -14,7 +14,7 @@ A driver that cannot tell broken C from the real thing could not catch a broken 
 
 | Check | What it asks |
 |---|---|
-| `driver-build` | Does it compile, with strict warnings, and link against the unit's C? |
+| `driver-build` | Does it compile, with strict warnings, and link against the unit's C (and the original C of the pieces it calls)? |
 | `driver-shape` | Does it define only `main` and call only the unit and harmless standard functions? Does its text pass the rule check (the lint)? |
 | `symbols-called` | Does it call every public function of the unit? |
 | `determinism` | Do three runs print exactly the same bytes? |
@@ -23,6 +23,8 @@ A driver that cannot tell broken C from the real thing could not catch a broken 
 | `mutation` | The harness plants small bugs in copies of the C, called **mutants**. Does the driver print something different for at least 60 % of them ("kill" them)? |
 
 A mutant that compiles to exactly the same machine code as the original is thrown out as "TCE-equivalent": no test could tell it apart. When fewer than 10 mutants count, the driver may miss at most one (the small-n rule). When nothing is left to measure, as in liblzg's tiny `version.c`, the line reads `n/a`, which counts as a pass. A driver that passes all seven is copied into the unit's folder, tested once more there, and recorded in the plan; only then can the unit be migrated.
+
+A unit that calls other pieces (liblzg's `u-encode` calls `u-checksum`) has its driver linked with **the original C of the pieces it calls**, whatever Rust has been accepted for them: a driver is checked against the original program, and the planted bugs go only into the unit's own C. So accepting a callee's Rust later never makes this driver out of date; changing the callee's C does. The judge's own runs (`harness verify`) then link the callees as the program stands (see [the judge](judge.md)).
 
 ## Answering the driver question by hand
 

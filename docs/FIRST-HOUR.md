@@ -128,6 +128,7 @@ Run the judge yourself; the last line is `verify: u-version GREEN — status set
 ```bash
 cd ~/lzg-map && harness verify u-version --tool t-lzg
 ```
+The other pieces can now move the same way, in the plan's order (`u-checksum`, then `u-encode`, which calls it); `u-lzg`, the piece that holds `main`, stays C in this version (`harness state status --tool t-lzg` says so on its line).
 
 ## 4. Break it on purpose and watch the judge catch it (about 1 minute on an M3 Mac)
 

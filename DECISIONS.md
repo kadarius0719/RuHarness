@@ -96,6 +96,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-10-21 — **Beyond the leaves, pass A: the judge** — every build links the callees as the program stands through one function; a failed link is a red check; callee digests in the verdict and the driver record; the extern allow-list, the import rule, the main holder stays C; the whole program links every accepted piece; promoted constants ignored.
 - 2026-10-21 — **Beyond the leaves, proven on a fresh copy; four gaps for pass B** — three pieces moved in order, the program with three Rust pieces the same as the C; a stale callee not reported on the caller, the features' program digest, the status line's words.
 - 2026-10-21 — **The cockpit after the whole-journey check: eighteen snags** — the plan's summary yields to the hint; one count about moving; a waiting test program; the Project view's order; dialogs of three lines; piece and try on every screen; greyed reasons never cut.
+- 2026-10-21 — **Beyond the leaves, pass B: the cockpit, the command line and the docs** — only the piece holding main stays C; callers move in the plan's order; which callee changed and which is out of date itself; the program line; the features' digest folds in the other pieces' Rust; the guide's Part 7 on a side branch.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -4224,3 +4225,75 @@ pane width. Goldens regenerated and read at each commit.
 stale cause in files.rs and model.rs; the changes there are additive (a `driver_waiting`
 function and one more condition). Whether the chat should say piece and try is the person's
 call (the brief and the live chat tests).
+
+## 2026-10-21 — Beyond the leaves, pass B: the cockpit, the command line and the docs
+
+**Built** (docs/BEYOND-LEAVES-DESIGN.md §5–§6, and the four gaps the live proof found).
+- **The cockpit.** `stays C` is now only the piece holding `main`: its row says `· holds main`
+  (short form `stays C`), its View and card "It holds main — stays C in this version: its test
+  program would have to replace main", its two model items greyed with "it holds main — stays C
+  in this version". Every other piece has the journey's stage words, counts among the pieces
+  that can move ("1 of the 4 that can move"; the tool's card "4 pieces · 1 done · 1 holds main"),
+  and its Make the test program and Migrate items are no longer greyed. The tool's Next names the
+  first piece in the plan's execution order that can move (on liblzg's folder target, after
+  `u-checksum` that is `u-decode`). A caller's card: "It calls u-checksum: its test program and
+  its Rust are checked with u-checksum as the program stands — its Rust once accepted, else its
+  C". A verdict out of date only for its callees names which ("a piece it calls changed:
+  u-checksum"), from a new report field `changed_callees`.
+- **Gap 1.** A callee linked as its accepted Rust whose own verdict is not fresh and green is
+  named on the caller's state line, hint and card: "a piece it calls is out of date itself
+  (u-checksum)", with "Re-check u-checksum: …" on the card. Not repeated when the caller's own
+  cause already names that callee.
+- **Gap 2.** A verdict's features `program` digest folds in every OTHER accepted piece's crate
+  digest, in execution order, computed once the crates are built (so a fresh Cargo.lock is in
+  it, as `state status` reads it); with none, it is the C digest unchanged, so old verdicts keep
+  their bytes. Coverage and the cockpit's feature model compare it per piece. The features map
+  and perf keep the C digest.
+- **Gap 3.** `state status` names the main holder after its status (`[pending] holds main —
+  stays C in this version`) and ends with "the program as it stands: 3 of 4 pieces in Rust
+  (u-lzg holds main)" (pieces not blocked; in Rust = accepted, crate present). The report gains
+  `holds_main`.
+- **Gap 4.** The line says `verdict=green (out of date: a piece it calls changed)` and carries no
+  `<< CONTRADICTION` when that is the only reason; among others, `(STALE: rust-crate, a piece it
+  calls changed)`. Same code path as the general marker, so only that case changed; the report's
+  `contradiction` field is untouched (the cockpit already ordered the specific cause first).
+- **Docs.** The guide's Part 7, "A piece that calls another piece", rewritten from the live
+  proof; TUTORIAL "The order pieces move in"; the judge, drivers and cockpit topics; FIRST-HOUR
+  §3's last line; SCHEMAS (the status words, the two report fields, the program line, the
+  program digest).
+
+**Decided.**
+1. **Part 7 runs on a side branch** (`practice-lzg-encode`) and ends by switching back. Moving
+   `u-encode` on the main practice branch would change the quoted screens of Parts 8 to 11 (the
+   features' counts, Part 9's tour, Part 10's status, Part 11's perf rows). The side branch keeps
+   them true and still lets the reader see the program grow to 3 of 5 pieces in Rust. Part 7
+   stays on `targets/lzg` (five pieces), as before; it translates on the command line (Plan B's
+   steps) so the reader can read the new prompt section.
+2. **Accepting a new piece also puts the other pieces' features behind**, not only a changed
+   accepted Rust: the program the features ran on no longer is the program. It follows from
+   "the program as it stands"; on liblzg, verifying the pieces once all are accepted leaves every
+   `features=current` (the walk copy shows it).
+3. **The piece holding main's short word is `stays C`**: "holds main" beside six letters of a
+   name does not fit a narrow pane, and the row would lose its word.
+4. **The CLI program line is human output only**; no new `--json` event (the report's two new
+   fields are in the `unit` event).
+
+**Found while running the guide's screens and fixed:** the View's judge line said
+"(dependencies)"; a caller named the same callee twice (changed, and out of date itself); the
+hint's shortest form dropped which callee changed; the tool's card said "1 stay C".
+
+**Seen** (cockpit.py, 120x40, `--theme dark`, on a copy of the live proof's project, adopted and
+re-checked): the tool's screen `all 3 that can move are in Rust`, `✓3/3`, `· u-lzg holds main`,
+`Next: Done as far as this version goes — 1 piece stays C`; u-encode's card with its "It calls
+u-checksum …" line; `state status` ending "the program as it stands: 3 of 4 pieces in Rust (u-lzg
+holds main)". On the guide's folder target: u-encode out of date after u-checksum's Rust changed
+(`needs attention: its verdict is out of date (a piece it calls changed: u-checksum)`), and after
+its re-check `✓ u-encode done · a piece it calls is out of date itself (u-checksum)`.
+
+**Tests.** 1 812 before (one failing on the scratch copy only: perf's show test, from where it ran),
+1 820 after, all green: eight new (the main holder and the callers' states, a callee out of date
+itself, the caller's card and hint, the execution order of the Next, the status words, the
+program line, the program digest's fold, the two-piece fixture through the judge with a feature).
+Goldens regenerated and read. The guide's gate: ALL GATES PASS 0.
+
+**Open.** The end-state design: the piece holding `main`, and one combined crate per program.

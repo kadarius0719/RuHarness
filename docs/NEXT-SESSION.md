@@ -10,9 +10,10 @@ project, accepted its three programs, scanned and planned one, had the chat make
 and the Rust for two pieces, accepted them, and had the chat propose a features file — every step
 from the screen, with the judge green at each. The project map (2026-10-08), the documentation
 for a non-technical reader (2026-10-09 to 2026-10-18) and eleven cockpit passes (2026-10-18 to
-2026-10-21, below) are on `main`; 1 780 tests; `bench check --replay` green at its last run
-(2026-10-18). What stops a large program today is the leaf cap: a piece that calls another piece
-"stays C" (work item 2). The person's working rhythm since 2026-10-20: they walk the cockpit and
+2026-10-21, below) are on `main`; 1 820 tests; `bench check --replay` green at its last run
+(2026-10-18). The leaf cap is gone (work item 2, done 2026-10-21): a piece that calls other
+pieces moves after them, tested with them as the program stands; only the piece holding `main`
+stays C, which the end-state design will settle. The person's working rhythm since 2026-10-20: they walk the cockpit and
 send screenshots; the session triages each into a fix made at once, an item for the pass in
 flight, or a design.
 
@@ -64,6 +65,16 @@ flight, or a design.
   ends with the pane's Next line; greyed reasons never cut; on screen every word is **piece**
   and **try** (the commands and files keep unit and attempt); a feature row never cuts its state
   word. Walked on a liblzg copy at 120x40 and 100x30.
+- **2026-10-21, beyond the leaves, pass B** (BEYOND-LEAVES-DESIGN §5–§6; DECISIONS of that
+  date): the cockpit says `holds main` only for the piece holding `main`, counts every other
+  piece among those that can move, names the first in the plan's execution order, says on a
+  caller's card what it is checked with, names the callee that changed, and names a callee
+  linked as Rust whose own check is out of date; `state status` names the main holder on its row,
+  ends with "the program as it stands: 3 of 4 pieces in Rust (u-lzg holds main)" and says
+  `out of date: a piece it calls changed` with no contradiction marker; the features' program
+  digest folds in the other accepted pieces' Rust; the guide's Part 7 moves `u-encode` on a side
+  branch, its screens run with this build; TUTORIAL "The order pieces move in", the judge,
+  drivers and cockpit topics, FIRST-HOUR §3's last line, SCHEMAS.
 
 Still open from these, for the person: the live chat tests once (`crates/harness-tui/tests/
 chat_live.rs`, both hosts; the brief and the tool list changed many times); a live "Fix the
@@ -82,8 +93,8 @@ accepted Rust makes its callers `STALE: dependencies`), migrate refuses only the
 `main`, the prompt names the callees' prototypes and the `extern` block may declare them,
 capabilities has the import rule, the whole program links every accepted piece, and symbol-set
 ignores LLVM's promoted constants. On a copy of the spike's liblzg, `verify u-encode` is green with
-no spike edits. Pass B is next: the cockpit's words, order and cards (§5), the docs (§6), then the
-live walk.
+no spike edits. The live walk on a fresh copy moved u-checksum, u-encode and u-version in order
+(DECISIONS 2026-10-21, "proven on a fresh copy"), and pass B (above) closed its four gaps.
 
 ## The work, in order
 
@@ -91,13 +102,11 @@ live walk.
    the README's "move your own C program" door alone, past one unit, ideally to several promoted
    units, with every stumble written down. Step (g) of the map (record the first accepted tool's
    features before its first unit moves) happens inside it. Fix what the run shows first.
-2. **Past the leaf cap: pieces that call other pieces.** Designed on 2026-10-21 from a spike that
-   proved it on liblzg (docs/BEYOND-LEAVES-DESIGN.md; DECISIONS 2026-10-21, "Beyond the
-   leaves"): the callees linked as the program stands in every build the judge makes, an
-   allow-list for the `extern` block, an import rule in capabilities, callee digests in the
-   verdict, the mixed program with every accepted piece. Pass A (the judge) and pass B (the
-   cockpit and docs), then the live walk on liblzg. The piece holding `main` and the combined
-   crate are the end-state design, later.
+2. **Past the leaf cap: pieces that call other pieces — done 2026-10-21** (docs/BEYOND-LEAVES-
+   DESIGN.md; pass A the judge, the live walk on a fresh liblzg copy, pass B the cockpit, the
+   command line and the docs). **Open: the end-state design** — the piece holding `main` (today
+   "holds main — stays C in this version") and the combined crate (one staticlib per program,
+   with LTO: 381 KB against 1.42 MB in the spike). Design it with item 3.
 3. **The last stage: "the program works".** Build each program with its Rust in place, run its
    own test suite and the person's features on that build, and say so on the journey line ("the
    program works with 2 of 4 pieces in Rust"). The whole-program check, the features and the

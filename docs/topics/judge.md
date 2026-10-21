@@ -24,6 +24,8 @@ Every check passes: **GREEN**, and the command ends with exit code 0. Anything e
 
 **What the verdict remembers.** A **verdict** (the judge's recorded result) lists every check and a **fingerprint** (code from file bytes), written `blake3:` and 64 characters, of exactly the C, the driver and the Rust it tested. Change one byte of any of them and the unit shows as out of date instead of quietly staying GREEN.
 
+**A piece that calls other pieces.** liblzg's `u-encode` calls `u-checksum`'s function. Every build the judge makes for it links the pieces it calls **as the program stands**: their Rust once you have accepted it, else their C. So `u-encode` is tested with the code the program really runs, and its verdict also records each piece it was tested with, in which form (`c` or `rust`), with its fingerprint (`jq '.inputs.dependencies' …/oracle-latest.json` shows them). When `u-checksum`'s accepted Rust changes, `u-encode` reads `out of date (a piece it calls changed)` until a re-check. Changing `checksum.c` once its Rust is accepted does not: the program runs the Rust, not that C. The guide's Part 7 walks it.
+
 ## What GREEN means, and what it does not
 
 GREEN means: on every input the judge tried, the Rust did exactly what the C did. Nothing more.

@@ -78,7 +78,7 @@ targets/zopfli/              the target: the C project
 
 ## 4. From C to a plan
 
-*Prepares the guide's [Part 2](TESTING-GUIDE.md#part-2--let-the-harness-read-the-c-and-make-a-plan), and [Part 7](TESTING-GUIDE.md#part-7--why-the-other-three-units-stay-in-c).*
+*Prepares the guide's [Part 2](TESTING-GUIDE.md#part-2--let-the-harness-read-the-c-and-make-a-plan), and [Part 7](TESTING-GUIDE.md#part-7--a-piece-that-calls-another-piece).*
 
 A project goes through six steps, the same six the testing guide walks in its Parts 2 to 5: scan, plan, driver, migrate, verify, accept. Two of them ask an AI model to write something: the driver and the Rust. The others are ordinary code that gives the same answer every time, so the facts the AI works from, and the judge that checks it, cannot be talked into anything.
 
@@ -96,7 +96,7 @@ Two more commands find the risky parts, so they are not missed:
 
 In the cockpit, scan, plan and detect are the project's menu items Scan the project, Make the plan (Refresh the plan once there is one) and Find risky patterns in the C; migrate is what the chat asks for; Accept is a menu item of a GREEN attempt.
 
-**Why some units wait.** In this version only a **leaf unit** can be migrated: one whose C calls nothing in the project's other `.c` files. A unit that calls another unit's functions cannot be tested alone, because its test program would not link without the other unit's C. That is what Part 7 shows for liblzg's other three units.
+**The order pieces move in.** A piece moves when the plan knows every piece it calls: first the **leaf units**, whose C calls nothing in the project's other `.c` files, then the pieces that call them, in the plan's order (the cockpit's `Next:` names the first one that can move). Every build the judge makes for a piece links the pieces it calls **as the program stands**: their Rust once you have accepted it, else their C. So a piece is tested with the code the program really runs, and its verdict records what it was tested with: when a piece it calls gets new Rust, its verdict is **out of date** until a re-check. One piece waits for the end: the one that holds the program's `main()`, where the program starts, stays C in this version (a test program has its own `main()`). Part 7 moves liblzg's `u-encode` after `u-checksum`, the piece it calls.
 
 ## 5. The driver: a test program for one unit
 
@@ -397,7 +397,7 @@ Each word in a sentence, with the section that explains it.
 | Target, tool | The C project being migrated; an accepted program, which then plays the target's part | 2, 13 |
 | Turn, repair turn | One question to the model and its answer; a turn after a failed check | 8 |
 | Undefined behaviour, sanitizer | Something C does not define, which a test must never do; a build that stops at it | 5 |
-| Unit, leaf unit | One piece of the program that moves to Rust as a whole; one whose C calls no other unit | 2, 4 |
+| Unit, leaf unit | One piece of the program that moves to Rust as a whole; one whose C calls no other unit, which moves first | 2, 4 |
 | Verdict, fingerprint | The judge's recorded result: every check, plus a code computed from the exact files it tested | 7 |
 
 ## 16. Appendix: reference
@@ -468,7 +468,7 @@ In the chat, letters are text. `Enter` sends (or, on an empty input, reviews a w
 | `⚑` | waiting for your answer: a try stopped at a question for a model |
 | `◈` | test program ready: its Rust is next |
 | `◇` | no test program (or out of date): make its test program first |
-| `·` | stays C: a piece that calls other pieces cannot be tested alone in this version; also a header |
+| `·` | holds main: the piece with the program's `main()` stays C in this version; also a header |
 | `⊘` | blocked |
 | `!` | changed since the scan |
 | `+` | not scanned yet |
