@@ -4100,7 +4100,7 @@ pub const HELP_MORE: &str = "↓ more: every key, the mouse, every mark, feature
 /// The Project view's first help page: its panes and keys, its marks,
 /// what each state means and what mapping does (§9.3; a tool's page would
 /// say ✓ is "in Rust").
-fn help_project_page(width: usize, chat: bool) -> Vec<Line<'static>> {
+fn help_project_page(width: usize, chat: bool, theme: &str) -> Vec<Line<'static>> {
     let mut rows = Vec::new();
     let tab = if chat {
         "the next pane: Project, the card, Chat"
@@ -4142,6 +4142,7 @@ fn help_project_page(width: usize, chat: bool) -> Vec<Line<'static>> {
         Style::default(),
     ));
     rows.extend(wrapped(HELP_FILES_WIDTH, width, label_role()));
+    rows.extend(wrapped(theme, width, label_role()));
     rows.push(Line::from(""));
     rows.extend(wrapped(
         "↓ more: every key, the mouse, the chat",
@@ -4151,7 +4152,7 @@ fn help_project_page(width: usize, chat: bool) -> Vec<Line<'static>> {
     rows
 }
 
-fn help_first_page(width: usize, chat: bool) -> Vec<Line<'static>> {
+fn help_first_page(width: usize, chat: bool, theme: &str) -> Vec<Line<'static>> {
     let mut rows = Vec::new();
     for (k, v) in HELP_FIRST_KEYS {
         let v = if *k == "Tab" && !chat {
@@ -4165,6 +4166,7 @@ fn help_first_page(width: usize, chat: bool) -> Vec<Line<'static>> {
         rows.extend(wrapped(&format!("{g:<7} {v}"), width, Style::default()));
     }
     rows.extend(wrapped(HELP_FILES_WIDTH, width, label_role()));
+    rows.extend(wrapped(theme, width, label_role()));
     rows.push(Line::from(""));
     rows.extend(wrapped(HELP_MORE, width, bold()));
     rows
@@ -4693,12 +4695,13 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
         // Scroll 0 is the first page alone; ↓ opens the rest, its scroll
         // one less (↑ at its top goes back to the first page).
         Mode::Help { scroll: 0 } => {
+            let theme_words = app.theme_chosen.words();
             // A short page: no wider than its longest line needs.
             let width = pct(area.width, 86).clamp(40, 78).min(area.width);
             let rows = if app.in_project_view() {
-                help_project_page(width.saturating_sub(2) as usize, app.chat_on)
+                help_project_page(width.saturating_sub(2) as usize, app.chat_on, &theme_words)
             } else {
-                help_first_page(width.saturating_sub(2) as usize, app.chat_on)
+                help_first_page(width.saturating_sub(2) as usize, app.chat_on, &theme_words)
             };
             let rect = centered(
                 area,
@@ -7402,8 +7405,8 @@ mod tests {
     /// opens the rest, ↑ at its top goes back.
     #[test]
     fn help_opens_on_a_short_first_page() {
-        let page = help_first_page(100, true);
-        assert!(page.len() < 14, "{} lines", page.len());
+        let page = help_first_page(100, true, "theme: dark (from --theme)");
+        assert!(page.len() < 15, "{} lines", page.len());
         let words: Vec<String> = page
             .iter()
             .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
@@ -7422,6 +7425,7 @@ mod tests {
                 "✓       done: in Rust, and the judge's checks pass",
                 "⚠       needs attention: the View says why and what to do",
                 HELP_FILES_WIDTH,
+                "theme: dark (from --theme)",
                 "",
                 "↓ more: every key, the mouse, every mark, features, speed, the chat",
             ]

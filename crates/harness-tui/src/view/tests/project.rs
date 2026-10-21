@@ -932,7 +932,7 @@ fn the_help_says_what_the_states_mean() {
         assert!(screen.contains(words), "{words}\n{screen}");
     }
     // Not on a tool's screen.
-    let help: String = super::super::help_first_page(1000, true)
+    let help: String = super::super::help_first_page(1000, true, "")
         .iter()
         .map(|l| l.to_string() + "\n")
         .collect();

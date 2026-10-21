@@ -31,6 +31,8 @@ pub mod adoption;
 #[cfg(feature = "tui")]
 pub mod app;
 #[cfg(feature = "tui")]
+pub mod background;
+#[cfg(feature = "tui")]
 pub mod chat;
 #[cfg(feature = "tui")]
 pub mod chooser;

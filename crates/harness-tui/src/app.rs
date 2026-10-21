@@ -903,6 +903,9 @@ pub struct App {
     pub mouse: bool,
     /// The colours the screen is drawn in (`--theme`, cockpit.toml; docs/COCKPIT-WRAPPER-DESIGN.md §9.2).
     pub palette: crate::theme::Palette,
+    /// Which theme is on and why (the help's first page says it;
+    /// docs/COCKPIT-WRAPPER-DESIGN.md §9.7).
+    pub theme_chosen: crate::theme::Chosen,
     /// `files_width` in cockpit.toml: the Files / Project pane's width, fixed
     /// (docs/COCKPIT-WRAPPER-DESIGN.md §9.4); none: it follows its rows.
     pub files_width: Option<u16>,
@@ -1145,6 +1148,7 @@ impl App {
             hits: Vec::new(),
             mouse: true,
             palette: crate::theme::Palette::default(),
+            theme_chosen: crate::theme::Chosen::default(),
             files_width: None,
             last_waiting: false,
             project_waiting: None,
