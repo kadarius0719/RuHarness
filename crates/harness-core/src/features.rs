@@ -60,6 +60,16 @@ pub fn features_path(ledger: &crate::ledger::Ledger) -> PathBuf {
     features_dir(ledger).join(FEATURES_FILE)
 }
 
+/// The chat's proposal of a features file, beside it
+/// (docs/COCKPIT-WRAPPER-DESIGN.md §9.6): nothing reads it but the
+/// cockpit, which opens it as the person's draft.
+pub const PROPOSED_FILE: &str = "features.proposed.toml";
+
+/// `features/features.proposed.toml` in the ledger.
+pub fn proposed_path(ledger: &crate::ledger::Ledger) -> PathBuf {
+    features_dir(ledger).join(PROPOSED_FILE)
+}
+
 /// One of the harness's deterministic samples (the whole-program check's).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Sample {

@@ -574,6 +574,7 @@ pub fn cockpit_tools() -> Vec<Tool> {
         ),
     ]);
     reads.extend(map_tools());
+    reads.extend(crate::propose::tools());
     reads
 }
 

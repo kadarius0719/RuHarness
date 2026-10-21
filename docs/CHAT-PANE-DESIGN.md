@@ -800,6 +800,21 @@ and the brief is the text any other runtime can take. It says, briefly:
 - Never ask for an act the person did not ask for; say what you will ask for before asking; one
   act at a time.
 
+Added 2026-10-20 (cockpit design §9.6), a section at the end of the brief: **proposing the
+person's features or workloads.** The chat proposes, the person writes: `harness_features_propose`
+and `harness_workloads_propose` write the chat's text to a proposal file beside the person's own
+(`features.proposed.toml`, `workloads.proposed.toml`) and nothing else, and the cockpit opens it
+as the person's draft. The section gives what a feature is (something a person does with the
+program and can see the result of; each scenario one run of the whole program; three to six
+scenarios covering what the program is for, its options and one wrong input) and what a
+workload is (a run long enough to time, half a second or more of the C, with a real input in
+the project); how to read the program first (`harness_unit` on the unit that holds `main`, with
+`symbol = main`); both files' syntax as rules, from docs/FEATURES-DESIGN.md §2.1 and
+docs/PERF-DESIGN.md §3.1, each with a valid example; a one-line why above each scenario or
+workload in the file; a refusal fixed and proposed again; and, after the tool, one sentence per
+scenario (or workload) in the chat saying what it checks and why it was chosen, and which item
+opens it.
+
 ## 7. Safety and provenance: what reviewers must be able to check
 
 1. **No act without the person.** Every chat act is the cockpit's own act (`act_argv` and its

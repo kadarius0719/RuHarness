@@ -38,6 +38,16 @@ pub fn workloads_path(ledger: &crate::ledger::Ledger) -> PathBuf {
     super::perf_dir(ledger).join(WORKLOADS_FILE)
 }
 
+/// The chat's proposal of a workloads file, beside it
+/// (docs/COCKPIT-WRAPPER-DESIGN.md §9.6): nothing reads it but the
+/// cockpit, which opens it as the person's draft.
+pub const PROPOSED_FILE: &str = "workloads.proposed.toml";
+
+/// `migration/perf/workloads.proposed.toml` under `root`.
+pub fn proposed_path(ledger: &crate::ledger::Ledger) -> PathBuf {
+    super::perf_dir(ledger).join(PROPOSED_FILE)
+}
+
 /// One workload: a command line and at most one input file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Workload {

@@ -133,6 +133,18 @@ where its files are. An act's dialog says what happens in at most three lines be
 line). The chat folds its reads into one line and an act into two. Open from it: the live chat
 tests once (the brief and the chat's lines changed); a look at the hint line and the cards in the
 person's own terminal.
+## Done (2026-10-20): a model proposes the features and the workloads
+
+Built from COCKPIT-WRAPPER-DESIGN §9.6 (DECISIONS 2026-10-20, "A model proposes the features and
+the workloads"): **Propose features — ask in chat** on the Features row and **Propose a workload —
+ask in chat** on Speed type a question into the chat; the chat reads the program (`harness_unit`
+on the unit holding `main` — no new read tool was needed) and writes a checked proposal through
+harness-mcp's new `harness_features_propose` / `harness_workloads_propose`, which write only
+`features.proposed.toml` / `workloads.proposed.toml` beside the person's file; **Write your
+features file** then opens the proposal as the draft (**Edit from the chat's proposal…** when the
+file exists), the person saves it as any edit, and the proposal goes. The brief holds both files'
+syntax. Open from it: rebuild harness-mcp beside the cockpit; the live chat tests once; a live
+proposal on a real program.
 
 ## The work, in order
 
@@ -169,18 +181,6 @@ person's own terminal.
 
 ## Two ideas the person raised on 2026-10-20, to design after the explain-anything pass
 
-- **A model proposes the features and the workloads.** Today the chat cannot write the features
-  file (by design: writing is the person's), and its brief does not even hold the file's syntax,
-  so when the person asked it for an example features file it could only decline (their
-  screenshot). The shape that fits the guided path is the build configuration's: **Propose
-  features — ask in chat** on the Features row (and **Propose a workload — ask in chat** on
-  Speed): the chat reads the program (its main, its options, the map, the pieces), writes a
-  draft through a harness-mcp tool that only ever writes the draft file the cockpit's Write act
-  already uses, and the cockpit opens that draft in the editor for the person to read, change
-  and save — nothing is checked until they do. The brief gains the two files' syntax and the
-  rule that a feature is something a person does with the program and can see the result of.
-  For a learner, the chat explains each proposed scenario in a sentence. Small: the editor path
-  and the draft checks exist (docs/FEATURES-DESIGN.md §7, COCKPIT-WRAPPER-DESIGN §9.1).
 - **Beyond "behaves the same": improve the Rust.** The person's next question after a green
   port: can this be better — idiomatic, no unsafe, faster, readable? The judge is the safety
   net that makes this safe to ask: an **Improve — ask in chat** act on a done piece is a steered

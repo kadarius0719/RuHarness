@@ -1225,6 +1225,101 @@ fn the_map_answer_is_allowed_under_the_chats_model_only() {
     end(&mut c);
 }
 
+/// The chat's proposals (docs/COCKPIT-WRAPPER-DESIGN.md §9.6): allowed at
+/// once under the chat's own model, the app told when one is written;
+/// refused under another model, and refused while a draft of the person's
+/// of that file is kept.
+#[test]
+fn a_proposal_is_allowed_under_the_chats_model_and_never_over_a_kept_draft() {
+    let tmp = TmpDir::new("chat-propose");
+    let mut lines = start_lines();
+    lines.push(init_line(COCKPIT_TOOLS, "connected"));
+    let ask = |id: &str, tool: &str, call: &str, input: Value| {
+        serde_json::json!({"dir": "out", "msg": {"type": "control_request", "request_id": id,
+            "request": {"subtype": "can_use_tool", "tool_name": tool,
+                        "mcp_server": {"name": "harness"}, "input": input,
+                        "tool_use_id": call}}})
+    };
+    let answer = |id: &str, behavior: &str| {
+        serde_json::json!({"dir": "in", "msg": {"type": "control_response",
+            "response": {"subtype": "success", "request_id": id,
+                         "response": {"behavior": behavior}}}})
+    };
+    lines.push(ask(
+        "q1",
+        "mcp__harness__harness_features_propose",
+        "t1",
+        serde_json::json!({"model": "claude-opus-5-5", "text": "schema_version = 1"}),
+    ));
+    lines.push(answer("q1", "deny"));
+    lines.push(ask(
+        "q2",
+        "mcp__harness__harness_workloads_propose",
+        "t2",
+        serde_json::json!({"model": "claude-haiku-4-5-20251001", "text": "schema_version = 1"}),
+    ));
+    lines.push(answer("q2", "deny"));
+    lines.push(ask(
+        "q3",
+        "mcp__harness__harness_features_propose",
+        "t3",
+        serde_json::json!({"model": "claude-haiku-4-5-20251001", "text": "schema_version = 1"}),
+    ));
+    lines.push(answer("q3", "allow"));
+    lines.push(
+        serde_json::json!({"dir": "out", "msg": {"type": "user", "message": {
+        "role": "user", "content": [{"type": "tool_result", "tool_use_id": "t3",
+        "is_error": false, "content": "{\"kind\":\"features\"}"}]}}}),
+    );
+    lines.push(serde_json::json!({"dir": "out", "msg": {"type": "result",
+        "subtype": "success", "is_error": false, "queued_turn_count": 0}}));
+    let rec = synthetic(&tmp, &lines);
+    let mut c = chat(&tmp, &rec, "");
+    // A workloads draft of the person's is kept; no features draft.
+    c.drafts_kept = [false, true];
+    c.send("propose", None, Instant::now()).unwrap();
+    let ev = pump_until(&mut c, |c, _| !c.turn);
+    assert!(asks(&ev).is_empty(), "{ev:?}");
+    assert_eq!(
+        ev.iter()
+            .filter(|e| **e == Event::ProposalWritten { workloads: false })
+            .count(),
+        1,
+        "{ev:?}"
+    );
+    assert!(
+        !ev.contains(&Event::ProposalWritten { workloads: true }),
+        "{ev:?}"
+    );
+    let t = text(&mut c);
+    assert!(
+        t.contains(
+            "· propose the features file: refused — the proposal is written under the chat's \
+             model: pass model = claude-haiku-4-5-20251001"
+        ),
+        "{t}"
+    );
+    assert!(
+        t.contains(
+            "· propose the workloads file: refused — a workloads draft of the person's is kept"
+        ),
+        "{t}"
+    );
+    assert!(
+        t.contains("· write the chat's proposal of the features file — done"),
+        "{t}"
+    );
+    let sent = stdin_log(&tmp);
+    for q in ["q1", "q2"] {
+        let deny = sent
+            .iter()
+            .find(|v| v["response"]["request_id"] == q)
+            .unwrap();
+        assert_eq!(deny["response"]["response"]["behavior"], "deny", "{q}");
+    }
+    end(&mut c);
+}
+
 /// The rebuild line names where harness-mcp was found: a workspace build
 /// by `cargo build` in that checkout (release kept), anything else by
 /// `cargo install`.

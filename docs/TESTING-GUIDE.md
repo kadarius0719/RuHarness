@@ -5340,7 +5340,7 @@ harness-tui --target targets/lzg
 3. Press `↓` onto a row. **You should see** that row's full sentence below the list.
 4. Press `Esc`. **You should see** the focus back on the Files list, on the Speed row.
 5. Press `↑` until `u-checksum` under `Units (5)` is highlighted (open `Units (5)` with `→` if it is closed, as in Step 9.4). **You should see** below its verdict lines `Speed: <answer> on <workload>`, and on the next line its range (when the answer has one), `parallel` when the program uses several **cores** (the processor's workers that can run at the same time), and how many of the workloads say the same. If a row is slower, a `Next:` line says what you could do about it.
-6. Press `↓` until the Speed row is highlighted again, then press `Enter`. **You should see** three actions: **Edit the workloads file**, **Measure speed** and **Measure the program as it stands**.
+6. Press `↓` until the Speed row is highlighted again, then press `Enter`. **You should see** three actions: **Edit the workloads file**, **Measure speed** and **Measure the program as it stands**; under the line `Uses a model — can take minutes`, **Propose a workload — ask in chat** (it types a question into the chat, which writes a proposal you open, change and save; greyed with its reason while the chat is off).
 7. Press `Esc`. **You should see** the menu close without running anything.
 8. Press `?`, then `↓` until you reach **Speed**. **You should see** the speed words and what they mean. Press any key to close the help.
 9. Press `q`. **You should see** your Terminal prompt again (if the cockpit asks `Quit the cockpit?`, wait a moment and press `q` again).

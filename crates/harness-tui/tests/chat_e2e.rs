@@ -152,6 +152,8 @@ fn idle_recording(path: &Path) {
         "mcp__harness__harness_answer",
         "mcp__harness__harness_map_questions",
         "mcp__harness__harness_map_answer",
+        "mcp__harness__harness_features_propose",
+        "mcp__harness__harness_workloads_propose",
     ]
     .map(|t| format!("\"{t}\""))
     .join(", ");

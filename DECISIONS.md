@@ -89,6 +89,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-10-20 — **The guided path: the journey on every screen, the test program in the cockpit, dialogs that stand out, panes that fit** — the stage words and the journey line; Make the test program asked in chat; migrate's refusal in words; the backdrop and panel roles; panes as wide as their rows.
 - 2026-10-20 — **The chat can read a test program's hand-off; the terminal theme's sections are bright blue** — the first-request check knows driver attempts; plain blue was navy on black.
 - 2026-10-20 — **Explain anything: the hint line, the explanation card, dialogs in one breath, the chat as a conversation** — every row says what it is in a sentence and a card (`i`); dialogs hold three lines; menus stay narrow; the chat folds its reads.
+- 2026-10-20 — **A model proposes the features and the workloads** — two cockpit-mode harness-mcp tools write a checked proposal beside the person's file; Propose items on the Features and Speed rows; Write opens the proposal as the draft; the brief holds both files' syntax.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -3852,3 +3853,51 @@ something means — like how that new file for checksum was created, why a dupli
 
 **Not done here; the person's to run once:** the live chat tests (the brief and the chat's lines
 changed).
+## 2026-10-20 — A model proposes the features and the workloads
+
+**Seen.** At the end of t-benchmark's journey with no features yet, the person asked the chat for
+an example features file; it could only decline (it writes no files, and its brief held neither
+file's syntax). The person: a model should be able to write the feature and workload test, and
+for someone who does not know what one is, that is how they learn.
+
+**Decided** (COCKPIT-WRAPPER-DESIGN §9.6, built as written except where said). The model
+proposes, the person writes, as with the build configuration's proposal:
+- harness-mcp gains `harness_features_propose {model, text}` and `harness_workloads_propose
+  {model, text}`, cockpit mode only (crates/harness-mcp/src/propose.rs). Each checks the text
+  with the person's file's own loader (what `features save` / `perf save` run) and refuses it
+  with the loader's words; refuses a link on the way, text over the file's 64 KiB cap (header
+  included), the Project view (no tool open) and a ledger made elsewhere; then writes only
+  `features.proposed.toml` / `workloads.proposed.toml` beside the person's file, atomically,
+  under a header naming it as the chat's proposal, the model and the date.
+- **The kept-draft refusal is the cockpit's, not the tool's.** The cockpit holds a kept draft in
+  its own memory (a private temp folder it names on quit), which harness-mcp, another process,
+  cannot see. So the cockpit's permission check refuses a proposal while a draft of that file is
+  kept ("a … draft of the person's is kept — they save or discard it first"), the app telling the
+  chat before each pump; it also passes a proposal only under the chat's own model, as the map
+  answer.
+- The Features row gains **Propose features — ask in chat**, the Speed row **Propose a workload —
+  ask in chat**, under the model separator: the question typed into the chat as the Project
+  view's items do; greyed while the chat cannot be used, while its input holds a draft, while a
+  draft of the person's is kept, or before a scan. With no file and the chat usable, the row's
+  Next step recommends it before Write; with a proposal waiting and no file, the Next step is
+  "Read the chat's proposal — Enter, then Write your features file".
+- **Write your features (workloads) file** with no file opens the proposal as the draft (the
+  dialog: "The chat's proposal, 4 scenarios in 3 features, opens in nano: read it, change what
+  you like, save"); with a file, **Edit from the chat's proposal…** opens it against the file's
+  digest. The proposal is read with the starter's safety (regular file, cap, UTF-8). One change
+  to §7.2's flow: a proposal left as it is in the editor is offered for saving, not dropped as
+  "No change" (the person read it and kept it). After a successful save the proposal file is
+  removed, only while it is still the text the draft started from.
+- The brief gains a section at its end: what a feature and a workload are, how to read the
+  program first, both files' syntax as rules with an example each, a one-line why above each
+  scenario, and one sentence per scenario in the reply.
+
+**Not built: `harness_program`.** The design allowed a read of the tool's main file only if the
+existing reads did not serve it. They do: `harness_unit` on the unit whose symbols hold `main`,
+with `symbol = main`, returns `main`'s C (up to 400 lines and 12 KiB), and its pairs name real
+files in the project a workload's input can be. What it does not show is a static helper in the
+same file that is not a plan symbol; a live run will say whether that matters.
+
+**Open.** Rebuild harness-mcp beside the cockpit (its tool list changed: the out-of-date dialog
+says so otherwise). The brief changed: the live chat tests once, and a live proposal on
+t-benchmark or liblzg to see the chat's scenarios and sentences.

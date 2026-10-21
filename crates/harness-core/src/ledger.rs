@@ -555,6 +555,11 @@ fn printable(text: &str, max_bytes: usize) -> String {
         .collect()
 }
 
+/// Now, as `YYYY-MM-DDTHH:MM:SSZ` (UTC).
+pub fn now_utc() -> String {
+    rfc3339_utc(unix_now())
+}
+
 fn unix_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

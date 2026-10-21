@@ -18,6 +18,7 @@ pub mod asks;
 mod connect;
 pub mod features_edit;
 mod project_view;
+mod propose;
 pub mod speed_acts;
 
 pub use project_view::{Pick, ProjectState};
@@ -3845,6 +3846,19 @@ impl App {
             Action::Explain => {
                 self.open_explain(None);
                 Command::None
+            }
+            Action::Propose { workloads } => {
+                if self.chat_connected() {
+                    self.chat_ask_proposal(*workloads);
+                }
+                Command::None
+            }
+            Action::EditFromProposal { workloads } => {
+                self.start_edit_from_proposal(if *workloads {
+                    features_edit::DraftKind::Workloads
+                } else {
+                    features_edit::DraftKind::Features
+                })
             }
         }
     }
