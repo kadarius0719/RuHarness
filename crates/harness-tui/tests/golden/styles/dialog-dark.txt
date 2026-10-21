@@ -1,27 +1,27 @@
-┌ Files ─────────────────────┐┌ u-lib · done ──────────────────────────────────────────────────────┐
-  @0-99 fg 243 NONE "┌ Files ─────────────────────┐┌ u-lib · done ──────────────────────────────────────────────────────┐"
-│▾ harness-tu…0000000000 ✓1/1││All 8 steps done ✓                                                  │
-  @0-99 fg 243 NONE "│▾ harness-tu…0000000000 ✓1/1││All 8 steps done ✓                                                  │"
-│  ▾ Units (1)               ││✓ u-lib done                                                        │
-  @0-99 fg 243 NONE "│  ▾ Units (1)               ││✓ u-lib done                                                        │"
-│    ▸ ✓ u-lib           done││Next: In Rust and checked — nothing to do                           │
-  @0-99 fg 243 NONE "│    ▸ ✓ u-lib           done││Next: In Rust and checked — nothing to do                           │"
-│    Features (none yet)     ││                                                                    │
-  @0-99 fg 243 NONE "│    Features (none yet)     ││                                                                    │"
-│    Speed — not set up      ││1 exported function: read_scalefactors (44 lines)                   │
-  @0-99 fg 243 NONE "│    Speed — not set up      ││1 exported function: read_scalefactors (44 lines)                   │"
-│  ▸ test_case/          ✓1/1││Its C: 1 file — test_case/src/lib.c                                 │
-  @0-99 fg 243 NONE "│  ▸ test_case/          ✓1/1││Its C: 1 file — test_case/src/lib.c                                 │"
-│           ┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐ate        │
+  Files                          u-lib · done
+  @0-99 fg 243 NONE "Files                          u-lib · done"
+│▾ harness-tu…0000000000 ✓1/1│ │All 8 steps done ✓                                                 │
+  @0-99 fg 243 NONE "│▾ harness-tu…0000000000 ✓1/1│ │All 8 steps done ✓                                                 │"
+│  ▾ Units (1)               │ │✓ u-lib done                                                       │
+  @0-99 fg 243 NONE "│  ▾ Units (1)               │ │✓ u-lib done                                                       │"
+│    ▸ ✓ u-lib           done│ │Next: In Rust and checked — nothing to do                          │
+  @0-99 fg 243 NONE "│    ▸ ✓ u-lib           done│ │Next: In Rust and checked — nothing to do                          │"
+│    Features (none yet)     │ │                                                                   │
+  @0-99 fg 243 NONE "│    Features (none yet)     │ │                                                                   │"
+│    Speed — not set up      │ │1 exported function: read_scalefactors (44 lines)                  │
+  @0-99 fg 243 NONE "│    Speed — not set up      │ │1 exported function: read_scalefactors (44 lines)                  │"
+│  ▸ test_case/          ✓1/1│ │Its C: 1 file — test_case/src/lib.c                                │
+  @0-99 fg 243 NONE "│  ▸ test_case/          ✓1/1│ │Its C: 1 file — test_case/src/lib.c                                │"
+│           ┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐date       │
   @0-11 fg 243 NONE "│"
   @12-87 fg 75 bg 237 BOLD "┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐"
-  @88-99 fg 243 NONE "ate        │"
-│           │Builds u-lib's Rust and runs it against the C in the sandbox.             │ tree)     │
+  @88-99 fg 243 NONE "date       │"
+│           │Builds u-lib's Rust and runs it against the C in the sandbox.             │e tree)    │
   @0-11 fg 243 NONE "│"
   @12-12 fg 75 bg 237 BOLD "│"
   @13-86 fg - bg 237 NONE "Builds u-lib's Rust and runs it against the C in the sandbox."
   @87-87 fg 75 bg 237 BOLD "│"
-  @88-99 fg 243 NONE "tree)     │"
+  @88-99 fg 243 NONE "e tree)    │"
 │           │Writes: the judge's check of u-lib and its status in the plan; changes no │           │
   @0-11 fg 243 NONE "│"
   @12-12 fg 75 bg 237 BOLD "│"
@@ -68,14 +68,14 @@
   @0-11 fg 243 NONE "│"
   @12-87 fg 75 bg 237 BOLD "└──────────────────────────────────────────────────────────────────────────┘"
   @88-99 fg 243 NONE "│"
-│                            ││                                                                    │
-  @0-99 fg 243 NONE "│                            ││                                                                    │"
-│                            ││                                                                    │
-  @0-99 fg 243 NONE "│                            ││                                                                    │"
-│                            ││                                                                    │
-  @0-99 fg 243 NONE "│                            ││                                                                    │"
-└────────────────────────────┘└────────────────────────────────────────────────────────────────────┘
-  @0-99 fg 243 NONE "└────────────────────────────┘└────────────────────────────────────────────────────────────────────┘"
+│                            │ │                                                                   │
+  @0-99 fg 243 NONE "│                            │ │                                                                   │"
+│                            │ │                                                                   │
+  @0-99 fg 243 NONE "│                            │ │                                                                   │"
+│                            │ │                                                                   │
+  @0-99 fg 243 NONE "│                            │ │                                                                   │"
+└────────────────────────────┘ └───────────────────────────────────────────────────────────────────┘
+  @0-99 fg 243 NONE "└────────────────────────────┘ └───────────────────────────────────────────────────────────────────┘"
  Ready.
   @0-99 fg 243 NONE "Ready."
 

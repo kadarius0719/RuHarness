@@ -1079,6 +1079,67 @@ fn pane_block(title: String, focused: bool) -> Block<'static> {
     block
 }
 
+/// The designed themes draw each pane's top border row as a title band and
+/// put one blank column between the panes (docs/COCKPIT-WRAPPER-DESIGN.md
+/// §9.7); the terminal and mono themes keep the plain frame.
+pub(crate) fn bands() -> bool {
+    matches!(
+        theme::current().theme,
+        theme::Theme::Dark | theme::Theme::Light
+    )
+}
+
+/// The title band (§9.7), over a pane's frame just drawn in `area`: its top
+/// row filled across the pane's width — the panel colour under the title
+/// (bold, the section role) when the pane is not focused; the section colour
+/// with the title reversed when it is. Only in the designed themes; what
+/// sits on the border afterwards (the tab strip, the chat's buttons) is
+/// drawn over it as chips ([`band_chip`]).
+pub(crate) fn title_band(frame: &mut Frame, area: Rect, focused: bool) {
+    if !bands() || area.height == 0 {
+        return;
+    }
+    let fill = if focused {
+        section_role().patch(selected_row())
+    } else {
+        match theme::style(Role::Panel).bg {
+            Some(bg) => Style::default().bg(bg),
+            None => return,
+        }
+    };
+    let buf = frame.buffer_mut();
+    let row = Rect::new(area.x, area.y, area.width, 1).intersection(buf.area);
+    for x in row.left()..row.right() {
+        let cell = &mut buf[(x, row.y)];
+        if matches!(cell.symbol(), "─" | "┌" | "┐") {
+            cell.reset();
+            cell.set_symbol(" ");
+        }
+        cell.set_style(fill);
+    }
+}
+
+/// A control on a pane's top border, drawn over a title band (§9.7): its
+/// cells cleared of the band and set on the panel, so a label reads the same
+/// on the focused band as off it. Outside the designed themes, `style` as
+/// it is.
+pub(crate) fn band_chip(frame: &mut Frame, rect: Rect, style: Style) -> Style {
+    if !bands() {
+        return style;
+    }
+    let buf = frame.buffer_mut();
+    let rect = rect.intersection(buf.area);
+    for y in rect.top()..rect.bottom() {
+        for x in rect.left()..rect.right() {
+            buf[(x, y)].reset();
+        }
+    }
+    match theme::style(Role::Panel).bg {
+        Some(bg) => style.bg(bg),
+        None => style,
+    }
+}
+
 fn draw_files(frame: &mut Frame, app: &mut App, area: Rect) {
     let focused =
         app.focus == Focus::Files && matches!(app.mode, Mode::Normal | Mode::Details { .. });
@@ -1092,6 +1153,7 @@ fn draw_files(frame: &mut Frame, app: &mut App, area: Rect) {
     let block = pane_block(title, focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    title_band(frame, area, focused);
     app.hits.push((area, Hit::Pane(Focus::Files)));
     let height = inner.height as usize;
     // The tree's default folds follow its height (a group folded where its
@@ -3132,6 +3194,7 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
     let block = pane_block(ellipsis(&view_title(app), room.max(4)), focused);
     let mut inner = block.inner(area);
     frame.render_widget(block, area);
+    title_band(frame, area, focused);
     app.hits.push((area, Hit::Pane(Focus::View)));
     // The journey line under the title, on every screen (§9.4): where the
     // person is among the eight stages.
@@ -4985,6 +5048,19 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
+/// `r` with one blank column taken on its left and/or right, in the
+/// designed themes (the panes stand apart, §9.7); as it is otherwise.
+fn apart(r: Rect, left: bool, right: bool) -> Rect {
+    if !bands() {
+        return r;
+    }
+    let take = u16::from(left) + u16::from(right);
+    if r.width <= take + 20 {
+        return r;
+    }
+    Rect::new(r.x + u16::from(left), r.y, r.width - take, r.height)
+}
+
 /// Draw the whole cockpit, recording the layout and the clickable regions.
 pub fn draw(frame: &mut Frame, app: &mut App) {
     theme::set(app.palette);
@@ -5048,6 +5124,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                     Constraint::Length(chat_w),
                 ])
                 .areas(main);
+            // One blank column on each side of the View, taken from it (§9.7).
+            let view = apart(view, true, true);
             draw_files(frame, app, files);
             draw_view(frame, app, view);
             chat_pane::draw_chat(frame, app, chat_area, true, false);
@@ -5056,6 +5134,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Length(files_w), Constraint::Min(20)])
                 .areas(main);
+            let right = apart(right, true, false);
             draw_files(frame, app, files);
             if chat && app.focus == Focus::Chat {
                 chat_pane::draw_chat(frame, app, right, false, true);
@@ -5364,12 +5443,23 @@ mod tests {
         for y in 0..buffer.area.height {
             let cells = row(y);
             // A run starts its line: only frame, blank or a frame's rule
-            // before it, back to the pane's edge.
+            // before it, back to the pane's edge (a title band's edge: where
+            // the band's background or reverse ends, §9.7).
             let starts_line = |x: u16| {
+                let look = |x: u16| {
+                    let c = &buffer[(x, y)];
+                    (c.bg, c.modifier.contains(Modifier::REVERSED))
+                };
+                let band = look(x);
                 cells[..usize::from(x)]
                     .iter()
+                    .enumerate()
                     .rev()
-                    .take_while(|c| !matches!(c.as_str(), "│" | "┌" | "└" | "┐" | "┘"))
+                    .take_while(|(i, c)| {
+                        !matches!(c.as_str(), "│" | "┌" | "└" | "┐" | "┘")
+                            && look(*i as u16) == band
+                    })
+                    .map(|(_, c)| c)
                     .all(|c| matches!(c.as_str(), " " | "─" | "▾" | "▸"))
             };
             for r in runs(buffer, y) {
@@ -5517,6 +5607,36 @@ mod tests {
     /// with their styles (the text goldens hold the words; these hold the
     /// colours): the rules hold in every theme, and a change of colour is a
     /// reviewed diff.
+    #[test]
+    fn the_designed_themes_draw_title_bands_and_a_gap() {
+        for theme in Theme::ALL {
+            let mut app = app_of("targets/zopfli", "theme-bands");
+            app.palette = Palette::of(theme);
+            let buffer = render(&mut app, 80, 30);
+            let files = files_width(&app, 80);
+            let (corner, view_corner) = (&buffer[(0, 0)], &buffer[(files + 1, 0)]);
+            if matches!(theme, Theme::Dark | Theme::Light) {
+                let panel = theme.bg(Role::Panel).unwrap();
+                // The focused pane (Files): its band in the section colour,
+                // reversed, across its width.
+                assert_eq!(corner.symbol(), " ", "{}", theme.name());
+                assert!(corner.modifier.contains(Modifier::REVERSED));
+                assert_eq!(corner.fg, theme.fg(Role::Section).unwrap());
+                // The View's band on the panel; one blank column before it.
+                assert_eq!(view_corner.symbol(), " ");
+                assert_eq!(view_corner.bg, panel, "{}", theme.name());
+                let gap = &buffer[(files, 5)];
+                assert_eq!((gap.symbol(), gap.bg), (" ", Color::Reset));
+                assert_eq!(buffer[(files + 1, 5)].symbol(), "│");
+            } else {
+                // Unchanged: the plain frame, the panes side by side.
+                assert_eq!(corner.symbol(), "┌", "{}", theme.name());
+                assert_eq!(buffer[(files, 0)].symbol(), "┌");
+                assert_eq!(corner.bg, Color::Reset);
+            }
+        }
+    }
+
     #[test]
     fn three_screens_in_four_themes() {
         for theme in Theme::ALL {
