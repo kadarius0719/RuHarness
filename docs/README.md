@@ -12,6 +12,7 @@ built and where the truth lives now. A new document gets a row here, or it is no
 | [topics/](topics/) | current | Seven short pages, one per part: [cockpit](topics/cockpit.md), [drivers](topics/drivers.md), [features](topics/features.md), [judge](topics/judge.md), [map](topics/map.md), [models](topics/models.md), [speed](topics/speed.md) |
 | [TUTORIAL.md](TUTORIAL.md) | current | The ideas, in order, with a friendly reference appendix |
 | [TESTING-GUIDE.md](TESTING-GUIDE.md) | current | Every feature tried by hand on liblzg, step by step (13 parts) |
+| [SCALE-RUN-LZ4.md](SCALE-RUN-LZ4.md) | current | The person's testing script for the first larger project: what to do, what to see, what it means, where to stop |
 | **Developers** | | |
 | [SCHEMAS.md](SCHEMAS.md) | current | The contract: every ledger file, every command, every refusal the code cites |
 | [FEATURES-DESIGN.md](FEATURES-DESIGN.md) | current | Features and scenarios; governs with SCHEMAS |
