@@ -10,8 +10,8 @@ project, accepted its three programs, scanned and planned one, had the chat make
 and the Rust for two pieces, accepted them, and had the chat propose a features file — every step
 from the screen, with the judge green at each. The project map (2026-10-08), the documentation
 for a non-technical reader (2026-10-09 to 2026-10-18) and eleven cockpit passes (2026-10-18 to
-2026-10-21, below) are on `main`; 1 820 tests; `bench check --replay` green at its last run
-(2026-10-18). The leaf cap is gone (work item 2, done 2026-10-21): a piece that calls other
+2026-10-21, below) are on `main`; 1 820 tests; `bench check --replay` green on 2026-10-21 after the
+judge's beyond-leaves pass (no regression). The leaf cap is gone (work item 2, done 2026-10-21): a piece that calls other
 pieces moves after them, tested with them as the program stands; only the piece holding `main`
 stays C, which the end-state design will settle. The person's working rhythm since 2026-10-20: they walk the cockpit and
 send screenshots; the session triages each into a fix made at once, an item for the pass in
@@ -174,4 +174,6 @@ The adoption tokens are not committed, so a fresh checkout or worktree asks once
   and `the_ready_line_invites_a_click_only_when_one_answers` (harness-tui), chat_e2e's
   `a_deaf_or_stopped_runtime_is_ended_on_quit` and `a_request_is_reviewed_run_and_answered`,
   harness-core's `a_reader_never_makes_a_writer_fail`.
-- Many merged `worktree-agent-*` branches and worktrees remain; they can be cleaned.
+- About 75 merged `worktree-agent-*` branches remain, each checked out in a worktree under
+  `.claude/worktrees/` that the desktop app made; the app's own worktree cleanup removes them
+  (a plain `git branch -d` refuses a checked-out branch).
