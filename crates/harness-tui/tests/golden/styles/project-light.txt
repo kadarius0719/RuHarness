@@ -3,7 +3,7 @@
   @32-56 fg 25 bg 254 BOLD "liblzg · not mapped yet"
 │Map the project             │ │Map ○ · Configure · Accept program · then: scan, plan, and each piece                  │
   @0-0 fg 25 BOLD "│"
-  @1-15 fg 25 BOLD | REVERSED "Map the project"
+  @1-15 fg - BOLD | REVERSED "Map the project"
   @29-29 fg 25 BOLD "│"
   @31-31 fg 244 NONE "│"
   @32-36 fg 23 BOLD "Map ○"

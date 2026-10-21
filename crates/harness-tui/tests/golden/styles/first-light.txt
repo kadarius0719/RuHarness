@@ -4,12 +4,11 @@
 │▾ harn…000 ✓0/13 (+1 …│ │Step 6 of 8: Test program 1/4                        │
   @0-0 fg 25 BOLD "│"
   @1-2 fg 238 BOLD | REVERSED "▾"
-  @3-10 fg 25 BOLD | REVERSED "harn…000"
+  @3-11 fg - BOLD | REVERSED "harn…000"
   @12-22 fg 240 BOLD | REVERSED "✓0/13 (+1 …"
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
-  @26-38 fg 238 NONE "Step 6 of 8:"
-  @39-54 fg 23 BOLD "Test program 1/4"
+  @39-54 fg - BOLD "Test program 1/4"
   @79-79 fg 244 NONE "│"
 │  ▾ Units (11)        │ │Next: 3 of the 11 can move to Rust now — open        │
   @0-0 fg 25 BOLD "│"
@@ -52,7 +51,7 @@
   @16-22 fg 240 NONE "stays C"
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
-  @26-36 fg 25 BOLD "Units (11):"
+  @26-36 fg - BOLD "Units (11):"
   @79-79 fg 244 NONE "│"
 │    ▸ · u-tree stays C│ │stays C                                              │
   @0-0 fg 25 BOLD "│"
@@ -77,7 +76,7 @@
   @16-22 fg 240 NONE "stays C"
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
-  @26-34 fg 25 BOLD "Features:"
+  @26-34 fg - BOLD "Features:"
   @79-79 fg 244 NONE "│"
 │    ▸ ◇ u-util no test│ │                                                     │
   @0-0 fg 25 BOLD "│"
@@ -162,7 +161,8 @@
   @79-79 fg 244 NONE "│"
 │    Speed — not set up│ │                                                     │
   @0-0 fg 25 BOLD "│"
-  @5-23 fg 25 BOLD "Speed — not set up│"
+  @10-22 fg 238 NONE "— not set up"
+  @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
 │  ▸ src/ ✓0/13 (+1 ✓?)│ │                                                     │

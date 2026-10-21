@@ -5,11 +5,9 @@
   @25-78 fg LightBlue BOLD "harness-tui-theme-first-0000000000 · 0 of 13 C files"
 │▾ harn…000 ✓0/13 (+1 …││Step 6 of 8: Test program 1/4                         │
   @0-0 fg LightBlue BOLD "│"
-  @1-2 fg - BOLD | REVERSED "▾"
-  @3-10 fg LightBlue BOLD | REVERSED "harn…000"
-  @11-22 fg - BOLD | REVERSED "✓0/13 (+1 …"
+  @1-22 fg - BOLD | REVERSED "▾ harn…000 ✓0/13 (+1 …"
   @23-23 fg LightBlue BOLD "│"
-  @38-53 fg Cyan BOLD "Test program 1/4"
+  @38-53 fg - BOLD "Test program 1/4"
 │  ▾ Units (11)        ││Next: 3 of the 11 can move to Rust now — open u-cache:│
   @0-0 fg LightBlue BOLD "│"
   @5-14 fg LightBlue BOLD "Units (11)"
@@ -30,7 +28,7 @@
 │    ▸ · u-lz77 stays C││Units (11): 1 ✓ done · 3 ◇ no test program · 7 · stays│
   @0-0 fg LightBlue BOLD "│"
   @23-23 fg LightBlue BOLD "│"
-  @25-35 fg LightBlue BOLD "Units (11):"
+  @25-35 fg - BOLD "Units (11):"
 │    ▸ · u-tree stays C││C                                                     │
   @0-0 fg LightBlue BOLD "│"
   @23-23 fg LightBlue BOLD "│"
@@ -40,7 +38,7 @@
 │    ▸ · u-g…er stays C││Features: 7 — 5 hold so far, 2 still all C            │
   @0-0 fg LightBlue BOLD "│"
   @23-23 fg LightBlue BOLD "│"
-  @25-33 fg LightBlue BOLD "Features:"
+  @25-33 fg - BOLD "Features:"
 │    ▸ ◇ u-util no test││                                                      │
   @0-0 fg LightBlue BOLD "│"
   @23-23 fg LightBlue BOLD "│"
@@ -85,7 +83,7 @@
   @23-23 fg LightBlue BOLD "│"
 │    Speed — not set up││                                                      │
   @0-0 fg LightBlue BOLD "│"
-  @5-23 fg LightBlue BOLD "Speed — not set up│"
+  @23-23 fg LightBlue BOLD "│"
 │  ▸ src/ ✓0/13 (+1 ✓?)││                                                      │
   @0-0 fg LightBlue BOLD "│"
   @23-23 fg LightBlue BOLD "│"

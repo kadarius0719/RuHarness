@@ -190,7 +190,7 @@ fn headed(line: &str, width: usize) -> Vec<Line<'static>> {
             if let Some(at) = span.content.find(':') {
                 let (head, rest) = span.content.split_at(at + 1);
                 *first = Line::from(vec![
-                    Span::styled(head.to_string(), section_role()),
+                    Span::styled(head.to_string(), bold()),
                     Span::raw(rest.to_string()),
                 ]);
             }
@@ -841,7 +841,7 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
         }
         _ => None,
     };
-    let (name_text, pad, word_text) = if let Some((full, short)) = unit_words {
+    let (mut name_text, pad, word_text) = if let Some((full, short)) = unit_words {
         const KEEP: usize = 6;
         let keep = name_w.min(KEEP);
         let word_text = [full, short]
@@ -912,28 +912,42 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
     } else {
         Style::default()
     };
-    if matches!(
+    // The tree's groups head their sections (`Units (n)`, `Features (n)`,
+    // `Speed`) in the section role; one with a state mark before it (the
+    // project's row) is bold, its mark carrying the colour. A group with
+    // nothing in it yet is a row, not a heading: plain, its state words in
+    // the label role (`Features (none yet)`, `Speed — not set up`); the
+    // Project view's action rows are plain (§9.7).
+    let empty_group = match sel {
+        Selection::Features if matches!(app.features.group, featmap::Group::NoFile) => {
+            Some("Features")
+        }
+        Selection::Speed if matches!(app.speed.group, speed::Group::NoFile) => Some("Speed"),
+        _ => None,
+    };
+    let mut state_tail = None;
+    if let Some(head) = empty_group {
+        if let Some(rest) = name_text.strip_prefix(head) {
+            state_tail = Some(rest.to_string());
+            name_text = head.to_string();
+        }
+    } else if matches!(
         sel,
-        Selection::Project
-            | Selection::Units
-            | Selection::Features
-            | Selection::Speed
-            | Selection::MapProject
-            | Selection::ProjectHome
-    ) {
-        // The tree's groups head their sections; one with a state mark
-        // before it stays bold, its mark carrying the colour.
-        name_style = if glyph.is_empty() {
-            section_role()
-        } else {
-            name_style.add_modifier(Modifier::BOLD)
-        };
+        Selection::Units | Selection::Features | Selection::Speed
+    ) && glyph.is_empty()
+    {
+        name_style = section_role();
+    } else if matches!(sel, Selection::Project) {
+        name_style = name_style.add_modifier(Modifier::BOLD);
     }
     let mut spans = vec![
         Span::styled(lead, label_role()),
         Span::styled(glyph_text, glyph_style(glyph)),
         Span::styled(name_text, name_style),
     ];
+    if let Some(tail) = state_tail {
+        spans.push(Span::styled(tail, label_role()));
+    }
     if !word_text.is_empty() {
         spans.push(Span::raw(" ".repeat(pad)));
         spans.push(Span::styled(word_text, muted()));
@@ -2089,10 +2103,7 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
             continue;
         }
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            format!("{title}:"),
-            section_role(),
-        )));
+        lines.push(Line::from(Span::styled(format!("{title}:"), bold())));
         for (unit, state) in picked {
             // Each item says why and what to do, not its state again.
             let word = match state {
@@ -2128,10 +2139,7 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
             continue;
         }
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            format!("{title}:"),
-            section_role(),
-        )));
+        lines.push(Line::from(Span::styled(format!("{title}:"), bold())));
         let changed = picked.iter().any(|f| f.state != FileState::New);
         for f in picked {
             let (glyph, _) = files::file_label(&app.files, &f.state);
@@ -2359,7 +2367,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
     lines.extend(wrapped(
         "Speed — your workloads, the C against the Rust in use",
         width,
-        section_role(),
+        bold(),
     ));
     for h in &model.header {
         lines.extend(wrapped(h, width, label_role()));
@@ -2404,7 +2412,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
         // Units measured alone (`--unit`): the C alone is not, yet.
         section
             .lines
-            .push(Line::from(Span::styled("The original C", section_role())));
+            .push(Line::from(Span::styled("The original C", bold())));
         section.lines.extend(wrapped(
             "not measured yet — Measure speed on this row measures the C alone; measuring one \
              unit does not",
@@ -2413,7 +2421,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
         ));
     } else {
         section.push(
-            Line::from(Span::styled("The original C", section_role())),
+            Line::from(Span::styled("The original C", bold())),
             None,
             speed::SideKey::C,
             &model.c_rows,
@@ -2431,7 +2439,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
             )
         };
         section.push(
-            Line::from(clipped(vec![Span::styled(heading, section_role())], width)),
+            Line::from(clipped(vec![Span::styled(heading, bold())], width)),
             None,
             speed::SideKey::AsItStands,
             &model.program_rows,
@@ -2443,10 +2451,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
     }
     for u in &model.units {
         section.push(
-            Line::from(clipped(
-                vec![Span::styled(u.id.clone(), section_role())],
-                width,
-            )),
+            Line::from(clipped(vec![Span::styled(u.id.clone(), bold())], width)),
             Some(Selection::Unit(u.id.clone())),
             speed::SideKey::Unit(u.id.clone()),
             &u.rows,
@@ -2744,7 +2749,7 @@ fn features_view(
                     plural_s(never.len())
                 ),
                 width,
-                section_role(),
+                bold(),
             ));
             for (file, name) in never.iter().take(20) {
                 links.push((lines.len(), Selection::Function(file.clone(), name.clone())));
@@ -2964,7 +2969,7 @@ fn feature_view(
     }
     lines.push(Line::from(""));
     lines.extend(map_preface(app, width));
-    lines.push(Line::from(Span::styled("Scenarios", section_role())));
+    lines.push(Line::from(Span::styled("Scenarios", bold())));
     let program = app.snapshot.program_name.clone();
     for s in &f.scenarios {
         let mut argv = vec![program.clone()];
@@ -3029,10 +3034,7 @@ fn feature_view(
         }
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "Where its code lives",
-        section_role(),
-    )));
+    lines.push(Line::from(Span::styled("Where its code lives", bold())));
     if f.scenarios.iter().all(|s| s.record.is_none()) {
         lines.extend(wrapped(
             "  (not known — map the features)",
@@ -3101,10 +3103,7 @@ fn feature_view(
     }
     if app.features.features.len() >= 2 && app.features.complete {
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "Only this feature runs",
-            section_role(),
-        )));
+        lines.push(Line::from(Span::styled("Only this feature runs", bold())));
         if f.specific.is_empty() {
             lines.extend(wrapped(
                 "  everything it runs is also run by another feature",
@@ -3369,7 +3368,7 @@ fn draw_unit(frame: &mut Frame, app: &mut App, area: Rect, unit: &UnitView) {
             },
             width,
         ),
-        section_role(),
+        Style::default(),
     ));
     // Folded, it is the View's one row to act on: Enter there opens it.
     if !open && app.focus == Focus::View {
@@ -4887,11 +4886,7 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
             }
             if !v.inputs.features_skipped.is_empty() {
                 rows.push(Line::from(""));
-                rows.extend(wrapped(
-                    "Your scenarios that could not run:",
-                    inner,
-                    section_role(),
-                ));
+                rows.extend(wrapped("Your scenarios that could not run:", inner, bold()));
                 for entry in &v.inputs.features_skipped {
                     if let Some((f, sc, reason)) = harness_core::features::parse_skip(entry) {
                         rows.extend(wrapped(
@@ -5309,6 +5304,83 @@ mod tests {
         out
     }
 
+    /// Where the section role may appear (docs/COCKPIT-WRAPPER-DESIGN.md
+    /// §9.7), by screen, beside the pane titles on every screen's top row
+    /// (Files or Project, the View's title, the chat's) and the frames and
+    /// titles of a dialog, a menu and the help. A pattern ending in `(` is a
+    /// heading with its count (`Units (11)`); one starting `──` the menu's
+    /// separator; any other is the whole heading.
+    const SECTION_ALLOWED: [(&str, &[&str]); 5] = [
+        (
+            "the tool's tree",
+            &["Units (", "Features (", "Speed", "Speed ("],
+        ),
+        ("the Project view's tree", &["Programs (", "Libraries ("]),
+        ("a View", &["Checks"]),
+        (
+            "the help",
+            &[
+                "Keys",
+                "States",
+                "Features",
+                "Speed",
+                "Chat",
+                "What the states mean",
+            ],
+        ),
+        ("a menu", &["──"]),
+    ];
+
+    /// `text` (a run in the section colour) is on [`SECTION_ALLOWED`]; a
+    /// group with nothing in it yet (`Features (none yet)`, `Speed — not
+    /// set up`) is a row, never.
+    fn section_allowed(text: &str) -> bool {
+        // A focused pane's frame shares the colour: its edge is not the run's.
+        let text = text
+            .trim_start_matches(['│', ' '])
+            .trim_end_matches(['│', ' ']);
+        if text.contains("none yet") || text.contains("not set up") {
+            return false;
+        }
+        SECTION_ALLOWED
+            .iter()
+            .flat_map(|(_, patterns)| patterns.iter())
+            .any(|p| {
+                if p.ends_with('(') || p.starts_with("──") {
+                    text.starts_with(p)
+                } else {
+                    text == *p
+                }
+            })
+    }
+
+    #[test]
+    fn the_section_allow_list_says_no_to_rows_and_the_journey() {
+        for ok in [
+            "Units (11)",
+            "Features (7)",
+            "Speed",
+            "Speed (C only)",
+            "Programs (3) · 1 accepted",
+            "Checks",
+            "── uses a model ──",
+        ] {
+            assert!(section_allowed(ok), "{ok}");
+        }
+        for no in [
+            "Features (none yet)",
+            "Speed — not set up",
+            "Step 6 of 8: Test program",
+            "◂ Back to the project view",
+            "▸ C source (12 lines)",
+            "About: u-cache",
+            "Needs attention:",
+            "Scenarios",
+        ] {
+            assert!(!section_allowed(no), "{no}");
+        }
+    }
+
     /// The colour rules on one rendered screen, in `palette`: nothing dims or
     /// blinks, no dark grey, no background; every colour on screen is one of
     /// the palette's roles (in mono: none); every good, bad or attention run
@@ -5492,6 +5564,13 @@ mod tests {
                         starts_line(x) && !next_step,
                         "{}",
                         at("the section colour off a heading or a pane title")
+                    );
+                    // Only where §9.7 allows it: a pane's title (the top
+                    // row) or a heading on the allow-list.
+                    assert!(
+                        y == 0 || section_allowed(text),
+                        "{}",
+                        at("the section colour on what is not a pane title or a group heading")
                     );
                 }
                 if Some(r.fg) == own(Role::Notice) {
