@@ -146,6 +146,17 @@ file exists), the person saves it as any edit, and the proposal goes. The brief 
 syntax. Open from it: rebuild harness-mcp beside the cockpit; the live chat tests once; a live
 proposal on a real program.
 
+## Done (2026-10-20): a readable default
+
+Built from COCKPIT-WRAPPER-DESIGN §9.7 (DECISIONS 2026-10-20, "A readable default"): with no theme
+named, the cockpit asks the terminal for its background colour before the first frame (150 ms,
+read from a second, non-blocking opening of `/dev/tty`; no crate added) and uses the designed
+`dark` or `light` theme; no answer: `COLORFGBG`, else `terminal` as before. `?` says which theme
+is on and why. In dark and light each pane's top row is a title band (the focused one in the
+section colour) with a blank column between the panes, and the section colour is kept for pane
+titles and group headings only (the colour-rules test holds the list). Open from it: the person
+sees the new default on their own terminal; `--theme terminal` gives back the earlier look.
+
 ## The work, in order
 
 1. **The person's own cold-start run.** docs/FIRST-HOUR.md as written (liblzg), then lz4 through

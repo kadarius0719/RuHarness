@@ -90,6 +90,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-10-20 — **The chat can read a test program's hand-off; the terminal theme's sections are bright blue** — the first-request check knows driver attempts; plain blue was navy on black.
 - 2026-10-20 — **Explain anything: the hint line, the explanation card, dialogs in one breath, the chat as a conversation** — every row says what it is in a sentence and a card (`i`); dialogs hold three lines; menus stay narrow; the chat folds its reads.
 - 2026-10-20 — **A model proposes the features and the workloads** — two cockpit-mode harness-mcp tools write a checked proposal beside the person's file; Propose items on the Features and Speed rows; Write opens the proposal as the draft; the brief holds both files' syntax.
+- 2026-10-20 — **A readable default: the theme chosen from the terminal's background, title bands, fewer blue things** — the cockpit asks the terminal for its background and picks dark or light; panes get title bands and a gap; the section colour only on titles and group headings.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -3901,3 +3902,46 @@ same file that is not a plan symbol; a live run will say whether that matters.
 **Open.** Rebuild harness-mcp beside the cockpit (its tool list changed: the out-of-date dialog
 says so otherwise). The brief changed: the live chat tests once, and a live proposal on
 t-benchmark or liblzg to see the chat's scenarios and sentences.
+
+## 2026-10-20 — A readable default: the theme chosen from the terminal's background, title bands, fewer blue things
+
+**Context.** The person, on a green-on-black terminal profile: "the blue is hard to read … default
+to a different theme out of the box, easier to read, with contrasting text, and makes the logical
+separation of each area". The terminal theme hands the colours to the terminal's sixteen, and ANSI
+blue is the one with poor contrast on black on most profiles. The designed dark and light palettes
+were contrast-checked for exactly this, but the cockpit did not know which the page needed. Built
+from docs/COCKPIT-WRAPPER-DESIGN.md §9.7.
+
+**Decided and built.**
+- With no `--theme`, `RUHARNESS_THEME`, cockpit.toml theme or `NO_COLOR`, the cockpit asks the
+  terminal for its background (`ESC ] 11 ; ? BEL`) before the first frame and reads the answer for
+  150 ms: relative luminance under 0.5 is `dark`, else `light`. No answer: `COLORFGBG`'s
+  background, else `terminal` as before. Help's first page names the theme and why.
+- How the tty is read with a timeout, with no crate added and the crate's `forbid(unsafe_code)`
+  kept: `/dev/tty` is opened a second time with the non-blocking flag (`OpenOptionsExt::
+  custom_flags`, the flag's value per platform since `libc` is not a direct dependency), raw mode
+  is on for the exchange, and a short loop reads until the reply ends or the time is up, sleeping
+  2 ms between empty reads. The flag belongs to that one opening, so the descriptor crossterm reads
+  keys from stays blocking; no reader thread is left behind (a blocked thread would steal the first
+  key); a reply begun in time is read to its end (100 ms more at most) and dropped, and whatever
+  else is waiting is read away, so none of it becomes keys. Rejected: a thread doing a blocking
+  read (it outlives the timeout and eats a key), crossterm's event reader (it would parse the
+  reply as keys), and adding `libc` or `nix` for `poll`.
+- In the dark and light themes each pane's top border row is a title band (the panel colour, the
+  title bold in the section colour; the focused pane's band the section colour with the title
+  reversed); the tab strip and the chat's buttons sit on it as chips on the panel colour; one
+  blank column, taken from the View, separates the panes. Terminal and mono keep their frames.
+- The section colour now appears only on pane titles, the tree's group headings, the View's
+  `Checks`, the help's headings and the menu's model line; the colour-rules test holds that list
+  and fails on any other use. The View's other headings are bold; the folded journey line is
+  plain with the stage name bold; `Features (none yet)` and `Speed — not set up` are rows.
+
+**Different from the design.** The help's headings (`Keys`, `States`, …) and the menu's
+`── Uses a model ──` keep the section colour: the design leaves the dialog and the menu unchanged
+and the help is one of those boxes. The project's own row in the tree is bold (it carries a state
+mark), not in the section colour.
+
+**Open.** A terminal that answers later than 150 ms (over a slow ssh link) and had sent nothing
+by then would have its reply read as keys; the design's 150 ms stands until a live case says
+otherwise. The person sees the new default on their own terminal: if dark is still not readable
+there, `--theme terminal` gives back the earlier look.

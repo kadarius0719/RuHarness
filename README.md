@@ -118,8 +118,9 @@ adopt`. Keys, menus and symbols: [docs/TUTORIAL.md](docs/TUTORIAL.md); the walk:
 Flags (`harness-tui --help`): `--target DIR` (default `.`), `--tool ID`, `--harness PATH` (default
 on PATH, else next to the cockpit), `--provider NAME` (repeatable, default `external`; the target
 never chooses it), `--allow-unsandboxed`, `--layout split|stacked`, `--no-mouse`, `--theme
-NAME` (`terminal`, the default, uses your terminal's own colours; `dark` or `light` are designed
-palettes, `mono` has none; also `RUHARNESS_THEME`; `NO_COLOR` picks `mono`; a settings file
+NAME` (`dark` or `light`, designed palettes, the default being the one that fits your terminal's
+background, which the cockpit asks for (else `COLORFGBG`); `terminal` uses your terminal's own
+colours, the earlier look and the default when the background is unknown; `mono` has none; also `RUHARNESS_THEME`; `NO_COLOR` picks `mono`; a settings file
 `cockpit.toml` can keep the theme, change any colour and fix the Files pane's width with `files_width`: [docs/topics/cockpit.md](docs/topics/cockpit.md)), `--no-chat`,
 `--chat-runtime PATH` (the `claude` to run), `--harness-mcp PATH` (default next to the cockpit,
 else on PATH), `--chat-model NAME`. `cargo build` at the root skips it. Without installing,

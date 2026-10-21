@@ -2108,7 +2108,8 @@ one row, "✗ <file>", "did not compile"; "Libraries (n)" only when there are an
 is titled with the folder's name (never the full path) and "n programs found"; line 1 (since
 2026-10-20, docs/COCKPIT-WRAPPER-DESIGN.md §9.4) is the journey line — "Map ✓ · Configure ○ ·
 Accept · then: scan, plan, and each piece" (a done step `✓` in the good colour, the current `○` in
-the accent, later ones in the label colour; under 100 columns "Step 2 of 8: Configure"); line 2
+the accent, later ones in the label colour; under 100 columns "Step 2 of 8: Configure", plain, the
+step's name bold, since docs/COCKPIT-WRAPPER-DESIGN.md §9.7); line 2
 is the Next step, one line "Next: <verb phrase> — <key>" ("Next:" in the accent, the phrase bold):
 "Map the project — Enter"; "Write the build configuration — Enter, it is the first item" (a
 guess; "— Enter, or Ask for a proposal in the chat" while the chat can be used); "Write the build
@@ -2206,6 +2207,17 @@ black, dim in mono; no bold, no state colours, no reverse), and the box's cells 
 `panel`'s background (237 dark, 254 light, none in terminal and mono): its frame and title in the
 section role, bold, its `Command:` line in the label role, only the focused button reversed (the
 safe one plain, the armed one in the accent). Both roles may be set in `cockpit.toml`'s `[colors]`.
+Since 2026-10-20 (docs/COCKPIT-WRAPPER-DESIGN.md §9.7) the theme, when none is named (`--theme`,
+`RUHARNESS_THEME`, `cockpit.toml`, `NO_COLOR`), is chosen from the terminal's answer to
+`ESC ] 11 ; ? BEL`, written once raw mode is on and read for 150 ms from the tty: relative
+luminance under 0.5 → `dark`, else `light`; no answer → `COLORFGBG`'s background (0–6 or 8 dark,
+else light), else `terminal`; Help's first page says "theme: <name> (<why>)". In `dark` and
+`light` each pane's top border row is a title band (the panel's background, the title bold in the
+section role; the focused pane's band the section colour with the title reversed; controls on it
+on the panel) and one blank column, taken from the View, separates the panes; the section role
+appears only on the pane titles, the tree's group headings ("Units (n)", "Features (n)", "Speed",
+"Programs (n)", "Libraries (n)"), the View's "Checks", the help's headings and the menu's model
+line.
 With the chat off (`--no-chat`) the Next line and the greyed model items name the command line's
 step, spelled for the tool (`harness gen-driver <unit> --tool <id>`, `harness migrate <unit>
 --no-promote --tool <id>`). The Project view prefers a tool with work waiting (Rust to accept, an
