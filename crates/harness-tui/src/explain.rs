@@ -584,10 +584,22 @@ fn function(app: &App, p: &str, name: &str) -> Explained {
 fn units(app: &App) -> Explained {
     let (pieces, done, stay) = piece_counts(app);
     let n = app.snapshot.units.len();
-    let hint = fit(&[format!(
+    let all = format!(
         "The program's pieces: {}, each a group of C functions that move to Rust together.",
         plural(n, "piece", "pieces")
-    )]);
+    );
+    // Why some do not move is said here, not on the Next line.
+    let hint = if stay > 0 {
+        fit(&[
+            format!(
+                "The program's pieces: {pieces} can move to Rust, {done} of them done; {stay} \
+                 call other pieces, so in this version they stay C."
+            ),
+            all,
+        ])
+    } else {
+        fit(&[all])
+    };
     let mut card = vec![
         "The plan cuts the C into pieces: functions that call each other move together.".into(),
         format!("{pieces} can move now; {done} of them are in Rust."),

@@ -3835,5 +3835,20 @@ something means — like how that new file for checksum was created, why a dupli
   piece that stays C included, read as a promise never kept. The row (and its selection) exists
   only when the unit's crate folder does.
 
+**And two more, from the person's screenshots of a tool whose movable pieces are all done:**
+- **The Project view with every program a tool** said `nothing here — every program is a tool;
+  open one`, its rows only `accepted`. The Next now names the tool with the most to do — not
+  scanned yet, then pieces to move, then features not written — as `Open tool t-lzg — Enter on
+  its row (not scanned yet)`; only when every tool is that far: `Every program is as far as this
+  version goes — write features and workloads for what matters` (over the 80 characters of §9.3:
+  the person's words, kept whole). Each accepted tool's row says its progress where the state word
+  is (`not scanned yet`, `2/4 in Rust`, `done`), read from its plan as its card already did; the
+  features file's presence is read the same cheap way.
+- **The tool's Next with every movable piece done** was two lines of prose. It is one line in the
+  `verb — key` form: `Write your features — Enter on the Features row`, then `Name a workload for
+  Speed — Enter on the Speed row`, then `Done as far as this version goes — 2 pieces stay C`
+  (`— every piece is in Rust` when none stays C). Why the others stay C moved to the Units row's
+  hint and card ("… 7 call other pieces, so in this version they stay C").
+
 **Not done here; the person's to run once:** the live chat tests (the brief and the chat's lines
 changed).

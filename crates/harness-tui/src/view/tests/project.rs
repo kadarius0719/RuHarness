@@ -1053,15 +1053,18 @@ fn the_next_step_is_one_line_for_each_rule() {
             "Write the build configuration — Enter (or harness project map --adopt)".into(),
             "Accept t-lzg — Enter on its row".into(),
             "Accept t-lzg — Enter on its row".into(),
-            "Open tool l-checksum — Enter on its row".into(),
+            "Open tool l-checksum — Enter on its row (not scanned yet)".into(),
             "Open tool t-lzg — Enter on its row".into(),
             "Map the project again — Enter".into(),
         ]
     );
 }
 
-/// Every program that can be a tool is one: nothing is left on the
-/// project; and a map without libraries has no Libraries group.
+/// Every program that can be a tool is one: the Next names the tool with
+/// the most to do (not scanned yet, then pieces to move, then features not
+/// written), each tool's row says its progress; only when every tool is as
+/// far as this version goes does the line say so. A map without libraries
+/// has no Libraries group.
 #[test]
 fn every_program_a_tool_leaves_nothing_here() {
     let (_tmp, root) = project("all-tools");
@@ -1077,11 +1080,60 @@ fn every_program_a_tool_leaves_nothing_here() {
     let mut app = cockpit(&root);
     assert_eq!(
         app.project_next().unwrap().text,
-        "nothing here — every program is a tool; open one"
+        "Open tool t-lzg — Enter on its row (not scanned yet)"
     );
     let screen = text_of_render(&mut app);
     assert!(screen.contains("│Programs (4) "), "{screen}");
     assert!(!screen.contains("Libraries"), "{screen}");
+    assert!(
+        row_with(&screen, "✓ t-lzg").contains("not scanned yet"),
+        "{screen}"
+    );
+    // Planned, its one piece still to move: that tool comes before one
+    // whose features are not written.
+    let plan = |id: &str, status: &str| {
+        let dir = harness_core::config::tool_dir(&root, id);
+        std::fs::write(
+            dir.join("plan.toml"),
+            format!(
+                "schema_version = 1\ntarget = \"{id}\"\n\n[[unit]]\nid = \"u-a\"\nstatus = \
+                 \"{status}\"\nfiles = [\"a.c\"]\nsource_hash = \"blake3:00\"\nsymbols = \
+                 [\"a\"]\ninterface = []\ndepends_on = []\ntest_strategy = \"\"\n\
+                 done_criteria = \"\"\n"
+            ),
+        )
+        .unwrap();
+    };
+    plan("t-lzg", "verified");
+    plan("t-unlzg", "pending");
+    app.reload_project();
+    assert_eq!(
+        app.project_next().unwrap().text,
+        "Open tool t-unlzg — Enter on its row (1 piece to move)"
+    );
+    let screen = text_of_render(&mut app);
+    assert!(
+        row_with(&screen, "✓ t-unlzg").contains("0/1 in Rust"),
+        "{screen}"
+    );
+    assert!(row_with(&screen, "✓ t-lzg").contains("done"), "{screen}");
+    plan("t-unlzg", "verified");
+    app.reload_project();
+    assert_eq!(
+        app.project_next().unwrap().text,
+        "Open tool t-lzg — Enter on its row (its features are not written)"
+    );
+    for id in ["t-lzg", "t-unlzg"] {
+        let dir = harness_core::config::tool_dir(&root, id).join("features");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("features.toml"), "schema_version = 1\n").unwrap();
+    }
+    app.reload_project();
+    assert_eq!(
+        app.project_next().unwrap().text,
+        "Every program is as far as this version goes — write features and workloads for what \
+         matters"
+    );
 }
 
 fn text_of_render(app: &mut App) -> String {

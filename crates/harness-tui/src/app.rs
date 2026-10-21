@@ -4092,33 +4092,35 @@ impl App {
         {
             return None;
         }
-        let done = if states
+        // One line, `verb — key` (2026-10-20): why the others stay C is
+        // the Units row's hint and card, not this line.
+        let stay = states
             .iter()
-            .all(|(_, s)| in_rust(s) || **s == UnitState::Blocked)
-        {
-            "Every unit is in Rust and checked"
-        } else {
-            "Every unit that can move to Rust is in Rust and checked (the others call other units)"
-        };
+            .filter(|(_, s)| !in_rust(s) && **s != UnitState::Blocked)
+            .count();
         if matches!(self.features.group, featmap::Group::NoFile)
             && !self.features.no_single_main
             && self.snapshot.facts.is_some()
         {
             return say(
-                format!(
-                    "{done} — write your features, to check what a person sees: press Enter \
-                     and choose Write your features file"
-                ),
+                "Write your features — Enter on the Features row".into(),
                 Some(Action::EditFeatures),
             );
         }
         if matches!(self.speed.group, crate::speed::Group::NoFile) {
             return say(
-                format!("{done} — measure its speed: choose Speed, under Features in the tree"),
+                "Name a workload for Speed — Enter on the Speed row".into(),
                 None,
             );
         }
-        say(format!("{done} — nothing to do"), None)
+        say(
+            match stay {
+                0 => "Done as far as this version goes — every piece is in Rust".into(),
+                1 => "Done as far as this version goes — 1 piece stays C".into(),
+                n => format!("Done as far as this version goes — {n} pieces stay C"),
+            },
+            None,
+        )
     }
 
     // ----- keys ---------------------------------------------------------------
@@ -5529,14 +5531,24 @@ impl App {
         }
     }
 
+    /// An accepted tool's word on its row: its progress, read cheaply from
+    /// its plan and tries ("2/4 in Rust", "not scanned yet", "done").
+    fn tool_word(&self, id: &str) -> String {
+        self.project
+            .as_ref()
+            .and_then(|p| p.progress.get(id))
+            .map_or_else(|| "accepted".into(), |p| p.row_word())
+    }
+
     /// The glyph and word of the node `sel` (for rows, titles and tests).
     pub fn node_label(&self, sel: &Selection) -> (&'static str, String) {
         match sel {
             Selection::MapProject | Selection::ProjectHome => ("", String::new()),
             // A tool the map does not name.
-            Selection::Tool(_) => ("✓", "accepted".into()),
+            // An accepted tool's row carries its progress (2026-10-20).
+            Selection::Tool(id) => ("✓", self.tool_word(id)),
             Selection::Program(id) => match self.project_offered(id) {
-                Some(_) if self.project_tools().contains(id) => ("✓", "accepted".into()),
+                Some(_) if self.project_tools().contains(id) => ("✓", self.tool_word(id)),
                 Some(o) => (o.state.glyph(), o.state.words().into()),
                 None => ("", String::new()),
             },
@@ -7257,9 +7269,16 @@ pub(crate) mod tests {
         let all_green = app.next_step().unwrap();
         assert_eq!(
             all_green.text,
-            "Every unit is in Rust and checked — measure its speed: choose Speed, under \
-             Features in the tree"
+            "Name a workload for Speed — Enter on the Speed row"
         );
+        // Speed set up too: one line, nothing left in this version.
+        let speed = app.speed.group.clone();
+        app.speed.group = crate::speed::Group::NotYetRun;
+        assert_eq!(
+            app.next_step().unwrap().text,
+            "Done as far as this version goes — every piece is in Rust"
+        );
+        app.speed.group = speed;
         assert_eq!(all_green.action, None);
         let lib = app.config.target.join(LIB_C);
         let c = std::fs::read_to_string(&lib).unwrap();

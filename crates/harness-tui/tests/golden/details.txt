@@ -1,10 +1,10 @@
 ┌ Files ───────────────────────────────┐┌ harness-tui-gdetails-0000000000 · 1 of 1 C file in Rust ─────────────────────┐
 │▾ harness-tui-gdetails-0000000000 ✓1/1││All 8 steps done ✓                                                            │
-│  ▾ Units (1)                         ││Next: Every unit is in Rust and checked — measure its speed: choose Speed,    │
-│    ▸ ✓ u-lib                     done││under Features in the tree                                                    │
-│    Features (none yet)               ││                                                                              │
-│    Speed — not set up                ││2 files scanned                                                               │
-│  ▸ test_case/                    ✓1/1││Units (1): 1 ✓ done                                                           │
+│  ▾ Units (1)                         ││Next: Name a workload for Speed — Enter on the Speed row                      │
+│    ▸ ✓ u-lib                     done││                                                                              │
+│    Features (none yet)               ││2 files scanned                                                               │
+│    Speed — not set up                ││Units (1): 1 ✓ done                                                           │
+│  ▸ test_case/                    ✓1/1││                                                                              │
 │                                      ││                                                                              │
 │                                      ││                                                                              │
 │                                      ││                                                                              │

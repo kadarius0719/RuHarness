@@ -2096,8 +2096,15 @@ guess; "— Enter, or Ask for a proposal in the chat" while the chat can be used
 configuration — Enter (or harness project map --adopt)" (a configuration that came with the
 project); "Map the project again — Enter" (a configuration written since the map); "Open tool
 <id> — Enter on its row" (right after an Accept); "Accept <id> — Enter on its row, it asks for
-the file" (a decision); "Accept <id> — Enter on its row" (ready); "nothing here — every program
-is a tool; open one". Then a card for the selection: its id (bold) and state; its file and what
+the file" (a decision); "Accept <id> — Enter on its row" (ready); with every program a tool, the
+tool with the most to do, "Open tool <id> — Enter on its row (not scanned yet)" (then "(N pieces
+to move)", then "(its features are not written)"), and only when every tool is that far "Every
+program is as far as this version goes — write features and workloads for what matters"
+(2026-10-20; an accepted tool's row says its progress where the state word is: "not scanned
+yet", "2/4 in Rust", "done"). On a tool's screen with every piece that can move done, the Next is
+one line: "Write your features — Enter on the Features row", then "Name a workload for Speed —
+Enter on the Speed row", then "Done as far as this version goes — N pieces stay C" (why they stay
+is the Units row's hint and card). Then a card for the selection: its id (bold) and state; its file and what
 the map knows it is and why ("src/tools/lzg.c · looks like a tool (it is not in a test, example or
 benchmark folder)", "looks like a library (nothing in it has a main)"; only the path once
 accepted); a model's label from the
