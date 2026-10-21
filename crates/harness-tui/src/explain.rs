@@ -652,6 +652,7 @@ fn cause_words(c: &Cause) -> &'static str {
         Cause::PromotionInterrupted { .. } => "an Accept was interrupted",
         Cause::SourceChanged => "its C changed since it was planned",
         Cause::StaleVerdict => "the judge's check is out of date",
+        Cause::CalleeChanged => "the judge's check is out of date: a piece it calls changed",
         Cause::ChangedOutside => "its Rust was changed outside the cockpit",
         Cause::NoEvidence => "the judge's check of its Rust is missing",
         Cause::MadeElsewhere { .. } => "the judge's check was made on another computer",

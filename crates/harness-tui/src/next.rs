@@ -52,6 +52,7 @@ pub fn cause_action(cause: &Cause) -> Option<Action> {
         Cause::Contradiction
         | Cause::PromotionInterrupted { .. }
         | Cause::StaleVerdict
+        | Cause::CalleeChanged
         | Cause::MadeElsewhere { .. } => Some(Action::Act(Act::Verify)),
         Cause::SourceChanged => Some(Action::Act(Act::Plan)),
         Cause::ChangedOutside | Cause::NoEvidence => None,

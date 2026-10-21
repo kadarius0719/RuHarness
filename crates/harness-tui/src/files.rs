@@ -154,6 +154,10 @@ pub enum Cause {
     SourceChanged,
     /// The verdict no longer matches the crate or driver ("Re-check").
     StaleVerdict,
+    /// The verdict is out of date only because a piece the unit calls
+    /// changed — its Rust was accepted, or its code changed since
+    /// (docs/BEYOND-LEAVES-DESIGN.md §4) ("Re-check").
+    CalleeChanged,
     /// The crate matches neither a recorded attempt's candidate nor what the
     /// oracle last judged.
     ChangedOutside,
@@ -179,6 +183,7 @@ impl Cause {
             Cause::PromotionInterrupted { .. } => "an Accept was interrupted",
             Cause::SourceChanged => "its C changed since it was planned",
             Cause::StaleVerdict => "its verdict is out of date",
+            Cause::CalleeChanged => "its verdict is out of date (a piece it calls changed)",
             Cause::ChangedOutside => "its Rust changed outside the harness",
             Cause::NoEvidence => "its verdict is missing",
             Cause::MadeElsewhere { .. } => "its verdict was made on another computer, not here yet",
@@ -195,6 +200,9 @@ impl Cause {
             }
             Cause::SourceChanged => "its C changed since the plan — Refresh the plan",
             Cause::StaleVerdict => "verdict out of date — Re-check with the judge",
+            Cause::CalleeChanged => {
+                "out of date (a piece it calls changed) — Re-check with the judge"
+            }
             Cause::ChangedOutside => {
                 "its Rust changed outside the harness — restore it, or record it (harness \
                  override)"
@@ -225,6 +233,9 @@ impl Cause {
                     .into()
             }
             Cause::StaleVerdict => "its verdict is out of date — Re-check it".into(),
+            Cause::CalleeChanged => {
+                "its verdict is out of date (a piece it calls changed) — Re-check it".into()
+            }
             Cause::ChangedOutside => {
                 "changed outside the harness — restore it, or record it with `harness \
                  override` (see Help)"
@@ -649,6 +660,10 @@ pub fn unit_state(unit: &UnitView) -> UnitState {
         });
     }
     if present && !r.verdict.stale.is_empty() {
+        // Out of date only because a piece it calls changed: said so.
+        if r.verdict.stale.iter().all(|s| s == "dependencies") {
+            return UnitState::Attention(Cause::CalleeChanged);
+        }
         return UnitState::Attention(Cause::StaleVerdict);
     }
     if r.contradiction {
@@ -1332,6 +1347,43 @@ mod tests {
         assert_eq!(
             t.read().1.rollup("").words(),
             "0 of 1 C file in Rust · 1 more verified, origin not recorded"
+        );
+    }
+
+    /// A verdict out of date only because a piece the unit calls changed
+    /// says so, with Re-check as its step (docs/BEYOND-LEAVES-DESIGN.md §4):
+    /// here the plan learns that u-lib calls a new piece, so the verdict
+    /// (which linked none) no longer matches the program as it stands.
+    #[test]
+    fn a_verdict_out_of_date_because_a_callee_changed_says_so() {
+        let t = Copy::of(CASE, "callee-changed");
+        t.write("test_case/src/dep.c", "int dep(void) { return 1; }\n");
+        t.scanned("test_case/src/dep.c", &[("dep", "public", 1)]);
+        t.edit("migration/plan.toml", |s| {
+            format!(
+                "{}\n[[unit]]\nid = \"u-dep\"\nstatus = \"pending\"\n\
+                 files = [\"test_case/src/dep.c\"]\nsymbols = [\"dep\"]\n",
+                s.replace("depends_on = []", "depends_on = [\"u-dep\"]")
+            )
+        });
+        let (snap, files) = t.read();
+        let i = snap
+            .units
+            .iter()
+            .position(|u| u.unit.id == "u-lib")
+            .unwrap();
+        assert_eq!(snap.units[i].report.verdict.stale, ["dependencies"]);
+        assert_eq!(
+            files.units[i].state,
+            UnitState::Attention(Cause::CalleeChanged)
+        );
+        assert_eq!(
+            Cause::CalleeChanged.short(),
+            "out of date (a piece it calls changed) — Re-check with the judge"
+        );
+        assert_eq!(
+            crate::next::cause_action(&Cause::CalleeChanged),
+            Some(crate::menu::Action::Act(crate::app::Act::Verify))
         );
     }
 
