@@ -3823,5 +3823,17 @@ something means — like how that new file for checksum was created, why a dupli
   see the continuation; that test now waits for the new words.
 - The project dialogs say "decision", not "held choice".
 
+**Two more, from the person's screenshots the same day:**
+- **A pause is not a failure in the details either.** A run that paused for an answer ended its
+  details with `error (awaiting): …` in red and `failed (exit 1): awaiting response: …` while the
+  status line said `Paused: the chat answers turn 1`. The `awaiting` error event is now a plain
+  line (`awaiting: …`), and the details end in one line in the notice colour: `paused: waiting
+  for the chat's answer to turn 1 (the reply goes to <response file>)` for a chat's run, `paused:
+  waiting for your answer: <file> — write the reply there, then …` for the person's own (the
+  how-to kept). The command's own lines above it are unchanged.
+- **A unit's crate row only once its Rust exists.** `crate  no Rust yet` under every unit, a
+  piece that stays C included, read as a promise never kept. The row (and its selection) exists
+  only when the unit's crate folder does.
+
 **Not done here; the person's to run once:** the live chat tests (the brief and the chat's lines
 changed).

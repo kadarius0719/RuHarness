@@ -424,6 +424,24 @@ fn the_outcome_waits_for_the_read_after_the_reap() {
         "the permission granted"
     );
     let _ = a.on_child_exit(ExitStatus::from_raw(1 << 8));
+    // The details end the pause in one plain line: never "error", never
+    // "failed" (the person's screenshot, 2026-10-20).
+    let run = a.run.as_ref().unwrap();
+    assert_eq!(
+        run.exit.as_deref(),
+        Some(
+            "paused: waiting for the chat's answer to turn 1 (the reply goes to \
+             /t/units/u-cache/traces/chat/0123abcd.response.json)"
+        )
+    );
+    assert!(
+        run.lines
+            .iter()
+            .all(|l| !l.text.starts_with("error") && l.tone != crate::app::Tone::Bad),
+        "{:?}",
+        run.lines
+    );
+    assert!(run.lines.iter().any(|l| l.text == "awaiting: waiting"));
     assert!(no_denial(&log, "r1"), "not before the read");
     assert!(a.load_now(), "the read after the reap");
     let m = wait_denial(&log, "r1");

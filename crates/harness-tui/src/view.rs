@@ -4292,12 +4292,16 @@ fn details_rows(app: &App, width: usize) -> Vec<Line<'static>> {
                 }
             }
             if let Some(exit) = &run.exit {
-                let t = if exit == "exit 0" {
-                    Tone::Good
+                // A pause is a state, said in the notice colour (§9.5,
+                // step 8): never a failure.
+                let style = if exit.starts_with("paused: ") {
+                    notice()
+                } else if exit == "exit 0" {
+                    tone(Tone::Good)
                 } else {
-                    Tone::Warn
+                    tone(Tone::Warn)
                 };
-                lines.extend(wrapped(exit, width, tone(t)));
+                lines.extend(wrapped(exit, width, style));
             }
         }
     }

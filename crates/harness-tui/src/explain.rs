@@ -1296,7 +1296,10 @@ mod tests {
         for u in &app.snapshot.units {
             let id = u.unit.id.clone();
             all.push(Selection::Unit(id.clone()));
-            all.push(Selection::Crate(id.clone()));
+            // A crate row is shown only when its Rust exists.
+            if u.crate_dir.is_some() {
+                all.push(Selection::Crate(id.clone()));
+            }
             for a in &u.attempts {
                 all.push(Selection::Attempt(id.clone(), a.record.id.clone()));
             }
@@ -1332,6 +1335,30 @@ mod tests {
                 check(&app, sel);
             }
         }
+    }
+
+    /// The crate row is shown only for a unit whose Rust exists — never
+    /// "no Rust yet", never under a piece that stays C.
+    #[test]
+    fn a_crate_row_only_when_its_rust_exists() {
+        let mut app = app_of("targets/zopfli", "explain-crate-row");
+        for id in ["u001-katajainen", "u-lz77", "u-cache"] {
+            app.expansion.set(&Selection::Unit(id.into()), true);
+        }
+        app.rebuild_rows();
+        let crates: Vec<Selection> = app
+            .rows
+            .iter()
+            .filter_map(|r| r.selection().cloned())
+            .filter(|s| matches!(s, Selection::Crate(_)))
+            .collect();
+        assert_eq!(crates, [Selection::Crate("u001-katajainen".into())]);
+        assert!(!crate::tree::exists(
+            &app.snapshot,
+            &app.files,
+            &app.features,
+            &Selection::Crate("u-lz77".into())
+        ));
     }
 
     #[test]

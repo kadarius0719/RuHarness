@@ -459,7 +459,10 @@ fn a_hand_off_pause_waits_for_the_answer_and_never_fails() {
         Some(&*format!("Ask a model — {words}"))
     );
     assert!(app.last_waiting);
-    assert_eq!(app.run.as_ref().unwrap().exit.as_deref(), Some(&*words));
+    assert_eq!(
+        app.run.as_ref().unwrap().exit.as_deref(),
+        Some(&*format!("paused: {words}"))
+    );
     let next = app.project_next().unwrap();
     assert_eq!(next.text, words);
     assert_eq!(

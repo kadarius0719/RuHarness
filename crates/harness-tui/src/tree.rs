@@ -313,7 +313,12 @@ pub fn rows(
                 let open = expansion.is_open(&sel);
                 push_node(&mut rows, 2, sel, true, open);
                 if open {
-                    push_node(&mut rows, 3, Selection::Crate(id.clone()), false, false);
+                    // Its Rust, only once it exists: a row saying "no Rust
+                    // yet" read as a promise, and never kept for a piece
+                    // that stays C (2026-10-20).
+                    if u.crate_dir.is_some() {
+                        push_node(&mut rows, 3, Selection::Crate(id.clone()), false, false);
+                    }
                     for a in &u.attempts {
                         push_node(
                             &mut rows,
@@ -398,7 +403,8 @@ pub fn exists(
             .file(p)
             .is_some_and(|f| f.functions.iter().any(|func| &func.name == name)),
         Selection::Units => !snapshot.units.is_empty(),
-        Selection::Unit(id) | Selection::Crate(id) => snapshot.unit(id).is_some(),
+        Selection::Unit(id) => snapshot.unit(id).is_some(),
+        Selection::Crate(id) => snapshot.unit(id).is_some_and(|u| u.crate_dir.is_some()),
         Selection::Attempt(u, a) => snapshot.unit(u).and_then(|u| u.attempt(a)).is_some(),
         Selection::Features => true,
         Selection::Feature(id) => features.feature(id).is_some(),

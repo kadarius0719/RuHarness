@@ -1884,7 +1884,12 @@ impl App {
                 message,
                 holder,
             } => {
-                push(run, Tone::Bad, format!("error ({kind}): {message}"));
+                // A hand-off's pause is not an error (its words stay, plain).
+                if kind == "awaiting" {
+                    push(run, Tone::Dim, format!("awaiting: {message}"));
+                } else {
+                    push(run, Tone::Bad, format!("error ({kind}): {message}"));
+                }
                 if let Some(h) = holder {
                     push(
                         run,
@@ -2048,8 +2053,32 @@ impl App {
             if run.act.project().is_some() {
                 self.project_waiting = run.act.project().zip(waiting.clone());
             }
+            // The details end a pause in one plain line, never "failed".
+            let paused = match (status.code(), &signal) {
+                (Some(1), None) => run
+                    .narrator
+                    .awaited_path()
+                    .map(str::to_string)
+                    .or_else(|| awaiting_file(&run.lines))
+                    .map(|file| match &run.pending.chat {
+                        Some(_) => format!(
+                            "paused: waiting for the chat's answer to turn {} (the reply goes \
+                             to {file})",
+                            run.collect.turn.map_or("?".into(), |t| t.to_string())
+                        ),
+                        // The person's own hand-off: what to do with it too.
+                        None => format!(
+                            "paused: {}",
+                            waiting
+                                .clone()
+                                .unwrap_or_else(|| format!("waiting for your answer — {file}"))
+                        ),
+                    }),
+                _ => None,
+            };
             let text = match (status.code(), &signal) {
                 (_, Some(sig)) => format!("interrupted ({sig})"),
+                _ if paused.is_some() => paused.clone().unwrap_or_default(),
                 _ if waiting.is_some() => waiting.clone().unwrap_or_default(),
                 (Some(code), _) if !run.saw_result && run.act.project().is_none() => {
                     format!("exited without result (exit {code})")
@@ -2059,7 +2088,9 @@ impl App {
                 (Some(code), _) => with(format!("failed (exit {code})")),
                 (None, None) => "ended".into(),
             };
-            failed = waiting.is_none() && (status.code() != Some(0) || problem.is_some());
+            failed = waiting.is_none()
+                && paused.is_none()
+                && (status.code() != Some(0) || problem.is_some());
             run.exit = Some(text);
             self.last = Some(run.narrator.last(
                 status.code(),
@@ -6833,7 +6864,7 @@ pub(crate) mod tests {
             .as_ref()
             .and_then(|r| r.exit.clone())
             .unwrap_or_default();
-        assert!(exit.starts_with(&waits), "{exit}");
+        assert!(exit.starts_with(&format!("paused: {waits}")), "{exit}");
         attempt(&mut app, awaited);
         assert_eq!(
             app.node_label(&app.selection.clone()).1,
