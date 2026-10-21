@@ -368,7 +368,10 @@ impl<W: Write> Server<W> {
             }
             // The chat's proposal of the person's features or workloads
             // (cockpit mode): checked and written here, one file only.
-            "harness_features_propose" | "harness_workloads_propose" => {
+            "harness_features_propose"
+            | "harness_workloads_propose"
+            | "harness_features_file"
+            | "harness_workloads_file" => {
                 let (structured, is_error) = match self.propose_tool(tool_name, &args) {
                     Ok(v) => (v, false),
                     Err(refusal) => (refusal.to_value(), true),
@@ -473,7 +476,15 @@ impl<W: Write> Server<W> {
     /// server's tool (docs/COCKPIT-WRAPPER-DESIGN.md §9.6): cockpit mode
     /// only, a tool open, a ledger made here.
     fn propose_tool(&self, tool: &str, args: &Map<String, Value>) -> Result<Value, Refusal> {
-        let Some(which) = crate::propose::Which::of_tool(tool).filter(|_| self.cfg.cockpit) else {
+        let reading = crate::propose::reads(tool);
+        if reading.is_some() && !self.cfg.cockpit {
+            return Err(Refusal::refused(
+                "the person's file is read for the cockpit chat's fix: this server does not \
+                 offer it",
+            ));
+        }
+        let which = reading.or_else(|| crate::propose::Which::of_tool(tool));
+        let Some(which) = which.filter(|_| self.cfg.cockpit) else {
             return Err(Refusal::refused(
                 "proposals are the cockpit chat's: this server does not take them",
             ));
@@ -489,6 +500,9 @@ impl<W: Write> Server<W> {
         let root = self.cfg.target.clone();
         self.adopted(&root)?;
         let ledger = self.cfg.ledger_for(&root);
+        if reading.is_some() {
+            return crate::propose::person_file(&root, &ledger, which).map_err(Refusal::refused);
+        }
         let ledger_rel = ledger
             .dir()
             .strip_prefix(&root)
@@ -1118,7 +1132,9 @@ mod tests {
                 "harness_map_questions",
                 "harness_map_answer",
                 "harness_features_propose",
-                "harness_workloads_propose"
+                "harness_workloads_propose",
+                "harness_features_file",
+                "harness_workloads_file"
             ]
         );
         assert!(instructions.contains(tools::MAP_RULE));
@@ -1145,6 +1161,8 @@ mod tests {
         assert_eq!(params("harness_map_answer"), ["batch", "model", "text"]);
         assert_eq!(params("harness_features_propose"), ["model", "text"]);
         assert_eq!(params("harness_workloads_propose"), ["model", "text"]);
+        assert!(params("harness_features_file").is_empty());
+        assert!(params("harness_workloads_file").is_empty());
         for t in listed {
             // The map answer names the model that answers: the advice is
             // recorded as its (the cockpit checks it is the chat's).
@@ -1348,6 +1366,89 @@ mod tests {
             json!({"model": "claude-opus-5-5", "text": crate::propose::tests::FEATURES}),
         );
         assert_eq!(r["error"]["code"], -32602, "{r}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The chat's fix (docs/FEATURES-DESIGN.md §14.3): in cockpit mode
+    /// `harness_features_file` gives the person's features file as it is —
+    /// none yet, then its text, valid or not — conforming to its
+    /// outputSchema; the Project view refuses; a blind server does not have
+    /// the tool at all.
+    #[test]
+    fn the_cockpits_chat_reads_the_features_file_it_fixes() {
+        let root = crate::propose::tests::target("file");
+        let args: Vec<String> = ["--cockpit", "--target", root.to_str().unwrap()]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let mut cfg = policy::parse_args(&args).unwrap().unwrap();
+        cfg.project_form = false;
+        let mut s = Server::new(
+            cfg.clone(),
+            Vec::new(),
+            ChildSlot::default(),
+            Gate::default(),
+        );
+        let all = s.tools.clone();
+        let schema = |name: &str| all.iter().find(|t| t.name == name).unwrap().output_schema();
+        let r = call(&mut s, 1, "harness_features_file", json!({}));
+        assert_eq!(r["result"]["isError"], false, "{r}");
+        tools::conforms(&schema("harness_features_file"), structured(&r)).unwrap();
+        assert_eq!(structured(&r)["exists"], false);
+        assert_eq!(structured(&r)["text"], "");
+        let ledger = harness_core::ledger::Ledger::new(&root);
+        std::fs::create_dir_all(harness_core::features::features_dir(&ledger)).unwrap();
+        // A file that does not validate is what a fix is for: given as is.
+        let text = format!(
+            "{}\n[[scenario]]\nfeature = \"nope\"\n",
+            crate::propose::tests::FEATURES
+        );
+        std::fs::write(harness_core::features::features_path(&ledger), &text).unwrap();
+        let r = call(&mut s, 2, "harness_features_file", json!({}));
+        assert_eq!(r["result"]["isError"], false, "{r}");
+        tools::conforms(&schema("harness_features_file"), structured(&r)).unwrap();
+        assert_eq!(structured(&r)["exists"], true);
+        assert_eq!(structured(&r)["text"], text.as_str());
+        assert_eq!(structured(&r)["file"], "migration/features/features.toml");
+        assert!(structured(&r)["next"]
+            .as_str()
+            .unwrap()
+            .contains("harness_features_propose"));
+        // Over the file's own cap: refused, not cut.
+        std::fs::write(
+            harness_core::features::features_path(&ledger),
+            "#".repeat(64 * 1024 + 1),
+        )
+        .unwrap();
+        let r = call(&mut s, 3, "harness_features_file", json!({}));
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        // The Project view: no tool open, refused.
+        let mut project = cfg.clone();
+        project.project_form = true;
+        let mut s = Server::new(project, Vec::new(), ChildSlot::default(), Gate::default());
+        let r = call(&mut s, 4, "harness_features_file", json!({}));
+        assert_eq!(structured(&r)["error"]["kind"], "no-tool", "{r}");
+        // A blind (standalone) server has no such tool.
+        let mut s = server(&["external"]);
+        let r = call(&mut s, 5, "harness_features_file", json!({}));
+        assert_eq!(r["error"]["code"], -32602, "{r}");
+        let r = call(&mut s, 6, "harness_workloads_file", json!({}));
+        assert_eq!(r["error"]["code"], -32602, "{r}");
+        // The workloads file, the same way.
+        let mut s = Server::new(cfg, Vec::new(), ChildSlot::default(), Gate::default());
+        let r = call(&mut s, 7, "harness_workloads_file", json!({}));
+        assert_eq!(structured(&r)["exists"], false, "{r}");
+        std::fs::create_dir_all(harness_core::perf::perf_dir(&ledger)).unwrap();
+        std::fs::write(
+            harness_core::perf::workloads::workloads_path(&ledger),
+            crate::propose::tests::WORKLOADS,
+        )
+        .unwrap();
+        let r = call(&mut s, 8, "harness_workloads_file", json!({}));
+        tools::conforms(&schema("harness_workloads_file"), structured(&r)).unwrap();
+        assert_eq!(structured(&r)["kind"], "workloads");
+        assert_eq!(structured(&r)["file"], "migration/perf/workloads.toml");
+        assert_eq!(structured(&r)["text"], crate::propose::tests::WORKLOADS);
         let _ = std::fs::remove_dir_all(&root);
     }
 

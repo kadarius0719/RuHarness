@@ -612,10 +612,23 @@ fn map_inner(
     for (i, scenario) in features.scenarios.iter().enumerate() {
         let argv = scenario.argv();
         let args: Vec<&str> = argv.iter().map(String::as_str).collect();
-        let sample = scenario.input.map(|s| (s.file_name(), s.bytes()));
-        let input = sample
+        // The input's bytes, read once with the snapshot (§14.1): a file
+        // the run cannot use marks the scenario, and the others still run.
+        let bytes = match features.input_bytes(scenario) {
+            None => None,
+            Some(Ok(bytes)) => Some(bytes),
+            Some(Err(why)) => {
+                let record = ScenarioRecord::input_unusable(&scenario.feature, &scenario.id, why);
+                progress.scenario(&record, i + 1, of);
+                records.push(record);
+                continue;
+            }
+        };
+        let input = scenario
+            .input
             .as_ref()
-            .map(|(name, bytes)| (*name, bytes.as_slice()));
+            .zip(bytes.as_deref())
+            .map(|(i, bytes)| (i.file_name(), bytes));
         let run = |bin: &Path, read: bool| -> Result<ScenarioRun, Error> {
             place(bin, &run_path)?;
             let notes = NotesFile {

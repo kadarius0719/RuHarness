@@ -17,6 +17,7 @@ mod adopt_offer;
 pub mod asks;
 mod connect;
 pub mod features_edit;
+pub mod fix;
 mod project_view;
 pub mod propose;
 pub mod speed_acts;
@@ -3863,6 +3864,12 @@ impl App {
                 } else {
                     features_edit::DraftKind::Features
                 })
+            }
+            Action::FixFile { .. } => {
+                if self.chat_connected() {
+                    self.chat_ask_fix();
+                }
+                Command::None
             }
         }
     }

@@ -44,6 +44,11 @@ pub const MAX_ID_BYTES: usize = 24;
 pub const MAX_NAME_CHARS: usize = 60;
 /// The argument that stands for the scenario's input file.
 pub const INPUT_ARG: &str = "{input}";
+/// Largest project file a scenario may name as its input (§14.1): scenarios
+/// run on every check, so less than a workload's 64 MiB.
+pub const MAX_INPUT_BYTES: u64 = 8 * 1024 * 1024;
+/// Longest basename of a project file a scenario names, in bytes.
+pub const MAX_INPUT_NAME_BYTES: usize = 64;
 /// Prefix of every scenario check's name.
 pub const CHECK_PREFIX: &str = "feature:";
 /// The digest recorded when the features file does not validate.
@@ -144,6 +149,119 @@ dozen liquor jugs.\n";
     }
 }
 
+/// A scenario's input (§2.1, §14.1): one of the built-in samples, or a
+/// file in the project named by its path relative to the target root.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Input {
+    /// A built-in sample.
+    Sample(Sample),
+    /// A file in the project, its path as written (it passed
+    /// [`input_path_problem`] and [`is_input_name`] at the loader).
+    File(String),
+}
+
+impl Input {
+    /// The file name a run sees it under: the sample's fixed name, or the
+    /// file's own basename (`{input}` in the arguments).
+    pub fn file_name(&self) -> &str {
+        match self {
+            Input::Sample(sample) => sample.file_name(),
+            Input::File(path) => path.rsplit('/').next().unwrap_or(path),
+        }
+    }
+
+    /// As written in `features.toml`.
+    pub fn written(&self) -> &str {
+        match self {
+            Input::Sample(sample) => sample.token(),
+            Input::File(path) => path,
+        }
+    }
+
+    /// The input in words, for people: a sample's description, or the
+    /// file's path (display-filtered).
+    pub fn words(&self) -> String {
+        match self {
+            Input::Sample(sample) => sample.words().to_string(),
+            Input::File(path) => format!("the file {}", crate::text::safe_line(path)),
+        }
+    }
+
+    /// The sample, when it is one.
+    pub fn sample(&self) -> Option<Sample> {
+        match self {
+            Input::Sample(sample) => Some(*sample),
+            Input::File(_) => None,
+        }
+    }
+}
+
+/// Why a project file named as a scenario's input, as written, is not
+/// allowed, or `None` when it is (§14.1) — the workloads file's rule
+/// (docs/PERF-DESIGN.md §3.1): relative, no control character, every part
+/// non-empty and not starting with `.` or `-` (so never `..`), not under
+/// `migration/`. Where it leads is checked when it is read
+/// ([`read_input`]).
+pub fn input_path_problem(input: &str) -> Option<&'static str> {
+    crate::perf::workloads::input_problem(input)
+}
+
+/// Whether `name` is a plain file name a scenario's input may have:
+/// `^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$` (§14.1).
+pub fn is_input_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    matches!(bytes.next(), Some(b) if b.is_ascii_alphanumeric())
+        && name.len() <= MAX_INPUT_NAME_BYTES
+        && bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
+}
+
+/// Why a run cannot use a scenario's file input — the workloads' reasons
+/// (docs/PERF-DESIGN.md §3.1), made the scenario's.
+pub use crate::perf::workloads::InputUnusable;
+
+/// What reading a scenario's file input gave: its bytes, or why the run
+/// cannot use it.
+pub type InputRead = Result<Vec<u8>, InputUnusable>;
+
+/// Read a scenario's file input once (§14.1): `rel` as written, under
+/// `root`, through the workloads' confined, bounded read, at most
+/// [`MAX_INPUT_BYTES`].
+pub fn read_input(root: &Path, rel: &str) -> InputRead {
+    crate::perf::workloads::read_input_capped(root, rel, MAX_INPUT_BYTES)
+}
+
+/// Why a scenario cannot use its file input, in the words the map, the
+/// cockpit and the CLI share (§14.1), for `input` as written.
+pub fn input_unusable_words(reason: InputUnusable, input: &str) -> String {
+    let input = crate::text::safe_line(input);
+    match reason {
+        InputUnusable::Missing => {
+            format!("its input {input} is not here — put the file back or change the scenario")
+        }
+        InputUnusable::Link => format!("its input {input} is a link — copy the file in instead"),
+        InputUnusable::Outside => format!(
+            "its input {input} leads outside the project through a linked folder — copy the \
+             file in"
+        ),
+        InputUnusable::IntoGit => {
+            format!("its input {input} leads into .git through a linked folder — copy the file in")
+        }
+        InputUnusable::NotAFile => format!("its input {input} is a folder — name a file"),
+        InputUnusable::TooLarge => {
+            format!("its input {input} is over 8 MiB — use a smaller input")
+        }
+        InputUnusable::UnderMigration => {
+            format!("its input {input} is under migration/ — move it")
+        }
+        InputUnusable::PermissionDenied => {
+            format!("its input {input} cannot be read (permission denied) — fix its permissions")
+        }
+        InputUnusable::Unreadable => {
+            format!("its input {input} cannot be read — check the file and run again")
+        }
+    }
+}
+
 /// A feature: the person's name for something a user does with the program.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Feature {
@@ -164,7 +282,7 @@ pub struct Scenario {
     /// The arguments, `{input}` standing for the input's file name.
     pub args: Vec<String>,
     /// The input, when it has one.
-    pub input: Option<Sample>,
+    pub input: Option<Input>,
 }
 
 impl Scenario {
@@ -178,8 +296,8 @@ impl Scenario {
     pub fn argv(&self) -> Vec<String> {
         self.args
             .iter()
-            .map(|a| match (a.as_str(), self.input) {
-                (INPUT_ARG, Some(sample)) => sample.file_name().to_string(),
+            .map(|a| match (a.as_str(), &self.input) {
+                (INPUT_ARG, Some(input)) => input.file_name().to_string(),
                 _ => a.clone(),
             })
             .collect()
@@ -193,12 +311,54 @@ pub struct Features {
     pub features: Vec<Feature>,
     /// Scenarios, in file order.
     pub scenarios: Vec<Scenario>,
+    /// The project files the scenarios name as their input, each read once
+    /// ([`Features::read_inputs`]), by its path as written. Empty until
+    /// read: [`parse`] reads no file.
+    pub files: std::collections::BTreeMap<String, InputRead>,
 }
 
 impl Features {
     /// The feature with `id`.
     pub fn feature(&self, id: &str) -> Option<&Feature> {
         self.features.iter().find(|f| f.id == id)
+    }
+
+    /// Read every project file the scenarios name, once each, under the
+    /// target root `root` (§14.1): what a run copies and the digest hashes.
+    /// A file the run cannot use is recorded as why, never an error: it is
+    /// the scenario's problem, not the file's.
+    pub fn read_inputs(&mut self, root: &Path) {
+        for s in &self.scenarios {
+            if let Some(Input::File(path)) = &s.input {
+                if !self.files.contains_key(path) {
+                    self.files.insert(path.clone(), read_input(root, path));
+                }
+            }
+        }
+    }
+
+    /// The bytes a run of `scenario` gets as its input, or why it cannot
+    /// use it; `None` for a scenario without an input. A sample's bytes are
+    /// generated; a file's come from [`Features::read_inputs`] (a file not
+    /// read reads as missing).
+    pub fn input_bytes(&self, scenario: &Scenario) -> Option<InputRead> {
+        match scenario.input.as_ref()? {
+            Input::Sample(sample) => Some(Ok(sample.bytes())),
+            Input::File(path) => Some(
+                self.files
+                    .get(path)
+                    .cloned()
+                    .unwrap_or(Err(InputUnusable::Missing)),
+            ),
+        }
+    }
+
+    /// Why `scenario`'s file input cannot be used, in words, or `None`.
+    pub fn input_unusable(&self, scenario: &Scenario) -> Option<String> {
+        match (&scenario.input, self.input_bytes(scenario)) {
+            (Some(input), Some(Err(why))) => Some(input_unusable_words(why, input.written())),
+            _ => None,
+        }
     }
 
     /// The scenarios of feature `id`, in file order.
@@ -356,6 +516,7 @@ fn parse_rules(text: &str, path: &Path) -> Result<Features, Error> {
         }
     }
     Ok(Features {
+        files: std::collections::BTreeMap::new(),
         features,
         scenarios,
     })
@@ -485,13 +646,30 @@ fn parse_scenarios(items: Vec<&toml::Table>, features: &[Feature]) -> Result<Vec
         }
         let input = match t.get("input") {
             None => None,
-            Some(toml::Value::String(token)) => {
-                Some(Sample::from_token(token).ok_or_else(|| {
+            Some(toml::Value::String(token)) if token.starts_with("sample:") => Some(
+                Input::Sample(Sample::from_token(token).ok_or_else(|| {
                     rule(format!(
                         "{what}: input {token:?} is not one of sample:text, sample:rand, \
                      sample:empty"
                     ))
-                })?)
+                })?),
+            ),
+            Some(toml::Value::String(path)) => {
+                if let Some(why) = input_path_problem(path) {
+                    return Err(rule(format!(
+                        "{what}: input {path:?} is not allowed — {why} (a sample is \
+                         sample:text, sample:rand or sample:empty; a file is a path in the \
+                         project)"
+                    )));
+                }
+                let name = path.rsplit('/').next().unwrap_or(path);
+                if !is_input_name(name) {
+                    return Err(rule(format!(
+                        "{what}: input {path:?}: name the file so its name is plain — 1 to 64 \
+                         of letters, digits and _.-, starting with a letter or digit"
+                    )));
+                }
+                Some(Input::File(path.clone()))
             }
             Some(v) => return Err(rule(format!("{what}: `input` must be a string, got {v}"))),
         };
@@ -526,7 +704,7 @@ fn parse_scenarios(items: Vec<&toml::Table>, features: &[Feature]) -> Result<Vec
             }
         }
         let uses = args.iter().filter(|a| a.as_str() == INPUT_ARG).count();
-        match (input, uses) {
+        match (&input, uses) {
             (Some(_), 1) | (None, 0) => {}
             (Some(_), 0) => {
                 return Err(rule(format!(
@@ -587,9 +765,11 @@ pub fn program_name(config: &TargetConfig) -> String {
 }
 
 /// The `features` digest (§2.4): what the scenarios run — for each feature
-/// by id, each scenario by id, its args and its input's bytes — plus the
-/// program's file name as it runs and `[oracle] timeout_secs` as written.
-/// Names are not in it; neither is the order of the file.
+/// by id, each scenario by id, its args and its input's name and bytes —
+/// plus the program's file name as it runs and `[oracle] timeout_secs` as
+/// written. Names are not in it; neither is the order of the file, nor a
+/// file input's path (§14.1). A file input's bytes are the ones
+/// [`Features::read_inputs`] read: call it first.
 pub fn features_digest(features: &Features, config: &TargetConfig) -> String {
     let mut ids: Vec<&Feature> = features.features.iter().collect();
     ids.sort_by(|a, b| a.id.cmp(&b.id));
@@ -603,10 +783,18 @@ pub fn features_digest(features: &Features, config: &TargetConfig) -> String {
                 "scenarios": scenarios.into_iter().map(|s| serde_json::json!({
                     "id": s.id,
                     "args": s.args,
-                    "input": s.input.map(|i| serde_json::json!({
-                        "name": i.file_name(),
-                        "hash": hash::bytes_hash(&i.bytes()),
-                    })),
+                    "input": s.input.as_ref().map(|i| match features.input_bytes(s) {
+                        Some(Ok(bytes)) => serde_json::json!({
+                            "name": i.file_name(),
+                            "hash": hash::bytes_hash(&bytes),
+                        }),
+                        // A file the run cannot use is hashed as absent,
+                        // never as empty bytes (as a workload's).
+                        _ => serde_json::json!({
+                            "name": i.file_name(),
+                            "absent": true,
+                        }),
+                    }),
                 })).collect::<Vec<_>>(),
             })
         })
@@ -764,10 +952,15 @@ impl FeatureSnapshot {
         let rel = ctx.ledger_rel();
         match load(&crate::ledger::Ledger::of(ctx), &rel) {
             Ok(None) => FeatureSnapshot::None,
-            Ok(Some(features)) => FeatureSnapshot::Valid {
-                digest: features_digest(&features, &ctx.config),
-                features,
-            },
+            Ok(Some(mut features)) => {
+                // Each file input read once per load (§14.1): the digest
+                // and every run take these bytes.
+                features.read_inputs(&ctx.root);
+                FeatureSnapshot::Valid {
+                    digest: features_digest(&features, &ctx.config),
+                    features,
+                }
+            }
             Err(Error::SchemaTooNew {
                 found, supported, ..
             }) => FeatureSnapshot::Invalid(format!(
@@ -914,7 +1107,8 @@ pub struct ScenarioRecord {
     /// The scenario's id.
     pub scenario: String,
     /// How the first plain run ended: `exit N`, `signal N`, `timed out`,
-    /// `too much output`, `could not start`.
+    /// `too much output`, `could not start` — or `not run` when its input
+    /// file cannot be used ([`ScenarioRecord::input_unusable`]).
     pub end: String,
     /// Its stdout's length.
     pub stdout_bytes: u64,
@@ -935,6 +1129,44 @@ pub struct ScenarioRecord {
     pub reason: Option<String>,
     /// The functions it ran, `[file, canonical id]`, sorted, each once.
     pub functions: Vec<(String, String)>,
+}
+
+/// The map's `end` of a scenario whose input file cannot be used (§14.1):
+/// `noted` is then `unavailable` and `reason` is
+/// [`INPUT_UNUSABLE_PREFIX`] and the [`InputUnusable::token`].
+pub const NOT_RUN: &str = "not run";
+/// The start of the map's `reason` for a scenario not run for its input.
+pub const INPUT_UNUSABLE_PREFIX: &str = "input-unusable: ";
+
+impl ScenarioRecord {
+    /// The record of a scenario not run because its input file cannot be
+    /// used (§14.1).
+    pub fn input_unusable(feature: &str, scenario: &str, why: InputUnusable) -> ScenarioRecord {
+        ScenarioRecord {
+            feature: feature.to_string(),
+            scenario: scenario.to_string(),
+            end: NOT_RUN.to_string(),
+            stdout_bytes: 0,
+            stderr_bytes: 0,
+            stderr_head: String::new(),
+            stable: true,
+            probe_agrees: true,
+            noted: "unavailable".to_string(),
+            reason: Some(format!("{INPUT_UNUSABLE_PREFIX}{}", why.token())),
+            functions: Vec::new(),
+        }
+    }
+
+    /// Why its input file could not be used, when the map says so.
+    pub fn unusable(&self) -> Option<InputUnusable> {
+        if self.end != NOT_RUN {
+            return None;
+        }
+        self.reason
+            .as_deref()?
+            .strip_prefix(INPUT_UNUSABLE_PREFIX)
+            .and_then(InputUnusable::from_token)
+    }
 }
 
 /// `map.json` (`ruharness-features-map` v1).
@@ -1070,6 +1302,19 @@ pub fn load_map(ledger: &crate::ledger::Ledger, facts: &crate::Facts) -> MapStat
     for r in &map.scenarios {
         if !is_id(&r.feature) || !is_id(&r.scenario) {
             return MapState::Unreadable("a scenario id is not allowed".into());
+        }
+        // A scenario not run for its input: exactly the record the map
+        // writes, nothing else claimed (§14.1).
+        if r.end == NOT_RUN {
+            let ok = r.unusable().is_some_and(|why| {
+                *r == ScenarioRecord::input_unusable(&r.feature, &r.scenario, why)
+            });
+            if !ok {
+                return MapState::Unreadable(
+                    "a scenario's record is not one the harness writes".into(),
+                );
+            }
+            continue;
         }
         if !is_end(&r.end) {
             return MapState::Unreadable("a scenario's `end` is not one the harness writes".into());
@@ -1212,11 +1457,14 @@ pub enum SkipReason {
     CSideBuildFailed,
     /// The unit's `replaces` are not all top-level `.c` files of the program.
     NotInProgram,
+    /// The scenario's input file cannot be used (§14.1): the file, not the
+    /// C, decides — marked as the `c-side-*` reasons are.
+    InputUnusable,
 }
 
 impl SkipReason {
     /// Every reason.
-    pub const ALL: [SkipReason; 7] = [
+    pub const ALL: [SkipReason; 8] = [
         SkipReason::CSideUnstable,
         SkipReason::CSideCrashed,
         SkipReason::CSideTimedOut,
@@ -1224,6 +1472,7 @@ impl SkipReason {
         SkipReason::CSideExecFailed,
         SkipReason::CSideBuildFailed,
         SkipReason::NotInProgram,
+        SkipReason::InputUnusable,
     ];
 
     /// Its token in a verdict's `features_skipped`.
@@ -1236,6 +1485,7 @@ impl SkipReason {
             SkipReason::CSideExecFailed => "c-side-exec-failed",
             SkipReason::CSideBuildFailed => "c-side-build-failed",
             SkipReason::NotInProgram => "not-in-program",
+            SkipReason::InputUnusable => "input-unusable",
         }
     }
 
@@ -1249,6 +1499,7 @@ impl SkipReason {
             SkipReason::CSideExecFailed => "the C program could not be started",
             SkipReason::CSideBuildFailed => "the whole C program does not build",
             SkipReason::NotInProgram => "this unit's files are not part of the program",
+            SkipReason::InputUnusable => "its input file cannot be used",
         }
     }
 
@@ -1263,13 +1514,15 @@ impl SkipReason {
             SkipReason::CSideExecFailed => "a sandbox or harness problem — see the details",
             SkipReason::CSideBuildFailed => "fix the build (the details show the compiler's words)",
             SkipReason::NotInProgram => "nothing to do: its verdicts skip the features",
+            SkipReason::InputUnusable => "put the file back or change the scenario",
         }
     }
 
-    /// A reason about the scenario or the C (`c-side-*`), as opposed to one
-    /// about the program or the unit.
+    /// A reason about the scenario or the C (`c-side-*`, and
+    /// `input-unusable`, marked as they are), as opposed to one about the
+    /// program or the unit: the scenario cannot be a check as written.
     pub fn is_c_side(self) -> bool {
-        self.token().starts_with("c-side-")
+        self.token().starts_with("c-side-") || self == SkipReason::InputUnusable
     }
 
     fn from_token(token: &str) -> Option<SkipReason> {
@@ -1334,14 +1587,17 @@ pub fn starter(config: &TargetConfig) -> String {
     format!(
         "# Your features: things a person does with the program and sees the result of.\n\
          # Each feature has one or more scenarios: one run of the whole program with\n\
-         # fixed arguments and, optionally, one of three sample files as its input.\n\
+         # fixed arguments and, optionally, an input: a sample file or a file of yours.\n\
          # Every Re-check runs each scenario on the C program and on the program with\n\
          # the unit's Rust swapped in, and compares exit status, stdout and stderr.\n\
          #\n\
          # Samples: sample:text (about 30 000 bytes of English text),\n\
          #          sample:rand (16 KiB of pseudo-random bytes), sample:empty.\n\
+         # Or a small file of the project, by its path from the project's top\n\
+         # (tests/small.lzg): a real file, at most 8 MiB, not under migration/, with\n\
+         # a plain name. Commit it with the project, so a fresh clone can run it.\n\
          # Arguments: flags (-c, --level=3) or words (9, compress); none may contain\n\
-         # \"/\" or \"..\". \"{{input}}\" stands for the sample's file name. The program\n\
+         # \"/\" or \"..\". \"{{input}}\" stands for the input's file name. The program\n\
          # runs in an empty folder of its own.\n\
          {whole_program}\
          \n\
@@ -1872,7 +2128,7 @@ args = ["-h"]
         ))
         .contains("only once"));
         assert!(
-            refused(&with_scenario("args = [\"{input}\"]\ninput = \"inputs/x\""))
+            refused(&with_scenario("args = [\"{input}\"]\ninput = \"sample:x\""))
                 .contains("is not one of sample:text")
         );
         assert!(p(&with_scenario(
@@ -2706,6 +2962,8 @@ args = ["-h"]
         }
         assert!(SkipReason::CSideUnstable.is_c_side());
         assert!(!SkipReason::NotInProgram.is_c_side());
+        // Marked as the C-side reasons are: the scenario cannot be a check.
+        assert!(SkipReason::InputUnusable.is_c_side());
         for hostile in [
             "gzip/text: budget",
             "gzip/text: main-count",
@@ -3124,5 +3382,268 @@ args = ["-h"]
         );
         assert_eq!(hash::bytes_hash(&rand), SAMPLE_RAND_HASH);
         assert!(Sample::Empty.bytes().is_empty());
+    }
+
+    fn file_input(path: &str) -> String {
+        with_scenario(&format!("args = [\"{{input}}\"]\ninput = {path:?}"))
+    }
+
+    /// §14.1: a project file as the input — as written, the workloads'
+    /// rule; its basename plain; a `sample:` value a sample as before.
+    #[test]
+    fn a_project_file_is_an_input_and_its_rules_are_the_workloads() {
+        let f = p(&file_input("tests/data/small.lzg")).expect("a project file");
+        let s = f.scenarios.last().expect("the scenario");
+        assert_eq!(s.input, Some(Input::File("tests/data/small.lzg".into())));
+        assert_eq!(s.argv(), vec!["small.lzg".to_string()]);
+        assert_eq!(s.input.as_ref().map(Input::file_name), Some("small.lzg"));
+        assert!(f.files.is_empty(), "parse reads no file");
+        assert_eq!(
+            p(&file_input("small.txt")).expect("top level").scenarios[2].argv(),
+            vec!["small.txt".to_string()]
+        );
+        // A sample stays a sample.
+        let sample = p(&file_input("sample:rand")).expect("a sample");
+        assert_eq!(
+            sample.scenarios.last().and_then(|s| s.input.clone()),
+            Some(Input::Sample(Sample::Rand))
+        );
+        assert_eq!(
+            sample.scenarios[2].argv(),
+            vec!["sample_rand.bin".to_string()]
+        );
+        for (path, why) in [
+            ("/etc/passwd", "must be relative to the project"),
+            ("bench/../x", "may start with \".\" or \"-\""),
+            ("../x", "may start with \".\" or \"-\""),
+            ("./x", "may start with \".\" or \"-\""),
+            ("bench/.hidden", "may start with \".\" or \"-\""),
+            ("bench/-x", "may start with \".\" or \"-\""),
+            ("bench//x", "empty part"),
+            ("bench/", "empty part"),
+            ("migration/x.txt", "cannot be under migration/"),
+            ("a\tb", "control characters"),
+            ("", "it is empty"),
+        ] {
+            let message = refused(&file_input(path));
+            assert!(message.contains(why), "{path:?}: {message}");
+            assert!(message.contains("is not allowed"), "{path:?}: {message}");
+        }
+        let long = format!("bench/{}", "x".repeat(65));
+        for name in [
+            "bench/with space.txt",
+            "bench/caf\u{e9}.txt",
+            "bench/a+b",
+            long.as_str(),
+        ] {
+            let message = refused(&file_input(name));
+            assert!(
+                message.contains("name the file so its name is plain"),
+                "{name:?}: {message}"
+            );
+        }
+        assert!(p(&file_input(&format!("bench/{}", "x".repeat(64)))).is_ok());
+        assert!(is_input_name("small.lzg") && is_input_name("A_b-9.x"));
+        assert!(!is_input_name("_x") && !is_input_name("x/y") && !is_input_name(""));
+    }
+
+    fn project(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("rh-feat-in-{tag}-{}", hash::random_hex(6)));
+        std::fs::create_dir_all(dir.join("bench")).expect("mkdir");
+        dir
+    }
+
+    /// §14.1: each project file read once, confined and bounded at 8 MiB;
+    /// a file the run cannot use is the scenario's, in its own words.
+    #[test]
+    fn a_file_input_is_read_once_and_an_unusable_one_says_why() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = project("read");
+        std::fs::write(root.join("bench/small.lzg"), b"LZG bytes").expect("write");
+        let text = format!(
+            "{GOOD}\n[[scenario]]\nfeature = \"gzip\"\nid = \"a\"\nargs = [\"{{input}}\"]\n\
+             input = \"bench/small.lzg\"\n\n[[scenario]]\nfeature = \"gzip\"\nid = \"b\"\n\
+             args = [\"-d\", \"{{input}}\"]\ninput = \"bench/small.lzg\"\n\n[[scenario]]\n\
+             feature = \"help\"\nid = \"gone\"\nargs = [\"{{input}}\"]\ninput = \"bench/gone.lzg\"\n"
+        );
+        let mut f = p(&text).expect("valid");
+        f.read_inputs(&root);
+        assert_eq!(f.files.len(), 2, "one read per file: {:?}", f.files.keys());
+        let a = &f.scenarios[2];
+        let gone = &f.scenarios[4];
+        assert_eq!(f.input_bytes(a), Some(Ok(b"LZG bytes".to_vec())));
+        assert_eq!(f.input_bytes(&f.scenarios[1]), None);
+        assert_eq!(
+            f.input_bytes(&f.scenarios[0]),
+            Some(Ok(Sample::Text.bytes()))
+        );
+        assert_eq!(f.input_bytes(gone), Some(Err(InputUnusable::Missing)));
+        assert_eq!(f.input_unusable(a), None);
+        assert_eq!(
+            f.input_unusable(gone).as_deref(),
+            Some("its input bench/gone.lzg is not here — put the file back or change the scenario")
+        );
+
+        // Each refusal at the read, by the workloads' rules and an 8 MiB cap.
+        std::os::unix::fs::symlink(root.join("bench/small.lzg"), root.join("bench/link.lzg"))
+            .expect("link");
+        assert_eq!(
+            read_input(&root, "bench/link.lzg"),
+            Err(InputUnusable::Link)
+        );
+        assert_eq!(read_input(&root, "bench"), Err(InputUnusable::NotAFile));
+        let big = std::fs::File::create(root.join("bench/big.bin")).expect("big");
+        big.set_len(MAX_INPUT_BYTES + 1).expect("sparse");
+        assert_eq!(
+            read_input(&root, "bench/big.bin"),
+            Err(InputUnusable::TooLarge)
+        );
+        let exact = std::fs::File::create(root.join("bench/exact.bin")).expect("exact");
+        exact.set_len(MAX_INPUT_BYTES).expect("sparse");
+        assert_eq!(
+            read_input(&root, "bench/exact.bin").map(|b| b.len() as u64),
+            Ok(MAX_INPUT_BYTES)
+        );
+        let away = project("away");
+        std::fs::write(away.join("bench/x.txt"), b"x").expect("write");
+        std::os::unix::fs::symlink(away.join("bench"), root.join("out")).expect("link");
+        assert_eq!(read_input(&root, "out/x.txt"), Err(InputUnusable::Outside));
+        std::fs::create_dir_all(root.join("migration/inputs")).expect("mkdir");
+        std::fs::write(root.join("migration/inputs/y.txt"), b"y").expect("write");
+        std::os::unix::fs::symlink(root.join("migration/inputs"), root.join("m")).expect("link");
+        assert_eq!(
+            read_input(&root, "m/y.txt"),
+            Err(InputUnusable::UnderMigration)
+        );
+        let locked = root.join("bench/locked.txt");
+        std::fs::write(&locked, b"z").expect("write");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+        // Unless the tests run as root.
+        if std::fs::read(&locked).is_err() {
+            assert_eq!(
+                read_input(&root, "bench/locked.txt"),
+                Err(InputUnusable::PermissionDenied)
+            );
+        }
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&away).ok();
+    }
+
+    #[test]
+    fn every_unusable_input_has_the_scenarios_own_words() {
+        let words = |r| input_unusable_words(r, "bench/small.lzg");
+        assert_eq!(
+            words(InputUnusable::Missing),
+            "its input bench/small.lzg is not here — put the file back or change the scenario"
+        );
+        assert_eq!(
+            words(InputUnusable::Link),
+            "its input bench/small.lzg is a link — copy the file in instead"
+        );
+        assert_eq!(
+            words(InputUnusable::Outside),
+            "its input bench/small.lzg leads outside the project through a linked folder — copy \
+             the file in"
+        );
+        assert_eq!(
+            words(InputUnusable::NotAFile),
+            "its input bench/small.lzg is a folder — name a file"
+        );
+        assert_eq!(
+            words(InputUnusable::TooLarge),
+            "its input bench/small.lzg is over 8 MiB — use a smaller input"
+        );
+        assert_eq!(
+            words(InputUnusable::UnderMigration),
+            "its input bench/small.lzg is under migration/ — move it"
+        );
+        assert_eq!(
+            words(InputUnusable::PermissionDenied),
+            "its input bench/small.lzg cannot be read (permission denied) — fix its permissions"
+        );
+        for r in InputUnusable::ALL {
+            assert!(words(r).starts_with("its input bench/small.lzg "), "{r:?}");
+        }
+    }
+
+    /// §14.1 / §2.4: the digest covers a file input's name and bytes, not
+    /// its path; a file the run cannot use is hashed as absent.
+    #[test]
+    fn the_digest_covers_a_file_inputs_name_and_bytes_not_its_path() {
+        let root = project("digest");
+        std::fs::create_dir_all(root.join("other")).expect("mkdir");
+        std::fs::write(root.join("bench/small.lzg"), b"one").expect("write");
+        std::fs::write(root.join("other/small.lzg"), b"one").expect("write");
+        std::fs::write(root.join("bench/renamed.lzg"), b"one").expect("write");
+        let digest = |path: &str| {
+            let mut f = p(&file_input(path)).expect("valid");
+            f.read_inputs(&root);
+            features_digest(&f, &config())
+        };
+        let base = digest("bench/small.lzg");
+        assert_eq!(base, digest("other/small.lzg"), "the path is not in it");
+        assert_ne!(base, digest("bench/renamed.lzg"), "the name is");
+        std::fs::write(root.join("bench/small.lzg"), b"two").expect("write");
+        let changed = digest("bench/small.lzg");
+        assert_ne!(base, changed, "the bytes are");
+        std::fs::write(root.join("bench/small.lzg"), b"").expect("write");
+        let empty = digest("bench/small.lzg");
+        std::fs::remove_file(root.join("bench/small.lzg")).expect("rm");
+        let gone = digest("bench/small.lzg");
+        assert_ne!(empty, gone, "absent is not empty");
+        assert_ne!(gone, changed);
+        // Unread, a file input reads as absent: the same as a missing one.
+        assert_eq!(
+            gone,
+            features_digest(
+                &p(&file_input("bench/small.lzg")).expect("valid"),
+                &config()
+            )
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn the_snapshot_reads_the_file_inputs_for_its_digest() {
+        let root = project("snap");
+        std::fs::write(
+            root.join("harness.toml"),
+            "schema_version = 1\n[target]\nname = \"tool\"\nsource_dir = \"src\"\n",
+        )
+        .expect("config");
+        crate::adopt::testing::adopt(&root);
+        std::fs::write(root.join("bench/small.lzg"), b"bytes").expect("write");
+        let ctx = crate::config::TargetContext::load(&root).expect("ctx");
+        std::fs::create_dir_all(features_dir(&crate::ledger::Ledger::of(&ctx))).expect("mkdir");
+        std::fs::write(
+            features_path(&crate::ledger::Ledger::of(&ctx)),
+            file_input("bench/small.lzg"),
+        )
+        .expect("write");
+        let FeatureSnapshot::Valid { features, digest } = FeatureSnapshot::load(&ctx) else {
+            panic!("valid");
+        };
+        assert_eq!(
+            features.files.get("bench/small.lzg"),
+            Some(&Ok(b"bytes".to_vec()))
+        );
+        assert_eq!(digest, features_digest(&features, &ctx.config));
+        std::fs::write(root.join("bench/small.lzg"), b"other").expect("write");
+        assert_ne!(FeatureSnapshot::load(&ctx).digest(), digest);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_scenario_not_run_for_its_input_is_a_map_record_of_its_own() {
+        let r = ScenarioRecord::input_unusable("gzip", "text", InputUnusable::Missing);
+        assert_eq!(r.end, NOT_RUN);
+        assert_eq!(r.unusable(), Some(InputUnusable::Missing));
+        let json = serde_json::to_string(&r).expect("json");
+        let back: ScenarioRecord = serde_json::from_str(&json).expect("back");
+        assert_eq!(back, r);
+        let mut ran = r.clone();
+        ran.end = "exit 0".into();
+        assert_eq!(ran.unusable(), None);
     }
 }

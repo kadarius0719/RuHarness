@@ -23,6 +23,10 @@ The file starts with `schema_version = 1`. Limits: up to 8 arguments, 16 feature
 
 From then on every verify runs each scenario on the all-C program and on the program with that unit's Rust inside, and compares what a person would see: exit code (closing status number), stdout (normal printed output) and stderr (messages and errors). These are the `feature:<feature>/<scenario>` lines. A scenario the C itself cannot run the same way twice is skipped and named; it never stops your work.
 
+## A real file as the input
+
+A decoder needs data it can decode, and the samples are only text, random bytes and nothing. So a scenario's `input` can also name a small file in your project, by its path from the project's top: `input = "tests/small.lzg"`. The run copies it into the program's own empty folder under its own name, so `{input}` is `small.lzg` and a program that looks at the extension sees it. The rules are the workloads file's: a real file (not a link), at most 8 MiB, not under `migration/` or `.git`, no part of its path starting with `.` or `-`, and a plain name (letters, digits, `_`, `.`, `-`). Commit the file with the project, or a fresh clone cannot run the scenario. The file's name and bytes are part of what your features are, so editing it makes every verdict that ran the scenario "not checked since you changed them", as editing the scenario does. If the file is missing (or is a link, a folder, too big), the scenario cannot run and says why — `its input tests/small.lzg is not here — put the file back or change the scenario` — and every other scenario still runs.
+
 ## The feature map
 
 A feature that never runs a unit's code passes whatever that unit's Rust does. So the harness finds out which code each scenario really runs: it builds a scratch copy of the C in which every function leaves a note when it runs, runs each scenario on it, and writes the **feature map** to `migration/features/map.json`. It is always called the feature map; the project map is a different thing.
@@ -36,6 +40,10 @@ A verdict (the judge's recorded result) made before your features existed did no
 ## A first file from the chat
 
 If you have never written a features file, the cockpit's chat can propose one. On the Features row, choose **Propose features — ask in chat** and send the question it types. The chat reads the program's `main` and its options, writes three to six scenarios — what the program is for, its options, and one wrong input — into `migration/features/features.proposed.toml` beside your file, with a one-line comment above each saying why, and tells you the same in the chat. Nothing is checked against your units yet and your own file is untouched: **Write your features file** opens the proposal in your editor as your draft, and you change what you like and save it as any edit (the proposal file goes once saved). The command line gets nothing new: there you write the file yourself. The same works for speed on the Speed row: **Propose a workload — ask in chat**.
+
+## When a scenario cannot run: the chat's fix
+
+A benchmark prints timings, so its output differs between runs and it can never be a check; a decoder's scenario may name a file that is not there yet. Such a feature shows `⚑ a scenario cannot run`, and its row's menu offers **Fix the features file — ask in chat** (recommended when the chat is on, before **Edit the features file**). It types one line per scenario into the chat, such as `Scenario bench/default cannot be a check: the C program's output differs between runs. Change or remove it, and propose the corrected features file`; the chat reads your file as it is, changes only those scenarios, and writes a corrected proposal. The Next step then reads `Read the chat's fix — Enter, then Edit from the chat's proposal`; nothing changes until you save. On the Speed row, **Fix the workloads file — ask in chat** does the same for a workload whose input cannot be used or whose C perf cannot measure.
 
 ## Try it
 

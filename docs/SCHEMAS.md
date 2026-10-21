@@ -1220,7 +1220,16 @@ verdicts, attempt records, `state status`, harness-mcp's reports, the events.
 display-only (never in a check name, verdict, event or prompt); args 0–8, each `{input}`, a flag
 `^-{1,2}[A-Za-z0-9][A-Za-z0-9_.#+=:,-]*$` or a word `^[A-Za-z0-9][A-Za-z0-9_.#+=:,-]*$`, 1–64
 bytes, never `/` or `..`; input one of `sample:text`, `sample:rand`, `sample:empty` (the
-whole-program samples), `{input}` exactly once iff an input; ≤ 16 features, ≤ 8 scenarios per
+whole-program samples) — any value starting with `sample:` is a sample or refused — or a file in
+the project (docs/FEATURES-DESIGN.md §14.1): written relative, no control character, every part
+non-empty and not starting with `.` or `-`, not under `migration/` (the workloads' rule), its
+basename `^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$` ("name the file so its name is plain"); where it
+leads is checked when it is read, once per `verify` / `features map` / read of the snapshot
+(canonically inside the project, outside the ledger and any `.git`, a regular file, never
+through a link, at most 8 MiB): a file that cannot be used is the scenario's `input-unusable`,
+never the file's error. The run copies it into its own folder under its basename with the
+samples' fixed modification time; `{input}` is that basename; `{input}` exactly once iff an
+input; ≤ 16 features, ≤ 8 scenarios per
 feature, ≤ 16 in all, every feature ≥ 1 scenario; ≤ 64 KiB. **Strict**: an unknown key, a
 wrong type, a duplicate or unknown id is refused with its key path — so **every new key bumps
 `schema_version`** (an exception to the pass-over-unknown-fields rule). A file that cannot be
@@ -1244,6 +1253,11 @@ Nothing reads a proposal but the cockpit: **Write your features file** (with no 
 from the chat's proposal…** (with one) opens it as the person's draft, read with the starter's
 safety (a regular file, the cap, UTF-8), and after a successful save the cockpit removes it while
 it is still the text the draft started from. The CLI neither reads nor writes these files.
+The chat reads the person's file as it is with the cockpit-mode read tools `harness_features_file
+{}` and `harness_workloads_file {}` (docs/FEATURES-DESIGN.md §14.3: the chat's fix) — `{kind,
+file, exists, text, next}`, the file's text unparsed (a file that does not validate is what a fix
+is for), read as a regular file under its own 64 KiB cap, never through a link; refused on the
+Project view and by a server outside the cockpit (which does not list them).
 
 ## `migration/features/map.json` (`ruharness-features-map` v1, written by `features map`)
 
@@ -1256,7 +1270,11 @@ date ("made by an older harness"). `unwatched_reasons` (docs/FEATURES-PROBE-REDE
 compile | elimination | link | file-limit | not-checked`, `detail` ≤ 160 bytes with no control
 character (a compiler's message may quote the target's source: display-only, never in prompts,
 events or harness-mcp), each pair in `unwatched`. `end` ∈ `exit N | signal N | timed out | too
-much output | could not start`; `noted` ∈ `complete | unavailable` (`reason`: `none written |
+much output | could not start | not run` — `not run` only for a scenario whose input file cannot
+be used (§14.1): then `noted` is `unavailable`, `reason` is `input-unusable: <token>` (`missing |
+link | outside | into-git | not-a-file | too-large | under-migration | permission-denied |
+unreadable`), the streams 0 and empty, `stable` and `probe_agrees` true, no functions, and
+nothing else is accepted; `noted` ∈ `complete | unavailable` (`reason`: `none written |
 unreadable | the probe's setup did not run`); `stdout_bytes`/`stderr_bytes` count the first run's streams with paths as `$TMPDIR`/`$PROGDIR`
 and no `$$` escape (for a program that prints no path, its own bytes);
 `stderr_head` printable ASCII, ≤ 100 bytes, from the rewritten stream (`$TMPDIR`, `$PROGDIR`, `$$`). Current iff all five inputs equal
@@ -1267,7 +1285,8 @@ today's. Read strictly (hostile, committed); pairs today's facts do not know are
 `VerdictInputs.features` (the digest the feature step ran under, or `invalid`),
 `.program` (the program digest), `.features_skipped` (`<feature>/<scenario>: <reason>`, reason ∈
 `c-side-unstable | c-side-crashed | c-side-timed-out | c-side-overflow | c-side-exec-failed |
-c-side-build-failed | not-in-program`) — all omitted when empty, filled only by a run that
+c-side-build-failed | not-in-program | input-unusable`; `input-unusable`: the scenario's input file
+cannot be used — marked as the `c-side-*` reasons are, the other scenarios still run) — all omitted when empty, filled only by a run that
 reached the feature step. `AttemptRecord.features`, `.program` — omitted when empty; a replay
 judges with the recorded features when it can (none or `invalid` → none), else explains a
 divergence first ("the features changed since it was recorded" / "other C changed since").
@@ -1280,7 +1299,9 @@ the verdict, **never** part of `stale`, `fresh_green` or the contradiction rule.
 
 ## Digests
 
-`features` = blake3 over each feature's scenarios by id (args, input bytes) + the program's run
+`features` = blake3 over each feature's scenarios by id (args, the input's name and bytes — a
+file input's basename and bytes, never its path; one that cannot be used hashed as absent) + the
+program's run
 name + `[oracle] timeout_secs` (names excluded). `program` = blake3 over the top-level `.c` of
 `source_dir` (canonical when a contained symlink), their facts include closure and every `.h`
 under `source_dir` and `include_dirs` (as the shared walk finds them: no dot-folder, no

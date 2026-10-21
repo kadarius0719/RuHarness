@@ -677,6 +677,12 @@ impl InputUnusable {
 /// through a handle checked to be the file looked at, never past the cap.
 /// Every run's copy and the digest come from these bytes.
 pub fn read_input(root: &Path, rel: &str) -> Result<Vec<u8>, InputUnusable> {
+    read_input_capped(root, rel, MAX_INPUT_BYTES)
+}
+
+/// [`read_input`] with another cap: a scenario's input is read under the
+/// same rules, at most 8 MiB (docs/FEATURES-DESIGN.md §14.1).
+pub fn read_input_capped(root: &Path, rel: &str, cap: u64) -> Result<Vec<u8>, InputUnusable> {
     use std::io::Read;
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     let io = |e: std::io::Error| match e.kind() {
@@ -708,7 +714,7 @@ pub fn read_input(root: &Path, rel: &str) -> Result<Vec<u8>, InputUnusable> {
     if !meta.file_type().is_file() {
         return Err(InputUnusable::NotAFile);
     }
-    if meta.len() > MAX_INPUT_BYTES {
+    if meta.len() > cap {
         return Err(InputUnusable::TooLarge);
     }
     let file = std::fs::OpenOptions::new()
@@ -721,10 +727,8 @@ pub fn read_input(root: &Path, rel: &str) -> Result<Vec<u8>, InputUnusable> {
         return Err(InputUnusable::Unreadable);
     }
     let mut bytes = Vec::new();
-    file.take(MAX_INPUT_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(io)?;
-    if bytes.len() as u64 > MAX_INPUT_BYTES {
+    file.take(cap + 1).read_to_end(&mut bytes).map_err(io)?;
+    if bytes.len() as u64 > cap {
         return Err(InputUnusable::TooLarge);
     }
     Ok(bytes)

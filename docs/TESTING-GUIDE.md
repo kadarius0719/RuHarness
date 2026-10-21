@@ -4584,7 +4584,7 @@ git status --short
 | `[[feature]]` | `id` uses lowercase letters, digits and `-`. `name` is only for display. |
 | `[[scenario]]` | `feature` names one of the features. `id` is unique within that feature. |
 | `args` | Up to 8 entries. Each is an option (`-9`, `-V`) or a plain word (`nosuchfile`), **never a path** (no `/`). |
-| `{input}` and `input` | `{input}` stands for the sample file's name, and appears exactly once when `input` is set. `input` is `sample:text` (the 30014-byte sentence about a quick brown fox), `sample:rand` (16 KiB, that is 16384 bytes, of random bytes) or `sample:empty`. |
+| `{input}` and `input` | `{input}` stands for the input file's name, and appears exactly once when `input` is set. `input` is `sample:text` (the 30014-byte sentence about a quick brown fox), `sample:rand` (16 KiB, that is 16384 bytes, of random bytes), `sample:empty`, or a small file in the project by its path from the project's top (`tests/small.lzg`: a real file, at most 8 MiB, not under `migration/`, with a plain name). The program then gets a copy under the file's own name (`small.lzg`); commit the file, or a fresh clone cannot run the scenario. A file that is missing makes its scenario say `its input tests/small.lzg is not here — put the file back or change the scenario`, and the other scenarios still run. |
 | Limits | At most 16 features, 8 scenarios per feature, and 16 scenarios in total. |
 
 **How the notes are compiled.** The harness compiles the noting copy one `.c` file at a time ("round 1"); if the compiler rejects a note in one function, only that function's note is taken out, and the feature map records why. Before that, it checks that the noting copy is the same program as yours apart from its notes.
@@ -7191,7 +7191,8 @@ In the cockpit, `c` shows the command and everything it reported: copy that too.
    - `fast/text`, with `-1`;
    - `small-memory/text`, with `-s`;
    - `verbose/text`, with `-v`. It prints progress lines that end in a carriage return on stderr; they compare fine but look odd;
-   - `usage/no-args`, with no `args` at all. In it, the program's path appears as `$PROGDIR/lzg` on both sides.
+   - `usage/no-args`, with no `args` at all. In it, the program's path appears as `$PROGDIR/lzg` on both sides;
+   - `compress/real`, with `args = ["-9", "{input}"]` and `input = "tests/small.txt"`: a real file of the project instead of a sample. Put a small file there first (`mkdir -p targets/lzg/tests && printf 'a small text of my own\n' > targets/lzg/tests/small.txt`, or any small file of your own), and commit it with the project, or a fresh clone cannot run the scenario. Before the file is there, Features says `its input tests/small.txt is not here — put the file back or change the scenario`.
 2. **Break `u-version` on purpose.** Change `1.0.10` in its Rust, in `targets/lzg/migration/units/u-version/u_version_rs/src/logic.rs` (`nano -w` opens it), and re-verify. Only `differential-driver` and `feature:version/flag` should fail, which proves the scenario is doing its job. Undo with `git checkout targets/lzg`.
 3. **Hand edit.** In the cockpit, select `u-checksum`'s crate, press `Enter` and choose **Hand edit**. Your change is judged like a model's and recorded as a human attempt. It is never accepted automatically.
 4. **Modify with a note, or Retry.** Ask the chat something like `Please modify the last u-checksum attempt: keep the loop unrolled by 8`, or `Please retry u-checksum`. Then compare attempts with `d`.

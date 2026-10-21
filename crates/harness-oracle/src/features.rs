@@ -128,14 +128,6 @@ pub(crate) fn feature_step(ctx: &mut FeatureStepCtx<'_>) -> Result<(), Error> {
     for scenario in &features.scenarios {
         let argv = scenario.argv();
         let args: Vec<&str> = argv.iter().map(String::as_str).collect();
-        let sample = scenario.input.map(|s| (s.file_name(), s.bytes()));
-        let input = sample
-            .as_ref()
-            .map(|(name, bytes)| (*name, bytes.as_slice()));
-        let run = |bin: &Path| -> Result<ScenarioRun, Error> {
-            place(bin, &run_path)?;
-            ctx.confined.run_scenario(&run_path, &args, input, None)
-        };
         let Some(mixed_bin) = &mixed_bin else {
             ctx.checks.push(Check {
                 name: scenario.check_name(),
@@ -143,6 +135,28 @@ pub(crate) fn feature_step(ctx: &mut FeatureStepCtx<'_>) -> Result<(), Error> {
                 detail: features::MIXED_LINK_DETAIL.into(),
             });
             continue;
+        };
+        // The input's bytes, read once with the snapshot (§14.1): a file
+        // the run cannot use is the scenario's problem — a skip, never a
+        // check, and the other scenarios still run.
+        let bytes = match features.input_bytes(scenario) {
+            None => None,
+            Some(Ok(bytes)) => Some(bytes),
+            Some(Err(_)) => {
+                ctx.inputs
+                    .features_skipped
+                    .push(features::skip_entry(scenario, SkipReason::InputUnusable));
+                continue;
+            }
+        };
+        let input = scenario
+            .input
+            .as_ref()
+            .zip(bytes.as_deref())
+            .map(|(i, bytes)| (i.file_name(), bytes));
+        let run = |bin: &Path| -> Result<ScenarioRun, Error> {
+            place(bin, &run_path)?;
+            ctx.confined.run_scenario(&run_path, &args, input, None)
         };
         tampered = tampered || c_changed();
         if tampered {
@@ -438,7 +452,9 @@ mod tests {
             feature: "zlib".into(),
             id: "text".into(),
             args: vec!["--zlib".into(), "-c".into(), "{input}".into()],
-            input: Some(harness_core::features::Sample::Text),
+            input: Some(harness_core::features::Input::Sample(
+                harness_core::features::Sample::Text,
+            )),
         }
     }
 

@@ -141,8 +141,11 @@ pub struct ScenarioView {
     pub id: String,
     /// The arguments as the program sees them (`{input}` = the file name).
     pub argv: Vec<String>,
-    /// Its input, in words.
-    pub input: Option<&'static str>,
+    /// Its input, in words: `the sample: …` or `the file <path>`.
+    pub input: Option<String>,
+    /// Why its input file cannot be used, in words (§14.1), when the map
+    /// or the snapshot's read says so.
+    pub unusable: Option<String>,
     /// The map's record of it, when the map has one.
     pub record: Option<ScenarioRecord>,
     /// Why a unit's latest fresh, current verdict skipped it, if one did.
@@ -591,7 +594,15 @@ pub fn build(
             .map(|s| ScenarioView {
                 id: s.id.clone(),
                 argv: s.argv(),
-                input: s.input.map(|i| i.words()),
+                input: s.input.as_ref().map(|i| match i {
+                    features::Input::Sample(_) => format!("the sample: {}", i.words()),
+                    features::Input::File(_) => i.words(),
+                }),
+                unusable: list.input_unusable(s).or_else(|| {
+                    let why = records.get(&(f.id.clone(), s.id.clone()))?.unusable()?;
+                    let input = s.input.as_ref()?;
+                    Some(features::input_unusable_words(why, input.written()))
+                }),
                 record: records
                     .get(&(f.id.clone(), s.id.clone()))
                     .map(|r| (*r).clone()),
@@ -603,6 +614,9 @@ pub fn build(
         let c_side_skip = results
             .iter()
             .any(|r| matches!(r, UnitResult::CouldNotRun(reason) if reason.is_c_side()));
+        // A scenario whose input file cannot be used is marked as one the C
+        // side cannot run (§14.1), from today's read as from the map.
+        let input_unusable = scenarios.iter().any(|s| s.unusable.is_some());
         let map_unusable = model.map.current()
             && scenarios.iter().any(|s| {
                 s.record
@@ -623,6 +637,7 @@ pub fn build(
             .iter()
             .filter(|s| {
                 s.skipped.is_some_and(|r| r.is_c_side())
+                    || s.unusable.is_some()
                     || (model.map.current()
                         && s.record
                             .as_ref()
@@ -649,7 +664,7 @@ pub fn build(
         let failing = results.iter().any(|r| matches!(r, UnitResult::Failed(_)));
         let state = if failing {
             FeatureState::Failing
-        } else if c_side_skip || map_unusable {
+        } else if c_side_skip || map_unusable || input_unusable {
             FeatureState::ScenarioCannotRun
         } else if recheck {
             FeatureState::NeedsRecheck
@@ -675,11 +690,13 @@ pub fn build(
             FeatureState::SeeUnits
         };
         let also = match state {
-            FeatureState::Failing if c_side_skip || map_unusable => Some(format!(
-                "{} scenario{} cannot run",
-                cannot_run.max(1),
-                plural(cannot_run.max(1))
-            )),
+            FeatureState::Failing if c_side_skip || map_unusable || input_unusable => {
+                Some(format!(
+                    "{} scenario{} cannot run",
+                    cannot_run.max(1),
+                    plural(cannot_run.max(1))
+                ))
+            }
             FeatureState::HoldsSoFar { .. } | FeatureState::AllC if red_units > 0 => Some(format!(
                 "{red_units} unit{} with a red verdict",
                 plural(red_units)

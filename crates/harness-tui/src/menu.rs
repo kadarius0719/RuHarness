@@ -110,6 +110,13 @@ pub enum Action {
         /// The workloads file's, not the features file's.
         workloads: bool,
     },
+    /// Fix the features (or workloads) file — ask in chat: one line per
+    /// scenario (or workload) that cannot run typed into the chat's input
+    /// (docs/FEATURES-DESIGN.md §14.3).
+    FixFile {
+        /// The workloads file, not the features file.
+        workloads: bool,
+    },
 }
 
 /// The last item of every Enter menu: the row's card.
@@ -701,6 +708,8 @@ impl App {
         // With the chat off, the reason names the command line's way.
         // The chat proposes the features or a workload (§9.6).
         self.proposal_items(sel, &mut items);
+        // The chat fixes a file whose scenarios cannot run (§14.3).
+        self.fix_items(sel, &mut items);
         let chat_off = |gen_driver: bool| {
             self.chat_off_way(gen_driver)
                 .or_else(|| self.chat_unavailable())

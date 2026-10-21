@@ -41,3 +41,7 @@ Edited by hand again (2026-10-20): each `init` tool list gained
 Edited by hand again (2026-10-20): each `init` tool list gained
 `mcp__harness__harness_features_propose` and `mcp__harness__harness_workloads_propose` (the
 chat's proposals of the features and workloads files).
+
+Edited by hand again (2026-10-21): each `init` tool list gained
+`mcp__harness__harness_features_file` and `mcp__harness__harness_workloads_file` (the chat reads
+the file it is asked to fix).
