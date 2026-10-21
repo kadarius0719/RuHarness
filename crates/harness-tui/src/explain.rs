@@ -1072,10 +1072,17 @@ fn feature(app: &App, id: &str) -> Explained {
     let name = crate::display::line(&f.name);
     let runs = plural(f.scenarios.len(), "run", "runs");
     let pieces = plural(f.units.len(), "piece", "pieces");
+    // Which pieces it reaches only from a current map (the whole-journey
+    // check: "it reaches 0 pieces" was said before any map).
+    let mapped = app.features.map.current() && f.scenarios.iter().all(|s| s.record.is_some());
+    let reaches = if mapped {
+        format!("it reaches {pieces}")
+    } else {
+        "which pieces it reaches is not known until it is mapped".to_string()
+    };
     let hint = fit(&[
         format!(
-            "{name}: one of your features, {runs} of the whole program; it reaches {pieces}; \
-             {}.",
+            "{name}: one of your features, {runs} of the whole program; {reaches}; {}.",
             f.state.word()
         ),
         format!("{name}: one of your features; {}.", f.state.word()),
@@ -1083,7 +1090,11 @@ fn feature(app: &App, id: &str) -> Explained {
     ]);
     let card = vec![
         format!("One of your features: {name} (its id: {id})."),
-        format!("It is {runs} of the whole program; the map found it runs {pieces}."),
+        if mapped {
+            format!("It is {runs} of the whole program; the map found it runs {pieces}.")
+        } else {
+            format!("It is {runs} of the whole program; not mapped yet.")
+        },
         format!("Now: {}.", f.state.word()),
         "Every check of a piece it runs compares it on the C and on that piece's Rust.".into(),
     ];

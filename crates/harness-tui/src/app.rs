@@ -3944,9 +3944,12 @@ impl App {
     /// A plan was made: its units, or a plan with none (review ENG-3) —
     /// not the note that no plan exists yet.
     pub fn plan_made(&self) -> bool {
-        !(self.snapshot.units.is_empty()
-            && self.snapshot.note.as_deref()
-                == Some(crate::model::no_plan(&self.snapshot.ledger_rel()).as_str()))
+        // Before a scan the note says so, not "no plan": the plan file is
+        // what tells.
+        !self.snapshot.units.is_empty()
+            || (self.snapshot.note.as_deref()
+                != Some(crate::model::no_plan(&self.snapshot.ledger_rel()).as_str())
+                && self.snapshot.ledger().plan_path().is_file())
     }
 
     /// The plan act's words: "Make the plan" the first time, then "Refresh
@@ -4006,8 +4009,12 @@ impl App {
     /// person checks (the whole-journey check, item 11).
     pub fn editor_command(&self) -> Option<String> {
         let d = self.draft(self.editing)?;
-        let argv = features_edit::editor_argv(&self.features_editor(), &d.file, d.error_line);
-        Some(shell_line(&argv))
+        // What runs, as a person would type it: the editor on the draft
+        // (the cockpit runs it through `sh -c` so an EDITOR with words in
+        // it works).
+        let mut argv = features_edit::editor_argv(&self.features_editor(), &d.file, d.error_line);
+        let file = argv.split_off(3);
+        Some(format!("{} {}", self.features_editor(), shell_line(&file)))
     }
 
     /// An act's card: its words in full, what the dialog leaves out
@@ -4100,10 +4107,12 @@ impl App {
         }
         // Only a missing plan: a plan with no units is a plan (review ENG-3).
         if !self.plan_made() {
-            return say(
-                "Make the plan — Enter on the tool row".into(),
-                Some(Action::Act(Act::Plan)),
-            );
+            return Some(Advice {
+                text: "Make the plan — Enter on the tool row".into(),
+                action: Some(Action::Act(Act::Plan)),
+                // The menu's "recommended:" line says why, not the item again.
+                reason: Some("no plan yet".into()),
+            });
         }
         // A blocked unit's files left: refreshing the plan never makes it
         // fresh, so it is no next step.
@@ -5763,10 +5772,15 @@ impl App {
             Selection::Attempt(u, a) => match self.snapshot.unit(u).and_then(|x| x.attempt(a)) {
                 Some(at) => {
                     let unit = self.snapshot.unit(u).expect("found above");
+                    // This cockpit's hand-off, or one the command line left
+                    // with its answer file waiting (the whole-journey
+                    // check, item 6).
                     let waiting = self
                         .awaiting
                         .iter()
-                        .any(|aw| aw.attempt.as_deref() == Some(a.as_str()));
+                        .any(|aw| aw.attempt.as_deref() == Some(a.as_str()))
+                        || (at.record.outcome == "in-progress"
+                            && self.pending_answer(unit).is_some());
                     let mut word = at.record.outcome.replace('-', " ");
                     if waiting {
                         word = "waiting for your answer".into();
