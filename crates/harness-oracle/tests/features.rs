@@ -29,6 +29,7 @@ const MAIN: &str = r#"#include <stdio.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include "unit.h"
 #include "mul.h"
 int main(int argc, char **argv) {
@@ -52,6 +53,11 @@ int main(int argc, char **argv) {
     struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); printf("%ld\n", (long)ts.tv_nsec); return 0;
   }
   if (!strcmp(argv[1], "-s")) { sleep(60); return 0; }
+  if (!strcmp(argv[1], "-n") && argc > 2) {
+    struct stat st; if (stat(argv[2], &st) != 0) return 2;
+    fprintf(stderr, "%s %lld %lld\n", argv[2], (long long)st.st_size, (long long)st.st_mtime);
+    return 0;
+  }
   fprintf(stderr, "unknown option %s\n", argv[1]);
   return 1;
 }
@@ -4240,4 +4246,140 @@ fn a_knr_head_with_an_attribute_after_its_parameters_is_read_whole() {
         "{:?}",
         map.unwatched_reasons
     );
+}
+
+/// §14.1: the features of [`FEATURES`] plus a feature whose scenarios take a
+/// file from the project — one that is there, one that is not.
+const FILE_FEATURES: &str = r#"
+
+[[feature]]
+id = "file"
+name = "Read a project file"
+
+[[scenario]]
+feature = "file"
+id = "sum"
+args = ["-a", "{input}"]
+input = "data/small.lzg"
+
+[[scenario]]
+feature = "file"
+id = "name"
+args = ["-n", "{input}"]
+input = "data/small.lzg"
+
+[[scenario]]
+feature = "file"
+id = "gone"
+args = ["-a", "{input}"]
+input = "data/gone.lzg"
+"#;
+
+/// §14.1: a file from the project is a scenario's input — copied into the
+/// run's folder under its own basename with the samples' fixed time,
+/// `{input}` that basename; a missing one is the scenario's `input-unusable`
+/// skip, and every other scenario still runs.
+#[test]
+fn a_project_file_is_a_scenarios_input_and_a_missing_one_is_a_skip() {
+    let tmp = TempDir::new("feat-file");
+    let (target, unit) = program(
+        tmp.path(),
+        GOOD,
+        Some(&format!("{FEATURES}{FILE_FEATURES}")),
+        "",
+    );
+    write(&tmp.path().join("data/small.lzg"), "LZG\u{1}bytes\n");
+    let verdict = CAbiDifferential
+        .verify(&target, &unit)
+        .expect("oracle runs");
+    assert!(verdict.green, "{}", describe(&verdict));
+    assert_eq!(
+        check(&verdict, "feature:file/sum").detail,
+        "exit 0; stdout 4 bytes identical; stderr empty",
+        "{}",
+        describe(&verdict)
+    );
+    assert!(check(&verdict, "feature:file/name").passed);
+    assert!(check(&verdict, "feature:sum/text").passed, "the others run");
+    assert_eq!(
+        verdict.inputs.features_skipped,
+        ["clock/now: c-side-unstable", "file/gone: input-unusable"],
+        "{}",
+        describe(&verdict)
+    );
+    assert!(!feature_names(&verdict).contains(&"feature:file/gone"));
+
+    // The map: the run saw `small.lzg` (its basename), 10 bytes, modified at
+    // the samples' fixed time; the missing file marks its scenario.
+    let facts = with_symbols(tmp.path());
+    let FeatureSnapshot::Valid { features, digest } = FeatureSnapshot::load(&target) else {
+        panic!("valid")
+    };
+    assert_eq!(verdict.inputs.features, digest);
+    let mut progress = Quiet(Vec::new());
+    let map = harness_oracle::map_features(&target, &facts, &features, &digest, &mut progress)
+        .expect("maps");
+    let by = |id: &str| {
+        map.scenarios
+            .iter()
+            .find(|r| format!("{}/{}", r.feature, r.scenario) == id)
+            .unwrap_or_else(|| panic!("{id}"))
+    };
+    let name = by("file/name");
+    assert_eq!(name.end, "exit 0");
+    assert_eq!(name.stderr_head, "small.lzg 10 0");
+    assert!(name.stable && name.probe_agrees, "{name:?}");
+    assert_eq!(by("file/sum").end, "exit 0");
+    let gone = by("file/gone");
+    assert_eq!(gone.end, "not run");
+    assert_eq!(
+        gone.unusable(),
+        Some(harness_core::features::InputUnusable::Missing)
+    );
+    assert_eq!(
+        features
+            .input_unusable(&features.scenarios[features.scenarios.len() - 1])
+            .as_deref(),
+        Some("its input data/gone.lzg is not here — put the file back or change the scenario")
+    );
+    assert_eq!(by("sum/text").end, "exit 0", "the others run");
+    assert_eq!(progress.0.len(), 9, "every scenario is reported");
+    // The map reads back.
+    write(
+        &tmp.path().join("migration/features/map.json"),
+        std::str::from_utf8(&map.to_bytes().expect("bytes")).expect("text"),
+    );
+    let harness_core::features::MapState::Loaded { map: back, .. } =
+        harness_core::features::load_map(&harness_core::ledger::Ledger::of(&target), &facts)
+    else {
+        panic!("the map reads back")
+    };
+    assert_eq!(back.scenarios.len(), 9);
+
+    // A changed file is a changed digest: the verdict no longer covers it.
+    write(&tmp.path().join("data/small.lzg"), "other bytes\n");
+    assert_ne!(FeatureSnapshot::load(&target).digest(), digest);
+}
+
+/// §14.1: a file at the project's top is an input too; the run reads its
+/// copy, in its own folder (the project stays out of a sandboxed run's
+/// reach).
+#[test]
+fn a_file_at_the_projects_top_is_an_input_too() {
+    let tmp = TempDir::new("feat-file-copy");
+    let features = "schema_version = 1\n[[feature]]\nid = \"file\"\nname = \"Read\"\n\
+                    [[scenario]]\nfeature = \"file\"\nid = \"sum\"\nargs = [\"-a\", \"{input}\"]\n\
+                    input = \"small.lzg\"\n";
+    let (target, unit) = program(tmp.path(), GOOD, Some(features), "");
+    write(&tmp.path().join("small.lzg"), "abc");
+    let verdict = CAbiDifferential
+        .verify(&target, &unit)
+        .expect("oracle runs");
+    assert_eq!(
+        check(&verdict, "feature:file/sum").detail,
+        "exit 0; stdout 4 bytes identical; stderr empty",
+        "{}",
+        describe(&verdict)
+    );
+    assert!(verdict.inputs.features_skipped.is_empty());
 }
