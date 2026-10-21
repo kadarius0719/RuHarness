@@ -1,19 +1,20 @@
-# Next session — kickoff (2026-10-18)
+# Next session — kickoff (2026-10-21)
 
-This is the current plan; no other file holds one. Older kickoffs and the 2026-10-08 build trail
-were cut on 2026-10-18 (git history keeps them; every result in them is in DECISIONS.md).
+This is the current plan; no other file holds one. Older kickoffs and build trails were cut on 2026-10-18 and again on 2026-10-21 (git history
+keeps them; every result in them is in DECISIONS.md, whose index at the top finds each).
 
-## Where things stand (2026-10-18)
+## Where things stand (2026-10-21)
 
-The project map is complete on `main` (steps (a) to (f), reviewed in three rounds, eight fix passes
-and a wording pass; 1 646 tests, `bench check --replay` green): a newcomer agent reached a verified
-Rust unit on liblzg and on zopfli by the docs alone, and the zopfli tool accepted from the map is
-byte-identical to the hand-written target. The documentation was then rewritten for a
-non-technical reader (2026-10-09) and reshaped for a person in a hurry (2026-10-15: FIRST-HOUR.md,
-seven topic pages, a README of four doors), and on 2026-10-18 cleaned up
-(docs/reviews/2026-10-18-docs-cleanup-plan.md). The session's answer to the person's question "how close to a usable
-beta?" is about two-thirds of one, with reasons in DECISIONS 2026-10-08; the last entries there
-hold the rest.
+The whole journey runs inside the cockpit on a real program: on liblzg the person mapped the
+project, accepted its three programs, scanned and planned one, had the chat make a test program
+and the Rust for two pieces, accepted them, and had the chat propose a features file — every step
+from the screen, with the judge green at each. The project map (2026-10-08), the documentation
+for a non-technical reader (2026-10-09 to 2026-10-18) and eleven cockpit passes (2026-10-18 to
+2026-10-21, below) are on `main`; 1 780 tests; `bench check --replay` green at its last run
+(2026-10-18). What stops a large program today is the leaf cap: a piece that calls another piece
+"stays C" (work item 2). The person's working rhythm since 2026-10-20: they walk the cockpit and
+send screenshots; the session triages each into a fix made at once, an item for the pass in
+flight, or a design.
 
 ## The person's rules that matter for resuming
 
@@ -26,152 +27,41 @@ hold the rest.
   judging what the person's run found or designing anything new, and for medium again after.
 - Plain words in every report; commit to `main` and push at each milestone.
 
-## Done (2026-10-18): the cockpit made easy for a newcomer
+## Built since 2026-10-18 (all on main; the DECISIONS entry of each date says what and why)
 
-The session's critique and the newcomer's walk are in docs/reviews/2026-10-18-cockpit-usability-
-critique.md; DECISIONS' 2026-10-18 cockpit entry says what the four passes built (one vocabulary
-and a Next step on every screen; Units/Features/Speed first and a unit's View in words; the
-Project view replacing the text menu; the newcomer's seventeen snags, among them the cockpit
-writing the build configuration itself). A reader who had read only docs/topics/cockpit.md reached
-every goal in under eight minutes. Open from it: the headless driver (devtools/cockpit-drive) does
-not clear the screen when the cockpit goes full-screen and drops key bursts sent as one command
-(driver issues, not cockpit ones).
+- **2026-10-18, the cockpit made easy for a newcomer** (four passes; docs/reviews/2026-10-18-
+  cockpit-usability-critique.md): one vocabulary, a Next step on every screen, the Project view
+  replacing the text menu, the cockpit writing the build configuration itself.
+- **2026-10-19, colours** (`crates/harness-tui/src/theme.rs`): fourteen roles, four themes, a
+  settings file, rule tests over every golden; a hand-off pause reads "waiting", never "failed".
+- **2026-10-19, model work through the chat** with a sign-in walk-through; an old `harness-mcp`
+  beside a newer cockpit says "rebuild" with the line to paste.
+- **2026-10-19, the Project view, revision 2** (COCKPIT-WRAPPER-DESIGN §9.3): one list, one
+  card, one line; the map's reply carries a `why`.
+- **2026-10-20, the guided path** (§9.4): the journey line of eight stages on every screen, stage
+  words instead of planned/tried, **Make the test program — ask in chat**, refusals in words,
+  dialogs on a panel over a backdrop, panes as wide as their rows (`files_width`); a newcomer
+  check and a seventeen-item fix pass the same day (pieces that stay C, a waiting try, the
+  chat-off way spelled as commands, guide section 12D).
+- **2026-10-20, explain anything** (§9.5): the hint line under the panes, the `i` card on every
+  row and in every dialog, dialogs of three lines, narrow menus, the chat's lines folded.
+- **2026-10-20, a model proposes the features and the workloads** (§9.6): Propose items on the
+  Features and Speed rows; harness-mcp writes a checked proposal file only; Write opens it as
+  the draft; the Features and Speed views show the proposal before the editor opens.
+- **2026-10-20, a readable default** (§9.7): the theme chosen by asking the terminal its
+  background (`crates/harness-tui/src/background.rs`), title bands, the section colour on
+  headings only; `--theme terminal` keeps the earlier look.
+- **2026-10-21, file inputs and the chat's fix** (FEATURES-DESIGN §14): a scenario's input may
+  be a small file in the project; `input-unusable` as a reason; **Fix the features file — ask in
+  chat**; the chat's brief knows which scenarios cannot be checks.
 
-## Done (2026-10-19): the cockpit's colours
-
-The person found the colours hard to read. Now (`crates/harness-tui/src/theme.rs`): ten named
-roles (text, muted, heading, accent, good, bad, attention, selected, disabled, border); four
-themes — terminal (the default, the terminal's own green/red/yellow/cyan by role, nothing dim, the
-person's idea), dark and light (designed, contrast-tested against their backgrounds), mono (no
-colour; `NO_COLOR` picks it); `--theme`, `RUHARNESS_THEME`, and a settings file
-(`~/Library/Application Support/ruharness/cockpit.toml`, `$RUHARNESS_COCKPIT_CONFIG`) with
-`[theme] name` and per-role `[colors]` overrides, bad values refused by name. Rules enforced by a
-test over every golden screen: colour only on a state beside its mark or word, one accent per
-screen (the Next step label and the recommended item), no dim, no dark grey, no blink. The 41
-yellows became 18 attention, 15 bold, 3 muted, 4 plain, 1 accent. Code views lost syntax colours
-(keywords bold, comments muted). The headless driver tags the accent as `A`.
-
-## Done (2026-10-19): sections, status and notices have their own hues; a hand-off pause is "waiting"
-
-After the person's screenshot (nearly all text green on a green-on-black terminal), four roles
-joined the palette — section (pane titles, headings: the terminal's blue bold / 75 / 25), notice
-(magenta / 176 / 127), status (the Ready/Last line), label (secondary text) — applied across every
-screen, with the rule tests extended (a section colour starts its line; a notice is a whole line; a
-label never holds a mark or "Next step:"). A hand-off pause (exit 1 with "awaiting response", or the
-`awaiting` event) now reads "waiting for your answer: <file> — write the reply there, then run Ask a
-model again (or answer it in the chat)" in the attention colour, never "failed"; the status line
-shortens long paths to their last three parts and keeps the sentence's end. The light theme's
-accent is 23, not 31 (31 fails 4.5:1 on white). Left: a newly started cockpit does not remember
-that a hand-off is waiting.
-
-## Done (2026-10-19): model work in the cockpit goes through the chat, with a sign-in walk-through
-
-The person's first run of it found a snag the fake Claude Code could not: `cargo run -p harness-tui`
-builds the cockpit alone, so the `harness-mcp` beside it was stale and the sign-in dialog opened for
-a rebuild problem. Fixed the same day: an old harness-mcp is its own dialog, with the rebuild line
-to paste (DECISIONS 2026-10-19, "An old harness-mcp beside a newer cockpit…"). The uninstalled run
-is now `cargo build -p harness-cli -p harness-tui -p harness-mcp && target/debug/harness-tui
---target DIR`.
-
-Built as queued below (DECISIONS 2026-10-19, CHAT-PANE-DESIGN §1.6 and §3.6, MCP-DESIGN §R7). Open from it: run the live chat tests once (the real Claude Code must list the two new map tools), and the person's own try of "Ask for advice — ask in chat" signed in.
-
-What was queued:
-
-The person's "Ask a model" from the Project view ran the command-line hand-off and stopped on a
-file nobody writes. One Opus pass (done): "Ask a model" became "Ask in chat"
-with the question pre-typed (the chat agent answers through the harness and the cockpit runs
-`project ask` again; the command-line hand-off stays for the CLI); before any model act the
-cockpit checks Claude Code is installed and signed in, and if not shows a plain walk-through (open
-a new Terminal window, type `claude`, sign in, come back, "Check again"); the same dialog when the
-chat's process dies. The person agreed ("sounds good").
-
-## Done (2026-10-19): the Project view, revision 2
-
-Built from COCKPIT-WRAPPER-DESIGN §9.3 (DECISIONS 2026-10-19, "The Project view, revision 2"): the
-left pane is the one list (counts in the heading, a state word per row, an accepted program's row
-is its tool's row), the right pane the Next step in one line and a card for the selection (its
-decision with the files numbered, the model's advice and why, what Enter does), the help says what
-the states mean, Accept's picker numbers the files, the focused frame is in the section colour, and
-the chat with the focus takes half the width. The map's reply gains an optional `why` (300
-characters, one line) through `project ask`, harness-mcp and the chat's brief. Open from it: the
-person's own look at the Project view on liblzg (with a chat answer, so the why shows), and the live
-chat tests once (the brief changed). An Opus newcomer check of the build found fifteen snags, fixed
-the same day (the DECISIONS entry's "Fix pass after the newcomer check"); the one it left for later:
-**the tool's screen still speaks the old way** — the Back row's pane is a paragraph, and the unit
-views explain rather than show. The next cockpit pass applies §9.3's three rules (one list, one
-card, one line) to the tool's screen; design it first, as §9.3 was, then build it with Opus and
-check it with a newcomer walk.
-
-## Done (2026-10-20): the guided path
-
-Built from COCKPIT-WRAPPER-DESIGN §9.4 (DECISIONS 2026-10-20, "The guided path"), after the person's
-principle that the cockpit drives a person through the workflow: a line of the eight stages under
-every View's title (folded to "Step N of 8: …" under 100 columns); a unit's state says its stage
-(`no test program`, `test program ready`, `Rust tried`, `Rust green — accept it`, `done`); **Make
-the test program — ask in chat** in the cockpit, through the chat as Migrate is (harness-mcp's
-`harness_gen_driver`; `gen-driver` gained `--requester` and `--answer`), Migrate greyed until it is
-made; migrate's refusal says the missing stage in words; dialogs, menus and the help stand on a
-panel over a grey backdrop; the Files and Project panes are as wide as their rows (`files_width` in
-cockpit.toml). The light theme's label, good, bad, attention and disabled colours and the dark
-theme's disabled colour were darkened for the panel's contrast. Open from it: **rebuild harness-mcp
-beside the cockpit** (its tool list changed); the live chat tests once (the brief changed); the
-person's own Make the test program through the chat on liblzg, and a look at the new dialogs in
-their terminal. The tool's-screen pass named above is still the next cockpit design. A fix pass after an Opus newcomer check followed the same day (DECISIONS 2026-10-20, "Fix pass after
-the newcomer check"): pieces that stay C, a waiting try as a state, the chat-off way spelled as
-commands, the project's Next preferring a tool with work waiting, plainer words, a guide section
-12D walking the journey in the cockpit.
-
-## Done (2026-10-20): explain anything
-
-Built from COCKPIT-WRAPPER-DESIGN §9.5 (DECISIONS 2026-10-20, "Explain anything"), after the
-person asked to get quickly to what something means: the line under the panes says what the
-selected row is, in one sentence, once the first move is made; `i` (or **What is this?**, last in
-every menu) opens a card that says what it is, where it came from, why it is there — why a unit's
-Rust is a copy beside its C, why a try has its own folder, why a file is not part of a tool — and
-where its files are. An act's dialog says what happens in at most three lines before its command;
-`i` there opens the rest. Menus are as narrow as their labels (a greyed item's reason is on the hint
-line). The chat folds its reads into one line and an act into two. Open from it: the live chat
-tests once (the brief and the chat's lines changed); a look at the hint line and the cards in the
-person's own terminal.
-## Done (2026-10-20): a model proposes the features and the workloads
-
-Built from COCKPIT-WRAPPER-DESIGN §9.6 (DECISIONS 2026-10-20, "A model proposes the features and
-the workloads"): **Propose features — ask in chat** on the Features row and **Propose a workload —
-ask in chat** on Speed type a question into the chat; the chat reads the program (`harness_unit`
-on the unit holding `main` — no new read tool was needed) and writes a checked proposal through
-harness-mcp's new `harness_features_propose` / `harness_workloads_propose`, which write only
-`features.proposed.toml` / `workloads.proposed.toml` beside the person's file; **Write your
-features file** then opens the proposal as the draft (**Edit from the chat's proposal…** when the
-file exists), the person saves it as any edit, and the proposal goes. The brief holds both files'
-syntax. Open from it: rebuild harness-mcp beside the cockpit; the live chat tests once; a live
-proposal on a real program.
-
-## Done (2026-10-20): a readable default
-
-Built from COCKPIT-WRAPPER-DESIGN §9.7 (DECISIONS 2026-10-20, "A readable default"): with no theme
-named, the cockpit asks the terminal for its background colour before the first frame (150 ms,
-read from a second, non-blocking opening of `/dev/tty`; no crate added) and uses the designed
-`dark` or `light` theme; no answer: `COLORFGBG`, else `terminal` as before. `?` says which theme
-is on and why. In dark and light each pane's top row is a title band (the focused one in the
-section colour) with a blank column between the panes, and the section colour is kept for pane
-titles and group headings only (the colour-rules test holds the list). Also: the Features (Speed) view shows the chat's proposal under its Next line, one line per
-scenario with the chat's why, so the draft is read before the editor opens. Open from it: the person
-sees the new default on their own terminal; `--theme terminal` gives back the earlier look.
-## Done (2026-10-21): file inputs and the chat's fix
-
-Built from FEATURES-DESIGN §14 (DECISIONS 2026-10-21, "A project file as a scenario's input; the
-chat's fix"): a scenario's `input` may name a small file in the project (the workloads' rules, at
-most 8 MiB, committed with the project), read once per verify or map, copied into the run's folder
-under its own name; a file the run cannot use is the scenario's `input-unusable`, with its
-sentence ("its input tests/small.lzg is not here — put the file back or change the scenario"),
-and the other scenarios still run. The chat's brief knows which scenarios cannot be checks
-(timings, dates, random values, process ids, paths) and how to name a real input. A feature whose
-scenario cannot run offers **Fix the features file — ask in chat** (the Speed row **Fix the
-workloads file — ask in chat**); the chat reads the file with harness-mcp's new
-`harness_features_file` (and `harness_workloads_file`) and proposes the corrected whole file; the
-Next step then reads "Read the chat's fix — Enter, then Edit from the chat's proposal". Open from
-it: rebuild harness-mcp beside the cockpit; the live chat tests once; a live fix on t-benchmark
-and t-unlzg.
+Still open from these, for the person: the live chat tests once (`crates/harness-tui/tests/
+chat_live.rs`, both hosts; the brief and the tool list changed many times); a live "Fix the
+features file" on t-benchmark and a decode scenario with a real `.lzg` file on t-unlzg. For a
+session: the tool's screen still has prose where the Project view has a card (the Back row's
+pane, the unit views' "Heading:" lines) — the next cockpit design under §9.3's three rules; a
+newly started cockpit does not remember that a hand-off is waiting; a terminal that answers the
+background query late (slow ssh) could have its reply read as keys (no DA query follows it).
 
 ## The work, in order
 
