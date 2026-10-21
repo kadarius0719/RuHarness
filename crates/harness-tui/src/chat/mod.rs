@@ -315,6 +315,50 @@ struct ReadCall {
     line: u64,
     words: String,
     request: Option<(String, String)>,
+    /// Its place in the folded reads' line (§9.5), when it is a read.
+    part: Option<usize>,
+}
+
+/// Consecutive reads folded into one line (docs/COCKPIT-WRAPPER-DESIGN.md
+/// §9.5): "· read the project's status and unit u-x — done".
+#[derive(Debug, Clone, Default)]
+struct ReadGroup {
+    /// Its transcript line.
+    line: u64,
+    /// What each read reads ("the project's status"), and how it ended:
+    /// `None` running, `Some(true)` done, `Some(false)` failed.
+    parts: Vec<(String, Option<bool>)>,
+}
+
+impl ReadGroup {
+    /// The line's tone and words.
+    fn line(&self) -> (Tone, String) {
+        let names: Vec<String> = self.parts.iter().map(|(w, _)| w.clone()).collect();
+        let read = match names.split_last() {
+            Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+            Some((last, _)) => last.clone(),
+            None => String::new(),
+        };
+        let failed: Vec<&str> = self
+            .parts
+            .iter()
+            .filter(|(_, s)| *s == Some(false))
+            .map(|(w, _)| w.as_str())
+            .collect();
+        if !failed.is_empty() {
+            let what = if failed.len() == self.parts.len() {
+                "failed".to_string()
+            } else {
+                format!("{} failed", failed.join(" and "))
+            };
+            return (Tone::Bad, format!("· read {read} — {what}"));
+        }
+        if self.parts.iter().all(|(_, s)| *s == Some(true)) {
+            (Tone::Dim, format!("· read {read} — done"))
+        } else {
+            (Tone::Dim, format!("· read {read}"))
+        }
+    }
 }
 
 /// The chat.
@@ -371,6 +415,7 @@ pub struct Chat {
     interrupts: BTreeSet<String>,
     calls: BTreeMap<String, (Option<String>, String)>,
     reads: BTreeMap<String, ReadCall>,
+    read_group: Option<ReadGroup>,
     cur_msg: Option<String>,
     cur_block: Option<u64>,
     cost: f64,
@@ -516,6 +561,7 @@ impl Chat {
             interrupts: BTreeSet::new(),
             calls: BTreeMap::new(),
             reads: BTreeMap::new(),
+            read_group: None,
             cur_msg: None,
             cur_block: None,
             cost: 0.0,
@@ -696,6 +742,7 @@ impl Chat {
         self.started_uuids.clear();
         self.calls.clear();
         self.reads.clear();
+        self.read_group = None;
         self.cur_msg = None;
         self.cost = 0.0;
         self.model = None;
@@ -1113,16 +1160,27 @@ impl Chat {
                     if self.map_answers.remove(&r.tool_use_id) && !r.is_error {
                         events.push(Event::MapAnswered);
                     }
-                    let (tone, word) = if r.is_error {
-                        (Tone::Bad, "failed")
-                    } else {
-                        (Tone::Dim, "done")
-                    };
-                    self.transcript.update_line(
-                        call.line,
-                        tone,
-                        format!("{} — {word}", call.words),
-                    );
+                    match (call.part, self.read_group.as_mut()) {
+                        (Some(i), Some(g)) if g.line == call.line => {
+                            if let Some(p) = g.parts.get_mut(i) {
+                                p.1 = Some(!r.is_error);
+                            }
+                            let (tone, text) = g.line();
+                            self.transcript.update_line(call.line, tone, text);
+                        }
+                        _ => {
+                            let (tone, word) = if r.is_error {
+                                (Tone::Bad, "failed")
+                            } else {
+                                (Tone::Dim, "done")
+                            };
+                            self.transcript.update_line(
+                                call.line,
+                                tone,
+                                format!("{} — {word}", call.words),
+                            );
+                        }
+                    }
                     if let (false, Some((attempt, key))) = (r.is_error, call.request) {
                         if last_page(&r.text, &key) {
                             self.keys_read.insert((gen, attempt.clone(), key.clone()));
@@ -1419,7 +1477,28 @@ impl Chat {
             if let Some(rt) = &self.live {
                 rt.send(stream::allow(&request_id, &input));
             }
-            let line = self.say(Tone::Dim, words.clone());
+            // Consecutive reads fold into one line (§9.5): a read right
+            // after the last one's line joins it.
+            let read = words.strip_prefix("· read ").map(str::to_string);
+            let last = self.transcript.cells.last().map(|c| c.id);
+            let (line, part) = match (read, self.read_group.as_mut()) {
+                (Some(what), Some(g)) if Some(g.line) == last => {
+                    g.parts.push((what, None));
+                    let (tone, text) = g.line();
+                    self.transcript.update_line(g.line, tone, text);
+                    self.unseen = true;
+                    (g.line, Some(g.parts.len() - 1))
+                }
+                (Some(what), _) => {
+                    let line = self.say(Tone::Dim, words.clone());
+                    self.read_group = Some(ReadGroup {
+                        line,
+                        parts: vec![(what, None)],
+                    });
+                    (line, Some(0))
+                }
+                (None, _) => (self.say(Tone::Dim, words.clone()), None),
+            };
             if let Some(call) = tool_use_id {
                 let request = (short == "harness_request")
                     .then(|| (arg(&input, "attempt"), arg(&input, "request_key")));
@@ -1429,6 +1508,7 @@ impl Chat {
                         line,
                         words,
                         request,
+                        part,
                     },
                 );
             }

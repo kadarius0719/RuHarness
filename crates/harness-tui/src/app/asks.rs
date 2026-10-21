@@ -246,6 +246,10 @@ pub struct Asks {
     last_key: Option<Instant>,
     /// The chat's transcript area at the last draw (columns, rows).
     pub transcript_size: (usize, usize),
+    /// The transcript line of the chat act now running (§9.5): "running —
+    /// the chat answers turn 1", updated in place through its turns until
+    /// its outcome.
+    pub act_line: Option<u64>,
 }
 
 impl Asks {
@@ -496,6 +500,8 @@ impl App {
             }
             Ok(r) => {
                 self.chat_line(T::Warn, format!("asks: {}", r.words));
+                // A new act: its running line comes under its own asks.
+                self.asks.act_line = None;
                 self.asks.requests.push_back(r);
                 if self.asks.requests.len() == 1 {
                     self.asks.show_next(now);
@@ -1311,17 +1317,34 @@ impl App {
         let Some(tag) = &p.chat else {
             return;
         };
-        if tag.permitted {
+        // One line for the act, updated in place (§9.5).
+        let text = if tag.permitted {
             self.asks.waiting = None;
-            self.chat_line(
-                T::Good,
-                format!(
-                    "continued, as you agreed when you ran the migration: {}",
-                    p.label
-                ),
-            );
+            let turn = p
+                .attempt
+                .as_ref()
+                .and_then(|a| self.asks.table.get(a))
+                .and_then(|h| h.turn)
+                .map_or("its".to_string(), |t| format!("turn {t}"));
+            format!("running — continued with the chat's answer to {turn}, as you agreed")
         } else {
-            self.chat_line(T::Good, format!("you ran it: {}", p.label));
+            "running".to_string()
+        };
+        self.chat_act_line(T::Dim, text);
+    }
+
+    /// Write the running act's line: in place when it has one, else a new
+    /// line.
+    fn chat_act_line(&mut self, tone: T, text: String) {
+        match self.asks.act_line {
+            Some(id) if self.chat.transcript.cells.iter().any(|c| c.id == id) => {
+                self.chat.unseen = true;
+                self.chat.transcript.update_line(id, tone, text);
+            }
+            _ => {
+                self.chat.unseen = true;
+                self.asks.act_line = Some(self.chat.transcript.line(tone, text));
+            }
         }
     }
 
@@ -1432,7 +1455,13 @@ impl App {
 
     fn chat_owed(&mut self, owed: Owed, failed: Option<&str>) {
         let (text, line, tone) = outcome_message(&owed, failed);
-        self.chat_line(tone, line);
+        // The act's line ends in its outcome — or, paused for the chat's
+        // answer, says which turn it answers (§9.5).
+        let paused = outcome_word(&owed) == "awaiting";
+        self.chat_act_line(tone, line);
+        if !paused {
+            self.asks.act_line = None;
+        }
         // While a Stop is on its way the request is being cancelled: an
         // answer now would be lost with it (review PRO-6).
         if !self.chat.stopping() && self.chat.deny(&owed.tag.request_id, &text) {
@@ -2285,8 +2314,7 @@ fn outcome_message(o: &Owed, failed_read: Option<&str>) -> (String, String, T) {
         "red" => (format!("✗ {} — RED{checks}", o.label), T::Bad),
         "awaiting" => (
             format!(
-                "{} — awaiting the chat's answer to turn {}",
-                o.label,
+                "running — the chat answers turn {}",
                 c.turn.map_or("?".into(), |t| t.to_string())
             ),
             T::Warn,

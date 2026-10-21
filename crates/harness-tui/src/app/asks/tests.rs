@@ -399,7 +399,11 @@ fn the_outcome_waits_for_the_read_after_the_reap() {
         panic!("Run spawns: {cmd:?} ({})", said(&a));
     };
     a.on_spawned(&p);
-    assert!(transcript(&mut a).contains("you ran it: Migrate u-cache (asked in chat)"));
+    assert!(
+        transcript(&mut a).lines().any(|l| l.trim() == "running"),
+        "{}",
+        transcript(&mut a)
+    );
     let events = [
         r#"{"k":"turn-start","unit":"u-cache","attempt":"a-0123456789ab","index":1,"kind":"translate","request_key":"0123abcd"}"#,
         r#"{"k":"message","text":"awaiting the hand-off\u001b[31m"}"#,
@@ -433,7 +437,18 @@ fn the_outcome_waits_for_the_read_after_the_reap() {
     assert_eq!(v["attempt"], "a-0123456789ab");
     assert_eq!(v["messages"][0]["untrusted"], "message", "fenced");
     assert!(m.len() <= MAX_OUTCOME_BYTES);
-    assert!(transcript(&mut a).contains("awaiting the chat's answer to turn 1"));
+    assert!(transcript(&mut a).contains("running — the chat answers turn 1"));
+    // §9.5: two lines for the act — its asks, and its running line updated
+    // in place, never a third.
+    let t = transcript(&mut a);
+    assert_eq!(
+        t.lines()
+            .filter(|l| l.trim_start().starts_with("running"))
+            .count(),
+        1,
+        "{t}"
+    );
+    assert!(!t.contains("you ran it"), "{t}");
     // A failed read answers too, saying so.
     ask(&mut a, "r2", "harness_migrate", json!({"unit": "u-cache"}));
     let mut p2 = a.asks.requests.pop_front().unwrap().pending;
@@ -685,7 +700,7 @@ fn the_continuation_permission_runs_waits_holds_and_ends() {
     assert_eq!(p.chat.as_deref().unwrap().answer.as_deref(), Some("t"));
     a.mode = Mode::Normal;
     a.on_spawned(&p);
-    assert!(transcript(&mut a).contains("continued, as you agreed"));
+    assert!(transcript(&mut a).contains("continued with the chat's answer"));
     // Cancel a continuation: the permission ends.
     a.running = true;
     a.chat_cancelled();

@@ -1243,3 +1243,104 @@ fn the_rebuild_line_follows_where_harness_mcp_was_found() {
         "cd <your RuHarness folder> && cargo install --locked --path crates/harness-mcp"
     );
 }
+
+/// §9.5, the chat as a conversation: consecutive reads fold into one line,
+/// updated as each ends ("— done" once all are); a line of the chat's own
+/// between them starts a new one; a failed read is named.
+#[test]
+fn consecutive_reads_fold_into_one_line() {
+    let tmp = TmpDir::new("chat-fold");
+    let rec = synthetic(&tmp, &start_lines());
+    let mut c = chat(&tmp, &rec, "");
+    let mut events = Vec::new();
+    let read = |c: &mut Chat, events: &mut Vec<Event>, id: &str, tool: &str, input: Value| {
+        c.handle(
+            In::CanUseTool {
+                request_id: format!("r-{id}"),
+                tool: format!("mcp__harness__{tool}"),
+                server: Some("harness".into()),
+                input,
+                tool_use_id: Some(id.into()),
+            },
+            Instant::now(),
+            events,
+        );
+    };
+    let ended = |c: &mut Chat, events: &mut Vec<Event>, id: &str, is_error: bool| {
+        c.handle(
+            In::ToolResults(vec![stream::ToolResult {
+                tool_use_id: id.into(),
+                is_error,
+                text: "{}".into(),
+            }]),
+            Instant::now(),
+            events,
+        );
+    };
+    read(
+        &mut c,
+        &mut events,
+        "t1",
+        "harness_status",
+        serde_json::json!({}),
+    );
+    read(
+        &mut c,
+        &mut events,
+        "t2",
+        "harness_unit",
+        serde_json::json!({"unit": "u-lzgmini"}),
+    );
+    let lines = |c: &mut Chat| -> Vec<String> {
+        c.transcript
+            .cells
+            .iter()
+            .filter(|cell| matches!(cell.kind, transcript::Kind::Line(_)))
+            .map(|cell| cell.text.clone())
+            .collect()
+    };
+    assert_eq!(
+        lines(&mut c),
+        ["· read the project's status and unit u-lzgmini"]
+    );
+    ended(&mut c, &mut events, "t1", false);
+    assert_eq!(
+        lines(&mut c),
+        ["· read the project's status and unit u-lzgmini"]
+    );
+    ended(&mut c, &mut events, "t2", false);
+    assert_eq!(
+        lines(&mut c),
+        ["· read the project's status and unit u-lzgmini — done"]
+    );
+    // Another line between: the next read starts a line of its own.
+    c.say(Tone::Dim, "something else");
+    read(
+        &mut c,
+        &mut events,
+        "t3",
+        "harness_unit",
+        serde_json::json!({"unit": "u-checksum"}),
+    );
+    read(
+        &mut c,
+        &mut events,
+        "t4",
+        "harness_status",
+        serde_json::json!({}),
+    );
+    ended(&mut c, &mut events, "t3", true);
+    ended(&mut c, &mut events, "t4", false);
+    let all = lines(&mut c);
+    assert_eq!(
+        all.last().unwrap(),
+        "· read unit u-checksum and the project's status — unit u-checksum failed"
+    );
+    assert_eq!(all.len(), 3, "{all:?}");
+}
+
+/// §9.5: the brief asks for one line before acting and short answers.
+#[test]
+fn the_brief_asks_for_short_answers() {
+    assert!(BRIEF.contains("say what you will do in\none line, not a paragraph, and answer in at most four short lines unless the person asks for\nmore"), "{BRIEF}");
+}
