@@ -94,6 +94,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-10-21 — **A project file as a scenario's input; the chat's fix** — `input` may name a small file in the project (the workloads' rules, 8 MiB), read once, copied under its basename; a file the run cannot use is the scenario's `input-unusable`; the brief's stability and real-input rules; Fix the features (workloads) file — ask in chat, with read tools for both files.
 - 2026-10-21 — **Beyond the leaves: the leaf cap was an assumption, not a rule** — the spike moved a calling piece green with the callee linked; BEYOND-LEAVES-DESIGN; callees as the program stands, an extern allow-list, callee digests in the verdict.
 - 2026-10-21 — **Beyond the leaves, pass A: the judge** — every build links the callees as the program stands through one function; a failed link is a red check; callee digests in the verdict and the driver record; the extern allow-list, the import rule, the main holder stays C; the whole program links every accepted piece; promoted constants ignored.
+- 2026-10-21 — **Beyond the leaves, proven on a fresh copy; four gaps for pass B** — three pieces moved in order, the program with three Rust pieces the same as the C; a stale callee not reported on the caller, the features' program digest, the status line's words.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -4092,3 +4093,30 @@ program that does not link has nothing left to compare.
 **Not done here (pass B).** The cockpit's stays-C words, its order and cards, the guide's Part 7
 and the TUTORIAL; the combined crate and the `main` holder stay the end-state design.
 
+## 2026-10-21 — Beyond the leaves, proven on a fresh copy; four gaps for pass B
+
+**The walk** (an Opus agent, command line only, a fresh liblzg copy, the spike's hand answers): map,
+configure, accept t-lzg, scan, plan, then u-checksum, u-encode and u-version in the plan's order,
+each a test program and a Rust that went green on the first turn; u-lzg refused with "holds main —
+stays C in this version"; `perf run` built "the program as it stands — u-checksum, u-encode,
+u-version" and found it behaving the same as the C on a 19 MB input (about 32 % more
+instructions, the same memory); two feature scenarios ran green on the program with three Rust
+pieces. u-encode's request held the new "[FUNCTIONS OF OTHER PIECES YOU MAY CALL]" section with
+`_LZG_CalcChecksum`'s prototype; its verdict recorded `dependencies: [u-checksum, rust, …]`; its
+test-program record named u-checksum as `c` (validation links the original C by decision).
+Changing u-checksum's accepted Rust made u-encode `STALE: dependencies`; re-checking it went green
+against the changed Rust. Judge runs: 2–9 s; a test program's validation about 30 s.
+
+**Four gaps, for pass B.** (1) A caller can be re-checked green against a callee whose own verdict
+is stale or red; nothing says so — the caller's status and card should say "a piece it calls is
+out of date itself". (2) The features' `program` digest covers the C files only: a change in an
+accepted piece's Rust leaves another piece's `features=current` although the features ran on the
+program with that Rust — the digest should fold in the linked pieces' Rust. (3) `state status`
+says nothing for the piece holding `main` (only `migrate` does) and never says how much of the
+program is Rust — one line: "the program as it stands: 3 of 4 pieces in Rust (u-lzg holds main)".
+(4) The command line's word for a dependency change is `STALE: dependencies << CONTRADICTION …`;
+the cockpit's "out of date (a piece it calls changed)" should be the command line's too.
+
+**Not a gap.** Changing checksum.c once u-checksum's Rust is accepted does not make u-encode out
+of date: the program runs the Rust, not that C. By design ("as the program stands"); the docs say
+it in those words.
