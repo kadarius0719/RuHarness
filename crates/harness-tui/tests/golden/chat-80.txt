@@ -19,6 +19,6 @@
 │                      ││About: the project                                    │
 │                      ││› Enter reviews the request — or type                 │
 └──────────────────────┘└──────────────────────────────────────────────────────┘
- The C project moving to Rust; its one piece is in Rust.
+ The C project moving to Rust; its one piece that can move is in Rust.
 
  Enter review   Esc decline   Ctrl-J new line   F1 help   Ctrl-C quit

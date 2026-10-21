@@ -7,37 +7,70 @@
 use std::io::{BufRead, Write};
 use std::path::Path;
 
-/// The question in one plain sentence, before any detail (the newcomer's
-/// ten minutes, finding 8: ledger, verdict, drivers and token come after).
-pub const LEAD: &str = "This folder holds migration results made on another computer, or in \
-     another copy of the project. The harness uses them here only once you trust them: adopt \
-     the folder?";
-
-/// What adopting does, in the dialog's words.
-pub fn explanation(adoption_file: &str) -> String {
-    format!(
-        "Adopting trusts these results in this folder on this computer from now on (a copy\n\
-         \x20 or another checkout of the project is asked again):\n\
-         \x20 - the harness will build and run the code they hold — drivers, Rust crates,\n\
-         \x20   features and workloads — in the sandbox;\n\
-         \x20 - the folder, a fresh random token and the time are recorded in {adoption_file}\n\
-         \x20   (the token is also written to migration/.ruharness-adopted, replacing any\n\
-         \x20   that came with the folder);\n\
-         \x20 - the build folders that came with them are deleted, in the project's ledger and\n\
-         \x20   in each tool's under migration/tools/: build/, each unit crate's target/, each\n\
-         \x20   attempt's candidate/target/ and every .promote-*/ — nothing else;\n\
-         \x20 - each verdict that came with them is marked \"made elsewhere\" (in the tree and in\n\
-         \x20   `harness state status`) until `harness verify` runs it here.\n"
-    )
+/// The question in three plain lines — the start's and the in-cockpit
+/// dialog's alike (the whole-journey check, item 11): what the folder
+/// holds, what adopting trusts, what it removes. The rest is the card.
+pub fn short_words() -> Vec<String> {
+    vec![
+        "This folder holds migration results made on another computer, or in another copy of \
+         the project."
+            .into(),
+        "Adopting trusts them here: the harness may build and run the code they hold, in its \
+         sandbox, and checks each result again before it counts."
+            .into(),
+        "It deletes the build folders that came with them; nothing else changes.".into(),
+    ]
 }
+
+/// What adopting does, in full: the card behind the question (`i` in the
+/// cockpit, `i` and Enter at the start). `refusal`: the command's own
+/// words for the folder's claim, when known.
+pub fn card_words(adoption_file: &str, refusal: Option<&str>) -> Vec<String> {
+    let mut card = vec![
+        "Adopting trusts these results in this folder on this computer from now on; a copy or \
+         another checkout of the project is asked again."
+            .to_string(),
+        "The harness will build and run the code they hold — test programs, Rust, features and \
+         workloads — in the sandbox."
+            .into(),
+        format!(
+            "The folder, a fresh random token and the time are recorded in {adoption_file} (the \
+             token is also written to migration/.ruharness-adopted, replacing any that came with \
+             the folder)."
+        ),
+        "The build folders that came with them are deleted, in migration/ and in each tool's \
+         under migration/tools/: build/, each piece's Rust target/, each try's candidate/target/ \
+         and every .promote-*/ — nothing else."
+            .into(),
+        "Each check result that came with them is marked \"made elsewhere\" (in the tree and in \
+         `harness state status`) until `harness verify` runs it here."
+            .into(),
+    ];
+    if let Some(r) = refusal {
+        card.push(format!("In detail: {r}."));
+    }
+    card
+}
+
+/// The card as the terminal prints it: each line an indented dash item.
+fn card_text(adoption_file: &str, refusal: &str) -> String {
+    card_words(adoption_file, Some(refusal))
+        .iter()
+        .map(|l| format!("  - {l}\n"))
+        .collect()
+}
+
+/// The start's question after the three lines.
+const QUESTION: &str = "Adopt this folder? Type y and Enter to adopt, i and Enter for what it \
+                        does in full; anything else leaves it untouched: ";
 
 /// Ask whether to adopt the target at `target`, whose ledger `refusal`
 /// describes (the folder and what it claims, [`harness_core::adopt::
-/// made_elsewhere`]), on `input`/`output`; adopt it on a `y`. `Ok(true)` when
-/// the folder is now trusted; `Ok(false)` when the person declined; `Err`
-/// is a reason in words (the project's own `migration/`, an unwritable
-/// adoption file). `tool` is the mapped tool the cockpit opens, for the
-/// commands the adoption lines name.
+/// made_elsewhere`]), on `input`/`output`; adopt it on a `y`. `i` prints
+/// the card and asks again. `Ok(true)` when the folder is now trusted;
+/// `Ok(false)` when the person declined; `Err` is a reason in words (the
+/// project's own `migration/`, an unwritable adoption file). `tool` is the
+/// mapped tool the cockpit opens, for the commands the adoption lines name.
 pub fn ask(
     target: &Path,
     tool: Option<&str>,
@@ -56,16 +89,23 @@ pub fn ask(
     };
     say(
         output,
-        &format!(
-            "{LEAD}\n\nIn detail — harness-tui: {refusal}.\n\n{}\nAdopt this folder? Type y and \
-             Enter to adopt; anything else leaves it untouched: ",
-            explanation(&file)
-        ),
+        &format!("{}\n\n{QUESTION}", short_words().join("\n")),
     )?;
     let mut line = String::new();
-    input
-        .read_line(&mut line)
-        .map_err(|e| format!("the terminal: {e}"))?;
+    loop {
+        line.clear();
+        input
+            .read_line(&mut line)
+            .map_err(|e| format!("the terminal: {e}"))?;
+        if matches!(line.trim(), "i" | "I") {
+            say(
+                output,
+                &format!("\n{}\n{QUESTION}", card_text(&file, refusal)),
+            )?;
+            continue;
+        }
+        break;
+    }
     if !matches!(line.trim(), "y" | "Y") {
         say(
             output,
@@ -105,43 +145,59 @@ mod tests {
             panic!("not the refusal");
         };
         let refusal = harness_core::adopt::made_elsewhere(&root, units, verified);
-        for declined in ["\n", "yes please\n", ""] {
+        for declined in ["\n", "yes please\n", "", "i\nno\n"] {
             let mut out = Vec::new();
             let adopted = ask(&dir, None, &refusal, &mut declined.as_bytes(), &mut out).unwrap();
             assert!(!adopted);
             let text = String::from_utf8(out).unwrap();
-            // One plain sentence first; the detail after it.
-            assert!(text.starts_with(&format!("{LEAD}\n\n")), "{text}");
+            // Three plain lines first, then the question (the whole-journey
+            // check, item 11): no "ledger", no "verdict".
             assert!(
+                text.starts_with(&format!(
+                    "{}\n\nAdopt this folder?",
+                    short_words().join("\n")
+                )),
+                "{text}"
+            );
+            assert_eq!(short_words().len(), 3);
+            for word in ["ledger", "verdict"] {
+                assert!(!text.contains(word), "{word}: {text}");
+            }
+            // Only the cockpit's own way: no `--adopt` to add.
+            assert!(!text.contains("--adopt"), "{text}");
+            // The rest is the card, printed on `i`.
+            let card = declined.starts_with('i');
+            assert_eq!(
                 text.contains(&format!(
                     "{}: this folder already holds migration results made elsewhere (0 units, \
                      0 verified).",
                     root.display()
                 )),
+                card,
                 "{text}"
             );
-            // Only the cockpit's own way: no `--adopt` to add.
-            assert!(!text.contains("--adopt"), "{text}");
-            assert!(
-                text.contains("the harness will build and run the code they hold")
-                    && text.contains("in the sandbox"),
-                "{text}"
-            );
-            assert!(text.contains("the build folders that came with them are deleted"));
-            // Each tool's build folders are named too.
-            assert!(
-                text.contains("in each tool's under migration/tools/"),
-                "{text}"
-            );
-            assert!(
-                text.contains("is marked \"made elsewhere\" (in the tree and in"),
-                "{text}"
-            );
-            assert!(
-                text.contains("until `harness verify` runs it here"),
-                "{text}"
-            );
-            assert!(text.contains("another checkout of the project is asked again"));
+            if card {
+                assert!(
+                    text.contains(
+                        "the code they hold — test programs, Rust, features and workloads — in \
+                         the sandbox"
+                    ),
+                    "{text}"
+                );
+                assert!(
+                    text.contains("in each tool's under migration/tools/"),
+                    "{text}"
+                );
+                assert!(
+                    text.contains("is marked \"made elsewhere\" (in the tree and in"),
+                    "{text}"
+                );
+                assert!(
+                    text.contains("until `harness verify` runs it here"),
+                    "{text}"
+                );
+                assert!(text.contains("another checkout of the project is asked again"));
+            }
             // Declining names the way back.
             assert!(
                 text.contains("start the cockpit again and type y when you want to adopt it"),

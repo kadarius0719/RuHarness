@@ -533,7 +533,7 @@ impl App {
             .owning_unit(sel)
             .is_some_and(|u| !self.snapshot.units[u].report.source_fresh);
         if project || (is_file && file_state == Some(FileState::NotInPlan)) || c_changed {
-            let mut it = self.act_item("Refresh the plan".into(), Act::Plan, None, None);
+            let mut it = self.act_item(self.plan_label().into(), Act::Plan, None, None);
             if it.greyed.is_none() {
                 it.greyed = self.facts_gate();
             }
@@ -735,7 +735,20 @@ impl App {
             it.greyed = if let Some(why) = &stays_c {
                 Some(why.clone())
             } else if needs_driver {
-                Some("it has no test program yet — Make the test program first".to_string())
+                // Never the chat's item while the chat cannot be used
+                // (the whole-journey check, item 13).
+                Some(
+                    match (self.chat_unavailable(), self.model_step_unit(true)) {
+                        (Some(_), Some(u)) => format!(
+                            "it has no test program yet — make one first: run {}",
+                            self.command_line_way("gen-driver", &u)
+                        ),
+                        (Some(_), None) => "it has no test program yet — make one first".into(),
+                        (None, _) => {
+                            "it has no test program yet — Make the test program first".into()
+                        }
+                    },
+                )
             } else {
                 chat_off(false).or_else(draft)
             };

@@ -1,10 +1,11 @@
   Files                    u-cache · no test program
   @0-23 fg 25 BOLD | REVERSED "Files"
   @26-52 fg 25 bg 254 BOLD "u-cache · no test program"
-│▾ harness-tu…000000000│ │Step 6 of 8: Test program                            │
+│▾ harness…0000000 ✓1/4│ │Step 6 of 8: Test program                            │
   @0-0 fg 25 BOLD "│"
   @1-2 fg 238 NONE "▾"
-  @3-22 fg - BOLD "harness-tu…000000000"
+  @3-17 fg - BOLD "harness…0000000"
+  @19-22 fg 240 NONE "✓1/4"
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
   @39-50 fg - BOLD "Test program"

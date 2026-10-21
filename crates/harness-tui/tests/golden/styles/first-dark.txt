@@ -1,23 +1,23 @@
-  Files                    harness-tui-theme-first-0000000000 · 0 of 13 C files
+  Files                    harness-tui-theme-first-0000000000 · 1 of the 4 that
   @0-23 fg 75 BOLD | REVERSED "Files"
-  @26-78 fg 75 bg 237 BOLD "harness-tui-theme-first-0000000000 · 0 of 13 C files"
-│▾ harn…000 ✓0/13 (+1 …│ │Step 6 of 8: Test program 1/4                        │
+  @26-78 fg 75 bg 237 BOLD "harness-tui-theme-first-0000000000 · 1 of the 4 that"
+│▾ harness…0000000 ✓1/4│ │Step 6 of 8: Test program 1/4                        │
   @0-0 fg 75 BOLD "│"
   @1-2 fg 248 BOLD | REVERSED "▾"
-  @3-11 fg - BOLD | REVERSED "harn…000"
-  @12-22 fg 250 BOLD | REVERSED "✓0/13 (+1 …"
+  @3-18 fg - BOLD | REVERSED "harness…0000000"
+  @19-22 fg 250 BOLD | REVERSED "✓1/4"
   @23-23 fg 75 BOLD "│"
   @25-25 fg 244 NONE "│"
   @39-54 fg - BOLD "Test program 1/4"
   @79-79 fg 244 NONE "│"
-│  ▾ Units (11)        │ │Next: 3 of the 11 can move to Rust now — open        │
+│  ▾ Units (11)        │ │Next: 1 of the 4 that can move is in Rust — open     │
   @0-0 fg 75 BOLD "│"
   @1-4 fg 248 NONE "▾"
   @5-14 fg 75 BOLD "Units (11)"
   @23-23 fg 75 BOLD "│"
   @25-25 fg 244 NONE "│"
   @26-30 fg 81 BOLD "Next:"
-  @31-70 fg - BOLD "3 of the 11 can move to Rust now — open"
+  @31-73 fg - BOLD "1 of the 4 that can move is in Rust — open"
   @79-79 fg 244 NONE "│"
 │    ▸ ✓ u001…inen done│ │u-cache: Enter                                       │
   @0-0 fg 75 BOLD "│"

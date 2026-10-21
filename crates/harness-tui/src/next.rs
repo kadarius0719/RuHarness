@@ -67,6 +67,21 @@ impl App {
         self.advice_of(sel).map(|a| self.unless_chat_down(a))
     }
 
+    /// The Next step the View pane shows while `sel` is selected — the
+    /// line the `i` card ends with, computed here once so the two never
+    /// disagree (the whole-journey check, item 12): the Project view's own
+    /// Next step there, the row back to it on a tool's screen, else the
+    /// selection's.
+    pub fn pane_next(&self, sel: &Selection) -> Option<Advice> {
+        if self.in_project_view() {
+            self.project_next()
+        } else if *sel == Selection::ProjectHome {
+            self.project_row_advice(sel)
+        } else {
+            self.advice(sel)
+        }
+    }
+
     fn advice_of(&self, sel: &Selection) -> Option<Advice> {
         match sel {
             Selection::Project | Selection::Units => self.next_step(),
@@ -121,40 +136,7 @@ impl App {
             ),
             // Why is the line above it on the card.
             UnitState::StaysC(_) => advice("nothing to do on it in this version", None),
-            UnitState::Waiting => {
-                // An attempt of this session's: Resume; one the command line
-                // left: its answer file and the command again.
-                if let Some(aw) = self.awaiting.iter().find(|aw| {
-                    unit.attempts
-                        .iter()
-                        .any(|a| aw.attempt.as_ref() == Some(&a.record.id))
-                }) {
-                    advice(
-                        crate::app::waiting_words(
-                            &crate::app::short_file(&aw.path),
-                            "open its attempt and choose Resume",
-                        ),
-                        aw.attempt.clone().map(Action::ChooseAttempt),
-                    )
-                } else {
-                    match self.pending_answer(unit) {
-                        // The command line's try: its answer is the
-                        // person's (the chat answers only its own tries).
-                        Some(path) => advice(
-                            format!(
-                                "waiting for your answer: {} — write the reply there, then run \
-                                 the same migrate command again",
-                                crate::app::short_file(&path)
-                            ),
-                            None,
-                        ),
-                        None => advice(
-                            "an attempt has not finished — it may still be running elsewhere",
-                            None,
-                        ),
-                    }
-                }
-            }
+            UnitState::Waiting => self.waiting_advice(unit),
             UnitState::RustGreen
             | UnitState::RustTried
             | UnitState::TestProgramReady
@@ -277,7 +259,14 @@ impl App {
     pub fn pending_answer(&self, unit: &crate::model::UnitView) -> Option<std::path::PathBuf> {
         let dir = self.snapshot.ledger().unit_dir(&unit.unit.id);
         let mut found: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
-        for sub in ["traces", "traces/chat"] {
+        // A test program's hand-off waits under driver-traces/ (the
+        // whole-journey check, item 7).
+        for sub in [
+            "traces",
+            "traces/chat",
+            "driver-traces",
+            "driver-traces/chat",
+        ] {
             let Ok(entries) = std::fs::read_dir(dir.join(sub)) else {
                 continue;
             };
@@ -298,6 +287,65 @@ impl App {
             }
         }
         found.into_iter().max().map(|(_, p)| p)
+    }
+
+    /// A waiting piece's Next step — its row, its tries' rows and their
+    /// cards say the same (the whole-journey check, items 6 and 7): a try of
+    /// this session's is resumed; one the command line left names its
+    /// answer file and the command to run again (`gen-driver` for a test
+    /// program's, `migrate` for its Rust's).
+    pub fn waiting_advice(&self, unit: &crate::model::UnitView) -> Advice {
+        let ours = |id: &str| {
+            unit.attempts.iter().any(|a| a.record.id == id)
+                || unit.driver_attempts.iter().any(|a| a.id == id)
+        };
+        if let Some(aw) = self
+            .awaiting
+            .iter()
+            .find(|aw| aw.attempt.as_deref().is_some_and(ours))
+        {
+            let driver = unit
+                .driver_attempts
+                .iter()
+                .any(|a| aw.attempt.as_ref() == Some(&a.id));
+            return advice(
+                crate::app::waiting_words(
+                    &crate::app::short_file(&aw.path),
+                    if driver {
+                        "choose Make the test program again"
+                    } else {
+                        "open its try and choose Resume"
+                    },
+                ),
+                aw.attempt
+                    .clone()
+                    .filter(|_| !driver)
+                    .map(Action::ChooseAttempt),
+            );
+        }
+        match self.pending_answer(unit) {
+            // The command line's try: its answer is the person's (the chat
+            // answers only its own tries).
+            Some(path) => {
+                let command = if path.components().any(|c| c.as_os_str() == "driver-traces") {
+                    "gen-driver"
+                } else {
+                    "migrate"
+                };
+                advice(
+                    format!(
+                        "waiting for your answer: {} — write the reply there, then run the same \
+                         {command} command again",
+                        crate::app::short_file(&path)
+                    ),
+                    None,
+                )
+            }
+            None => advice(
+                "a try has not finished — it may still be running elsewhere",
+                None,
+            ),
+        }
     }
 
     /// An attempt's Next step.
@@ -329,7 +377,7 @@ impl App {
                 ),
                 Some(Action::Act(Act::Accept)),
             ),
-            "in-progress" => advice("it has not finished", None),
+            "in-progress" => self.waiting_advice(unit),
             _ if a.is_human() => advice(
                 "your hand edit did not pass — Show the checks, then Hand edit again",
                 Some(Action::HandEdit),
@@ -404,7 +452,7 @@ impl App {
             ),
             S::NeedsRecheck => advice(
                 format!(
-                    "Re-check {} — your features are not checked on {} yet",
+                    "open {} below, then Re-check — your features are not checked on {} yet",
                     f.recheck.join(", "),
                     if f.recheck.len() == 1 { "it" } else { "them" }
                 ),

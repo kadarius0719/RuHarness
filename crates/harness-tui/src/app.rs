@@ -1736,10 +1736,14 @@ impl App {
                 }
             }
             Event::Message { text } => {
+                // Only a change line counts: never the summary, the order
+                // or the next step (`plan changed 5 units` was said of a
+                // plan of 4 — the whole-journey check, item 4).
                 if run.act == Act::Plan
                     && text.starts_with("plan: ")
                     && !text.starts_with("plan: no changes")
                     && !text.starts_with("plan: execution order")
+                    && !text.starts_with("plan: next, ")
                 {
                     run.plan_changes += 1;
                 }
@@ -2336,7 +2340,12 @@ impl App {
                     _ => "detect",
                 };
                 let argv = self.harness_argv(&[os(sub), self.target_arg()])?;
-                Ok(pending(argv, act.label().to_string(), None, None))
+                let label = if act == Act::Plan {
+                    self.plan_label().to_string()
+                } else {
+                    act.label().to_string()
+                };
+                Ok(pending(argv, label, None, None))
             }
             Act::SaveFeatures => Err("saved from the features Edit only".into()),
             Act::SaveWorkloads => Err("saved from the workloads Edit only".into()),
@@ -2753,15 +2762,11 @@ impl App {
                 );
                 v
             }
-            Act::Scan => vec![
-                format!(
-                    "Reads {} again and notes what changed.",
-                    match self.snapshot.target.source_dir() {
-                        Some(_) => "every C file",
-                        None => "the tool's C files",
-                    }
-                ),
-                format!("Writes: {ledger}/facts.jsonl."),
+            Act::Scan => vec![self.scan_words(), format!("Writes: {ledger}/facts.jsonl.")],
+            // No "again" the first time (the whole-journey check, item 11).
+            Act::Plan if !self.plan_made() => vec![
+                "Cuts the C into pieces: functions that call each other move together.".into(),
+                format!("Writes: {ledger}/plan.toml."),
             ],
             Act::Plan => vec![
                 "Cuts the C into pieces again, as it is now; a changed piece needs its check \
@@ -2902,11 +2907,8 @@ impl App {
                     "Scan the project?".to_string(),
                     vec![
                         format!(
-                            "Reads {} again and notes what changed (in {}/facts.jsonl).",
-                            match self.snapshot.target.source_dir() {
-                                Some(_) => "every C file",
-                                None => "the tool's C files",
-                            },
+                            "{} (in {}/facts.jsonl).",
+                            self.scan_words().trim_end_matches('.'),
                             self.snapshot.ledger_rel()
                         ),
                         "A changed file means its checks must run again.".into(),
@@ -2919,6 +2921,20 @@ impl App {
                     .collect(),
                 )
             }
+            Act::Plan if !self.plan_made() => (
+                "Make the plan?".into(),
+                vec![
+                    format!(
+                        "Cuts the C into pieces in {}/plan.toml: functions that call each other \
+                         move together, and a piece that calls another stays C in this version.",
+                        self.snapshot.ledger_rel()
+                    ),
+                    "Each piece then goes: a test program, its Rust, your Accept.".into(),
+                    "Read the pieces afterwards in the tree, under Units.".into(),
+                ],
+            ),
+            // The changes are named once: the dialog's line says c (the
+            // whole-journey check, item 18).
             Act::Plan => (
                 "Refresh the plan?".into(),
                 vec![
@@ -2930,11 +2946,16 @@ impl App {
                     ),
                     if self.in_git() {
                         format!(
-                            "Look over the changes afterwards: `git diff {}/plan.toml`, or c.",
+                            "Writes: {}/plan.toml; look over the changes afterwards with `git \
+                             diff {}/plan.toml`, or c.",
+                            self.snapshot.ledger_rel(),
                             self.snapshot.ledger_rel()
                         )
                     } else {
-                        "Look over the changes afterwards with c.".to_string()
+                        format!(
+                            "Writes: {}/plan.toml; look over the changes afterwards with c.",
+                            self.snapshot.ledger_rel()
+                        )
                     },
                 ],
             ),
@@ -3888,13 +3909,73 @@ impl App {
         };
     }
 
+    /// A plan was made: its units, or a plan with none (review ENG-3) —
+    /// not the note that no plan exists yet.
+    pub fn plan_made(&self) -> bool {
+        !(self.snapshot.units.is_empty()
+            && self.snapshot.note.as_deref()
+                == Some(crate::model::no_plan(&self.snapshot.ledger_rel()).as_str()))
+    }
+
+    /// The plan act's words: "Make the plan" the first time, then "Refresh
+    /// the plan" (the whole-journey check, item 11).
+    pub fn plan_label(&self) -> &'static str {
+        if self.plan_made() {
+            Act::Plan.label()
+        } else {
+            "Make the plan"
+        }
+    }
+
+    /// What a scan does, in one sentence: no "again" before the first.
+    fn scan_words(&self) -> String {
+        let what = match self.snapshot.target.source_dir() {
+            Some(_) => "every C file",
+            None => "the tool's C files",
+        };
+        if self.snapshot.facts.is_none() {
+            format!("Reads {what} and notes their functions and who calls whom.")
+        } else {
+            format!("Reads {what} again and notes what changed.")
+        }
+    }
+
     /// `i` in a dialog: the card of its act — what it does at length, what
     /// it reads and writes, how long it takes.
     pub fn act_card(&self, c: &Confirm) -> (String, Vec<String>) {
         match &c.purpose {
             Purpose::Act(p) => self.act_explained(p),
+            // The build configuration's dialog keeps three lines; its card
+            // holds the rest (the whole-journey check, item 11).
+            Purpose::OpenEditor if self.editing == features_edit::DraftKind::BuildConfig => {
+                let editor = features_edit::editor_name(&self.features_editor());
+                let new = self
+                    .draft(features_edit::DraftKind::BuildConfig)
+                    .is_some_and(|d| d.expect == "none");
+                (
+                    c.title.clone(),
+                    features_edit::build_config_card(&editor, new),
+                )
+            }
+            Purpose::Adopt => {
+                let file = harness_core::adopt::adoption_file()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|e| e.to_string());
+                (
+                    c.title.clone(),
+                    crate::adoption::card_words(&file, self.not_adopted.as_deref()),
+                )
+            }
             _ => (c.title.clone(), c.body.clone()),
         }
+    }
+
+    /// The editor a draft dialog opens, as a command: the line a careful
+    /// person checks (the whole-journey check, item 11).
+    pub fn editor_command(&self) -> Option<String> {
+        let d = self.draft(self.editing)?;
+        let argv = features_edit::editor_argv(&self.features_editor(), &d.file, d.error_line);
+        Some(shell_line(&argv))
     }
 
     /// An act's card: its words in full, what the dialog leaves out
@@ -3981,12 +4062,9 @@ impl App {
             );
         }
         // Only a missing plan: a plan with no units is a plan (review ENG-3).
-        if self.snapshot.units.is_empty()
-            && self.snapshot.note.as_deref()
-                == Some(crate::model::no_plan(&self.snapshot.ledger_rel()).as_str())
-        {
+        if !self.plan_made() {
             return say(
-                "No plan yet — press Enter and choose Refresh the plan".into(),
+                "Make the plan — Enter on the tool row".into(),
                 Some(Action::Act(Act::Plan)),
             );
         }
@@ -4046,7 +4124,9 @@ impl App {
         // the F3 rule's units (review C3).
         if let Some(u) = self.features.recheck.first() {
             return say(
-                format!("Re-check {u} — your features are not checked on it (open it: Units)"),
+                format!(
+                    "open {u} (under Units), then Re-check — your features are not checked on it"
+                ),
                 Some(Action::OpenUnit(u.clone())),
             );
         }
@@ -4086,13 +4166,10 @@ impl App {
             );
         }
         let movable = |(id, s): &&(&str, &UnitState)| no_rust(s) && leaf(id);
-        let can_move = states.iter().filter(movable).count();
-        // The pieces there are: a blocked one is set aside.
-        let pieces = states
-            .iter()
-            .filter(|(_, s)| **s != UnitState::Blocked)
-            .count();
-        let how_many = format!("{can_move} of the {pieces} can move to Rust now");
+        // The one count about moving: the pieces that can move are the
+        // denominator (the whole-journey check, item 4).
+        let (pieces, done, _) = crate::explain::piece_counts(self);
+        let how_many = crate::explain::moved_words(done, pieces);
         // A unit with its test program moves first; with none ready, the
         // first unit is opened for its test program (§9.4). One line, the
         // verb — key form (fix pass, item 6).
@@ -7542,7 +7619,11 @@ pub(crate) mod tests {
         let mut app = app("plansum");
         let p = app.act_argv(Act::Plan, None, None, None).unwrap();
         app.on_spawned(&p);
-        for text in ["plan: u-lib: re-approved", "plan: execution order: u-lib"] {
+        for text in [
+            "plan: u-lib: re-approved",
+            "plan: execution order: u-lib",
+            "plan: next, write the first unit's differential driver: `harness gen-driver u-lib`",
+        ] {
             app.on_child_msg(ChildMsg::Event(Event::Message { text: text.into() }));
         }
         app.on_child_exit(ExitStatus::from_raw(0));

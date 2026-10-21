@@ -1,5 +1,5 @@
 ┌ Files ───────────────┐┌ Speed (1 of 1) ──────────────────────────────────────┐
-│▾ harness-tu…000000000││Step 6 of 8: Test program 1/4                         │
+│▾ harness…0000000 ✓1/4││Step 6 of 8: Test program 1/4                         │
 │  ▾ Units (11)        ││Next: u001-katajainen's Rust is slower than the C —   │
 │    ▸ ✓ u001…inen done││open it under Units to see how to change it, if speed │
 │    ▸ ◇ u-c…he no test││matters there                                         │

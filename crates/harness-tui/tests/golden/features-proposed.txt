@@ -1,5 +1,5 @@
 ┌ Files ───────────────────────────────┐┌ Features (none yet) ─────────────────────────────────────────────────────────┐
-│▾ harness-tui…0000000000 ✓0/13 (+1 ✓?)││Step 6 of 8: Test program 1/4                                                 │
+│▾ harness-tui-proposed-0000000000 ✓1/4││Step 6 of 8: Test program 1/4                                                 │
 │  ▾ Units (11)                        ││Next: Read the chat's proposal — Enter, then Write your features file         │
 │    ▸ ✓ u001-katajainen           done││                                                                              │
 │    ▸ ◇ u-cache        no test program││The chat's proposal (2 features, 3 scenarios) — …atures/features.proposed.toml│

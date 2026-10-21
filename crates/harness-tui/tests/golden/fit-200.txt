@@ -1,5 +1,5 @@
 ┌ Files ─────────────────────────────────────────────────────┐┌ u-cache · no test program ─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│▾ harness-tui-fit-0000000000                   ✓0/13 (+1 ✓?)││Map ✓ · Configure ✓ · Accept program ✓ · Scan ✓ · Plan ✓ · Test program ○ · Rust · Accept Rust                                          │
+│▾ harness-tui-fit-0000000000                            ✓1/4││Map ✓ · Configure ✓ · Accept program ✓ · Scan ✓ · Plan ✓ · Test program ○ · Rust · Accept Rust                                          │
 │  ▾ Units (11)                                              ││◇ u-cache no test program                                                                                                               │
 │    ▸ ✓ u001-katajainen                                 done││Next: Make the test program — run harness gen-driver u-cache (the chat is off)                                                          │
 │    ▸ ◇ u-cache                              no test program││                                                                                                                                        │

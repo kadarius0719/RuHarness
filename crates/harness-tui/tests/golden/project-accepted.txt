@@ -1,13 +1,13 @@
 ┌ Project ─────────────────────────────┐┌ liblzg · 4 programs found ───────────────────────────────────────────────────┐
 │Programs (4)                          ││Map ✓ · Configure ✓ · Accept program ✓ · then: scan, plan, and each piece     │
-│✓ t-lzg                not scanned yet││Next: Accept l-checksum — Enter on its row                                    │
+│✓ t-lzg                not scanned yet││Next: Open tool t-lzg — Enter on its row (not scanned yet)                    │
 │⚠ t-unlzg             needs a decision││                                                                              │
 │· t-fuzz            fuzzer, not a tool││t-lzg                                                               ✓ accepted│
 │✗ tools/broken.c       did not compile││tools/lzg.c                                                                   │
 │Libraries (2)                         ││Its build configuration: migration/tools/t-lzg/harness.toml                   │
 │✓ l-checksum                  compiles││not scanned and planned yet                                                   │
 │✗ l-bad                did not compile││                                                                              │
-│                                      ││Enter: Open tool t-lzg                                                        │
+│                                      ││                                                                              │
 │                                      ││                                                                              │
 │                                      ││                                                                              │
 │                                      ││                                                                              │

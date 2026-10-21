@@ -1,5 +1,5 @@
 ┌ Files ───────────────────────────────┐┌ src/zopfli · 1 failing · 1 needs attention · 1 changed since the scan · 1 not┐
-│▾ harness-tui-gglyph-0000000000       ││Map ✓ · Configure ✓ · Accept program ✓ · Scan ○ · Plan                        │
+│▾ harness…0000000 ✗1 ⚠1 !1 +1 ?1 ✓3/10││Map ✓ · Configure ✓ · Accept program ✓ · Scan ○ · Plan                        │
 │  ▾ Units (11)                        ││1 failing · 1 needs attention · 1 changed since the scan · 1 not scanned yet ·│
 │    ▸ ⊘ u001-katajainen        blocked││1 missing · 2 of 14 C files in Rust · 3 more verified, origin not recorded    │
 │    ▸ ⚠ u-cache        needs attention││✓  blocksplitter.c  done                                                      │

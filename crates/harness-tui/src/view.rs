@@ -692,10 +692,47 @@ fn feature_row_name(app: &App, id: &str) -> String {
 /// The room a feature's name has in the tree at 80 columns (§8.3).
 const FEATURE_NAME_ROOM: usize = 14;
 
+/// The tool row's compact counts: the tree's rollup, its share in Rust
+/// counted in pieces that can move once there is a plan — the count every
+/// sentence about moving uses (the whole-journey check, item 4).
+fn project_counts(app: &App) -> String {
+    let mut r = app.files.rollup("");
+    if !app.snapshot.units.is_empty() {
+        // A piece verified with no recorded origin is in Rust: counted
+        // among the done, never a second time.
+        let (pieces, done, _) = crate::explain::piece_counts(app);
+        r.migrated = done;
+        r.migratable = pieces;
+        r.origin_unknown = 0;
+    }
+    r.text()
+}
+
+/// The tool row's counts in words, for the View's title: the same counts,
+/// the share in Rust said as [`crate::explain::moved_words`] once there is
+/// a plan.
+fn project_count_words(app: &App) -> String {
+    let mut r = app.files.rollup("");
+    if app.snapshot.units.is_empty() {
+        return r.words();
+    }
+    r.migratable = 0;
+    r.origin_unknown = 0;
+    let (pieces, done, _) = crate::explain::piece_counts(app);
+    let rest = r.words();
+    // How far it is, first: a narrow title cuts the end.
+    let moved = crate::explain::moved_words(done, pieces);
+    if rest.is_empty() {
+        moved
+    } else {
+        format!("{moved} · {rest}")
+    }
+}
+
 /// A row's glyph and state word (a rollup for the project and directories).
 fn row_label(app: &App, sel: &Selection) -> (&'static str, String) {
     match sel {
-        Selection::Project => ("", app.files.rollup("").text()),
+        Selection::Project => ("", project_counts(app)),
         Selection::Dir(d) => ("", app.files.rollup(d).text()),
         Selection::Units | Selection::Features | Selection::Speed => app.node_label(sel),
         Selection::Attempt(u, a) => {
@@ -1244,7 +1281,7 @@ fn view_title(app: &App) -> String {
     };
     // The tree's compact counts ("⚠1 ✓0/13"), said in words here.
     let word = match sel {
-        Selection::Project => app.files.rollup("").words(),
+        Selection::Project => project_count_words(app),
         Selection::Dir(d) => app.files.rollup(d).words(),
         _ => row_label(app, sel).1,
     };
@@ -1326,7 +1363,7 @@ fn unit_lead(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
     }
     // The Next step: the unit's (or the attempt's) one action, the cause
     // first when it needs attention.
-    if let Some(next) = app.advice(&app.selection) {
+    if let Some(next) = app.pane_next(&app.selection) {
         lines.extend(next_step(&next.line(), width));
     }
     lines
@@ -1424,7 +1461,12 @@ fn unit_record(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
                 (None, true) if verdict != "none yet" => {
                     format!("No Rust yet · the judge's last check: {verdict}")
                 }
-                (None, _) => "No Rust yet".to_string(),
+                // A green try waits for the person's Accept: its Rust exists,
+                // it is not the unit's yet (the whole-journey check, item 5).
+                (None, _) => match crate::next::acceptable(unit) {
+                    Some(a) => format!("Its Rust: not accepted yet — try {} is green", short_id(a)),
+                    None => "No Rust yet".to_string(),
+                },
             };
             if let Some(marker) = coverage_marker(app, unit) {
                 origin.push_str(&format!(" · {marker}"));
@@ -1474,7 +1516,7 @@ fn outcome_gloss(outcome: &str) -> &'static str {
         "truncated" => "the model's answer was cut off before it was whole",
         "format" => "the model's answer was not in the shape asked for",
         "blocked" => "the model said it could not write it",
-        "in-progress" => "it has not finished",
+        "in-progress" => "it stopped to wait for your answer",
         "budget" => "it ran out of its budget",
         "thrash" => "it stopped repeating the same fix",
         _ => "how it ended",
@@ -2069,7 +2111,7 @@ fn proposal_block(
 }
 
 fn next_lines(app: &App, sel: &Selection, width: usize) -> Vec<Line<'static>> {
-    let Some(next) = app.advice(sel) else {
+    let Some(next) = app.pane_next(sel) else {
         return Vec::new();
     };
     let mut lines = next_step(&next.line(), width);
@@ -2106,7 +2148,7 @@ fn feature_mark_words(state: &featmap::FeatureState) -> String {
 /// action, each a link.
 fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
-    if let Some(next) = app.next_step().map(|a| app.unless_chat_down(a)) {
+    if let Some(next) = app.pane_next(&Selection::Project) {
         lines.extend(next_step(&next.line(), width));
         lines.push(Line::from(""));
     }
@@ -2958,30 +3000,40 @@ fn feature_next(f: &featmap::FeatureView) -> Option<String> {
     Some(match &f.state {
         S::Failing => "Open the failing unit below and its verdict.".into(),
         S::ScenarioCannotRun => {
-            let why = f
-                .scenarios
-                .iter()
-                .find_map(|s| s.skipped.map(|r| (s.id.clone(), r)));
-            match why {
-                Some((id, reason)) => format!(
-                    "Scenario {id}: {} — {}. Choose Edit the features file.",
-                    reason.words(),
-                    reason.what_to_do()
-                ),
-                None => "A scenario's C output differs between runs, or it did not exit — \
-                         change or remove it (Edit the features file)."
-                    .into(),
-            }
+            // The scenario's own reason, from wherever it is known: today's
+            // read of its input file, a verdict's skip, then the map's
+            // record — before any Re-check the map is all there is (the
+            // whole-journey check, item 3).
+            let why = f.scenarios.iter().find_map(|s| {
+                let why = s
+                    .unusable
+                    .clone()
+                    .or_else(|| {
+                        s.skipped
+                            .map(|r| format!("{} — {}", r.words(), r.what_to_do()))
+                    })
+                    .or_else(|| {
+                        let r = s.record.as_ref()?;
+                        if !r.stable {
+                            Some(
+                                "its C output differs between runs — change or remove it"
+                                    .to_string(),
+                            )
+                        } else if !r.end.starts_with("exit ") {
+                            Some(format!(
+                                "it did not exit ({}) — change or remove it",
+                                display::line(&r.end)
+                            ))
+                        } else {
+                            None
+                        }
+                    })?;
+                Some(format!("Scenario {}: {why}.", s.id))
+            });
+            why.unwrap_or_else(|| "A scenario cannot run as written — change or remove it.".into())
         }
-        S::NeedsRecheck => format!(
-            "Your features are not checked on {} yet — Re-check {}:",
-            if f.recheck.len() == 1 {
-                "this unit"
-            } else {
-                "these units"
-            },
-            if f.recheck.len() == 1 { "it" } else { "each" }
-        ),
+        // Said once, in the Next step (the whole-journey check, item 12).
+        S::NeedsRecheck => return None,
         S::NotMapped | S::MapOutOfDate => "Map the features (press Enter).".into(),
         S::MapIncomplete => "A scenario's run left no usable notes, or behaved differently \
                              with them — see its line below."
@@ -3027,23 +3079,27 @@ fn feature_view(
     if let Some(also) = &f.also {
         word.push_str(&format!(" · {also}"));
     }
+    // The id shows in each check's name, not here (the whole-journey
+    // check, item 15).
     lines.push(Line::from(clipped(
         vec![
             Span::styled(format!("{glyph} "), glyph_style(glyph)),
             Span::styled(word, bold()),
-            Span::styled(format!("  · id {}", f.id), label_role()),
         ],
         width,
     )));
-    // The mark in words, then the one thing to do.
-    lines.extend(wrapped(&feature_mark_words(&f.state), width, label_role()));
-    if let Some(next) = app.advice(&Selection::Feature(f.id.clone())) {
+    use featmap::FeatureState as S;
+    // The mark in words, then the one thing to do — a re-check said once,
+    // in the Next step (item 12).
+    if !matches!(f.state, S::NeedsRecheck) {
+        lines.extend(wrapped(&feature_mark_words(&f.state), width, label_role()));
+    }
+    if let Some(next) = app.pane_next(&Selection::Feature(f.id.clone())) {
         lines.extend(next_step(&next.line(), width));
     }
-    use featmap::FeatureState as S;
     if !matches!(
         f.state,
-        S::NotMapped | S::MapOutOfDate | S::Failing | S::SeeUnits
+        S::NotMapped | S::MapOutOfDate | S::Failing | S::SeeUnits | S::NeedsRecheck
     ) {
         if let Some(next) = feature_next(f) {
             lines.extend(wrapped(&next, width, Style::default()));
@@ -3056,7 +3112,7 @@ fn feature_view(
             lines.push(Line::from(clipped(
                 vec![
                     Span::raw(format!("  {u}")),
-                    Span::styled("  open it, then Re-check", label_role()),
+                    Span::styled("  open it", label_role()),
                 ],
                 width,
             )));
@@ -3556,6 +3612,61 @@ fn hint_on_row_one(app: &App) -> bool {
     !app.running && app.chat_waits_why(app.now).is_none() && app.last.is_none()
 }
 
+/// Row 1's buttons while nothing runs: Try again, Details.
+fn idle_buttons(app: &App) -> Vec<(&'static str, &'static str)> {
+    let in_chat = app.focus == Focus::Chat;
+    let mut buttons = Vec::new();
+    if app.try_again.is_some() {
+        buttons.push((
+            if in_chat {
+                "[Try again]"
+            } else {
+                "[Try again t]"
+            },
+            "t",
+        ));
+    }
+    if app.run.is_some() {
+        buttons.push((if in_chat { "[Details]" } else { "[Details c]" }, "c"));
+    }
+    buttons
+}
+
+/// A menu's focused greyed item's reason, said whole over the two status
+/// rows: the part that fits `first` columns (row 1), and the rest, when
+/// there is any, for row 2. `None` without a menu on a greyed item, or
+/// while a command runs (row 1 is its own then).
+fn menu_reason_rows(app: &App, first: usize) -> Option<(String, Option<String>)> {
+    if app.running {
+        return None;
+    }
+    let Mode::Menu(m) = &app.mode else {
+        return None;
+    };
+    let it = m.items.get(m.focus)?;
+    let why = it.greyed.as_ref()?;
+    let text = display::line(&format!("{}: {why}", it.label));
+    if width_of(&text) <= first {
+        return Some((text, None));
+    }
+    let mut one = String::new();
+    let mut words = text.split(' ').peekable();
+    while let Some(w) = words.peek() {
+        let next = if one.is_empty() {
+            w.to_string()
+        } else {
+            format!("{one} {w}")
+        };
+        if width_of(&next) > first && !one.is_empty() {
+            break;
+        }
+        one = next;
+        words.next();
+    }
+    let rest = words.collect::<Vec<&str>>().join(" ");
+    Some((one, (!rest.is_empty()).then_some(rest)))
+}
+
 /// Row 1: the running command in words, or "Ready. Last: …", or the hint
 /// line; its buttons on the right.
 fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
@@ -3587,21 +3698,15 @@ fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
             )
         }
         _ => {
-            if app.try_again.is_some() {
-                buttons.push((
-                    if in_chat {
-                        "[Try again]"
-                    } else {
-                        "[Try again t]"
-                    },
-                    "t",
-                ));
-            }
-            if app.run.is_some() {
-                buttons.push((if in_chat { "[Details]" } else { "[Details c]" }, "c"));
-            }
+            buttons = idle_buttons(app);
             let mut style = status();
+            let taken: usize = buttons.iter().map(|(b, _)| width_of(b) + 1).sum();
+            let reason = menu_reason_rows(app, width.saturating_sub(taken + 1));
             let text = match (app.chat_waits_why(app.now), &app.last) {
+                // A focused greyed item's reason is never cut: it takes
+                // this row while the menu is open and goes on in the notice
+                // row (the whole-journey check, item 13).
+                _ if reason.is_some() => reason.map(|(first, _)| first).unwrap_or_default(),
                 (Some(why), _) => {
                     style = notice();
                     why.to_string()
@@ -3615,11 +3720,8 @@ fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
                 // not a dialog, a menu or the chat), until the first move.
                 (None, None) if first_screen(app) && !app.moved => READY_FIRST.to_string(),
                 // Then what the selected row is (§9.5).
-                (None, None) => {
-                    let taken: usize = buttons.iter().map(|(b, _)| width_of(b) + 1).sum();
-                    hint_words(app, width.saturating_sub(taken + 1))
-                        .unwrap_or_else(|| "Ready.".to_string())
-                }
+                (None, None) => hint_words(app, width.saturating_sub(taken + 1))
+                    .unwrap_or_else(|| "Ready.".to_string()),
             };
             (text, style)
         }
@@ -3686,6 +3788,15 @@ fn fit_status(text: &str, width: usize) -> String {
 
 /// Row 2: the notice, else the plan summary, else the hand-offs' state.
 fn notice_row(app: &App, width: usize) -> Line<'static> {
+    // The rest of a greyed item's reason, before anything else (item 13).
+    let taken: usize = idle_buttons(app).iter().map(|(b, _)| width_of(b) + 1).sum();
+    let reason = menu_reason_rows(app, width.saturating_sub(taken + 1));
+    if let Some((_, Some(rest))) = &reason {
+        return Line::from(Span::styled(
+            fit_status(&format!(" {rest}"), width),
+            status(),
+        ));
+    }
     if let Some(n) = &app.notice {
         return Line::from(Span::styled(
             ellipsis(&format!(" {}", n.text), width),
@@ -3742,8 +3853,9 @@ fn notice_row(app: &App, width: usize) -> Line<'static> {
     {
         return Line::from(Span::styled(ellipsis(&format!(" {n}"), width), notice()));
     }
-    // Last: the hint line, when row 1 holds a run or its `Last:` (§9.5).
-    if !hint_on_row_one(app) {
+    // Last: the hint line, when row 1 holds a run or its `Last:` (§9.5) —
+    // never a greyed item's reason row 1 holds whole already.
+    if !hint_on_row_one(app) && reason.is_none() {
         if let Some(h) = hint_words(app, width.saturating_sub(1)) {
             return Line::from(Span::styled(fit_status(&format!(" {h}"), width), status()));
         }
@@ -4619,6 +4731,17 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect, m: &Menu) {
 
 fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
     let mouse = app.mouse;
+    let editor = match &app.mode {
+        Mode::Dialog(c)
+            if matches!(
+                c.purpose,
+                crate::app::Purpose::OpenEditor | crate::app::Purpose::EditAgain
+            ) =>
+        {
+            app.editor_command()
+        }
+        _ => None,
+    };
     let Mode::Dialog(c) = &mut app.mode else {
         return;
     };
@@ -4654,6 +4777,15 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
         // it does; this is for whoever reads commands (§9.4).
         let argv = Sanitizer::default().push(&format!("Command: {}", shell_line(&p.argv)));
         for row in hard_wrap(&argv, inner_w) {
+            rows.push(Line::from(Span::styled(row, label_role())));
+        }
+    }
+    // An editor's dialog names the editor's command, as an act's names its
+    // own (the whole-journey check, item 11).
+    if let Some(command) = editor {
+        rows.push(Line::from(""));
+        let line = Sanitizer::default().push(&format!("Command: {command}"));
+        for row in hard_wrap(&line, inner_w) {
             rows.push(Line::from(Span::styled(row, label_role())));
         }
     }
@@ -6466,6 +6598,28 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         assert!(screen.contains("Next: 1 file changed since the scan"));
     }
 
+    /// The whole-journey check, item 13: a greyed item's reason is never
+    /// cut — what row 1 cannot hold goes on in the notice row, even with a
+    /// `Last:` standing.
+    #[test]
+    fn a_greyed_reason_is_never_cut() {
+        let mut app = app("greyed-long");
+        app.last = Some("Scan the project — done (1 s)".into());
+        app.open_menu();
+        let Mode::Menu(m) = &mut app.mode else {
+            panic!()
+        };
+        let long = "it waits for a long list of things to happen first, each one named here \
+                    so that a person reading it knows the whole way through, then Make the end";
+        m.items[0].greyed = Some(long.into());
+        let buffer = render(&mut app, 100, 30);
+        let screen = text(&buffer);
+        let rows: Vec<&str> = screen.lines().collect();
+        let n = rows.len();
+        let both = format!("{} {}", rows[n - 3].trim(), rows[n - 2].trim());
+        assert!(both.contains(long), "{screen}");
+    }
+
     fn running(app: &mut App) {
         let argv: Vec<OsString> = [
             "/opt/ruharness/bin/harness",
@@ -7906,7 +8060,8 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
             "{screen}"
         );
         assert!(
-            screen.contains("· 1 needs attention · 0 of 1 C file in Rust "),
+            screen
+                .contains("· its one piece that can move is not in Rust yet · 1 needs attention "),
             "the title's counts in words: {screen}"
         );
         assert!(screen.contains("Needs attention:"), "{screen}");
@@ -8290,7 +8445,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         let next = app.next_step().expect("a Next step");
         assert!(
             next.text
-                .ends_with("of the 11 can move to Rust now — open u-cache: Enter"),
+                .ends_with("1 of the 4 that can move is in Rust — open u-cache: Enter"),
             "{}",
             next.text
         );
@@ -8321,7 +8476,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         let next = app.next_step().expect("a Next step");
         assert!(
             next.text
-                .ends_with("of the 11 can move to Rust now — Migrate u-cache: Enter"),
+                .ends_with("1 of the 4 that can move is in Rust — Migrate u-cache: Enter"),
             "{}",
             next.text
         );
@@ -10748,7 +10903,8 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         assert!(app.features.map.current());
         let next = app.next_step().expect("a next step");
         assert!(
-            next.text.starts_with("Re-check u001-katajainen"),
+            next.text
+                .starts_with("open u001-katajainen (under Units), then Re-check"),
             "{}",
             next.text
         );
@@ -10791,9 +10947,17 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         let mut links = Vec::new();
         let lines = feature_view(&app, "help", 160, &mut links);
         let screen: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        // The re-check said once, in the Next step (the whole-journey
+        // check, item 12); the unit below is its link.
         assert!(
-            screen.contains("Your features are not checked on this unit yet — Re-check it:"),
+            screen.contains("Next: Open u001-katajainen below, then Re-check"),
             "{screen}"
+        );
+        assert_eq!(screen.matches("Re-check").count(), 1, "{screen}");
+        assert_eq!(
+            screen.matches("re-check").count(),
+            1,
+            "the state line: {screen}"
         );
         assert!(
             links
@@ -10940,6 +11104,150 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
             screen.contains("None of your features runs this unit's functions"),
             "{screen}"
         );
+    }
+
+    /// A try of `unit`'s stopped at a hand-off, as the command line leaves
+    /// it: its record in progress (a test program's when `driver`) and its
+    /// request with no answer yet.
+    fn waiting_try(app: &App, unit: &str, id: &str, driver: bool) {
+        let ledger = harness_core::ledger::Ledger::new(&app.config.target);
+        let seed = app
+            .snapshot
+            .unit("u001-katajainen")
+            .and_then(|u| u.attempts.first())
+            .expect("u001's try")
+            .record
+            .clone();
+        let record = harness_core::attempts::AttemptRecord {
+            id: id.into(),
+            unit: unit.into(),
+            stage: driver.then(|| "driver".to_string()),
+            outcome: "in-progress".into(),
+            turns: vec![],
+            candidate_digest: String::new(),
+            promoted: false,
+            seeded_from: None,
+            steer_note: None,
+            ..seed
+        };
+        let dir = if driver {
+            harness_core::attempts::driver_attempt_dir(&ledger, unit, id)
+        } else {
+            harness_core::attempts::attempt_dir(&ledger, unit, id)
+        };
+        std::fs::create_dir_all(&dir).unwrap();
+        record.store(&dir).unwrap();
+        let traces = ledger
+            .unit_dir(unit)
+            .join(if driver { "driver-traces" } else { "traces" });
+        std::fs::create_dir_all(&traces).unwrap();
+        std::fs::write(traces.join("0badf00d.request.json"), "{}").unwrap();
+    }
+
+    /// The whole-journey check, item 7: a test program waiting for its
+    /// answer is a waiting piece — the mark, the words, its answer file
+    /// and the command to run again — at the test program's stage.
+    #[test]
+    fn a_test_program_waiting_for_its_answer_shows() {
+        let mut app = app_of("targets/zopfli", "driver-waits");
+        waiting_try(&app, "u-cache", "d-000000000001", true);
+        assert!(app.reload(true));
+        let u = app
+            .snapshot
+            .units
+            .iter()
+            .position(|u| u.unit.id == "u-cache")
+            .unwrap();
+        assert_eq!(app.files.units[u].state, UnitState::Waiting);
+        assert_eq!(
+            crate::journey::unit_stage(&app.snapshot.units[u], &app.files.units[u].state),
+            Some(6)
+        );
+        app.select(Selection::Unit("u-cache".into()));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(screen.contains("⚑ u-cache"), "{screen}");
+        assert!(screen.contains("waiting for your answer"), "{screen}");
+        assert!(!screen.contains("◇ u-cache"), "{screen}");
+        let next = app.advice(&app.selection).unwrap().text;
+        assert!(
+            next.starts_with("waiting for your answer: ")
+                && next.contains("driver-traces/0badf00d.response.json")
+                && next.ends_with("then run the same gen-driver command again"),
+            "{next}"
+        );
+    }
+
+    /// The whole-journey check, item 6: a Rust try that waits says the
+    /// piece's waiting sentence on its own row and card — never "it has not
+    /// finished", never "in 0 turns" — and the card ends with the pane's
+    /// Next line (item 12).
+    #[test]
+    fn a_waiting_try_says_its_answer_file() {
+        let mut app = app_of("targets/zopfli", "try-waits");
+        crate::app::asks::tests::give_test_program(&mut app, "u-cache");
+        let id = "a-000000000001";
+        waiting_try(&app, "u-cache", id, false);
+        assert!(app.reload(true));
+        let sel = Selection::Attempt("u-cache".into(), id.into());
+        app.select(sel.clone());
+        let next = app.advice(&sel).unwrap().text;
+        assert!(
+            next.contains("traces/0badf00d.response.json")
+                && next.ends_with("then run the same migrate command again"),
+            "{next}"
+        );
+        let card = crate::explain::explain(&app, &sel).card;
+        assert!(!card.iter().any(|l| l.contains("0 turns")), "{card:?}");
+        assert_eq!(card.last(), Some(&app.pane_next(&sel).unwrap().line()));
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(!screen.contains("has not finished"), "{screen}");
+    }
+
+    /// The whole-journey check, item 8: the tool's journey stays on its
+    /// earliest unfinished stage — a Re-check of a done piece is no reason
+    /// to say "Step 8 of 8" while other pieces have no test program.
+    #[test]
+    fn the_tools_journey_is_at_its_earliest_unfinished_stage() {
+        let app = zopfli_with_features("journey-earliest", FEATURES_TOML);
+        write_current_map(&app);
+        let mut app = crate::app::tests::app_of_path(&app.config.target);
+        app.select(Selection::Project);
+        let next = app.next_step().unwrap().text;
+        assert!(
+            next.starts_with("open u001-katajainen (under Units)"),
+            "{next}"
+        );
+        assert!(
+            app.journey()
+                .short()
+                .starts_with("Step 6 of 8: Test program"),
+            "{}",
+            app.journey().short()
+        );
+    }
+
+    /// The whole-journey check, item 3: before any Re-check, a scenario
+    /// whose input file is missing is named with its own reason, never
+    /// "differs between runs".
+    #[test]
+    fn a_scenario_that_cannot_run_is_named_with_its_reason() {
+        let text = format!(
+            "{FEATURES_TOML}[[scenario]]\nfeature = \"gzip\"\nid = \"small\"\n\
+             args = [\"-c\", \"{{input}}\"]\ninput = \"tests/small.txt\"\n"
+        );
+        let mut app = zopfli_with_features("feat-input-missing", &text);
+        app.select(Selection::Feature("gzip".into()));
+        let mut links = Vec::new();
+        let lines = feature_view(&app, "gzip", 160, &mut links);
+        let screen: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        assert!(
+            screen.contains(
+                "Scenario small: its input tests/small.txt is not here — put the file back or \
+                 change the scenario."
+            ),
+            "{screen}"
+        );
+        assert!(!screen.contains("differs between runs"), "{screen}");
     }
 
     /// The whole-journey check, item 2: a current map that is incomplete

@@ -1,4 +1,4 @@
-┌ Files ────────────────────────────────────┐┌ harness-tui-chat-goldens-0000000000 · 1 of 1 C file in Rus…──────────────────┐┌ Chat — waiti…──[New]─[?]─[×]┐
+┌ Files ────────────────────────────────────┐┌ harness-tui-chat-goldens-0000000000 · its one piece that c…──────────────────┐┌ Chat — waiti…──[New]─[?]─[×]┐
 │▾ harness-tui-chat-goldens-0000000000  ✓1/1││All 8 steps done ✓                                                            ││› Please migrate u-lib.      │
 │  ▾ Units (1)                              ││Next: Name a workload for Speed — Enter on the Speed row                      ││                             │
 │    ▸ ✓ u-lib                          done││                                                                              ││I will ask to migrate u-lib. │
@@ -19,6 +19,6 @@
 │                                           ││                                                                              ││About: the project           │
 │                                           ││                                                                              ││› Enter reviews the request —│
 └───────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────┘└─────────────────────────────┘
- harness-tui-chat-goldens-0000000000: the C project moving to Rust, its files below; its one piece is in Rust.
+ harness-tui-chat-goldens-0000000000: the C project moving to Rust, its files below; its one piece that can move is in Rust.
 
  Enter review   Esc decline   Ctrl-J new line   ↑↓ scroll   Tab pane   F1 help   Ctrl-C quit
