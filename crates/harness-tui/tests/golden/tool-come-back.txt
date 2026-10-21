@@ -1,9 +1,9 @@
 ┌ Files ──────────────────────────┐┌ ◂ Back to the project view ───────────────────────────────────────────────────────┐
-│  ◂ Back to the project view     ││Step 6 of 8: Test program 0/2                                                      │
-│▾ liblzg · tool t-lzg        ✓0/2││Next: The project's programs, Map, Ask and Accept are on the project view — press  │
+│  ◂ Back to the project view     ││Step 6 of 8: Test program 0/1                                                      │
+│▾ liblzg · tool t-lzg        ✓0/1││Next: The project's programs, Map, Ask and Accept are on the project view — press  │
 │  ▾ Pieces (2)                   ││Enter to go back to it                                                             │
 │      ◇ u-encode  no test program││                                                                                   │
-│      ◇ u-lzg     no test program││t-lzg is one tool of the project liblzg. The project view lists every program and  │
+│      · u-lzg          holds main││t-lzg is one tool of the project liblzg. The project view lists every program and  │
 │    Features (none yet)          ││library the map found; from there you map the project again, ask a model, accept   │
 │    Speed — not set up           ││another program, or open another tool.                                             │
 │  ▸ src/                     ✓0/2││                                                                                   │

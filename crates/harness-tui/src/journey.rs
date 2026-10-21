@@ -7,7 +7,7 @@
 //! accent), others are plain in the label colour. The current stage is the
 //! one the Next line names (fix pass, 2026-10-20), else the first not done.
 //! On the tool's screen with no unit chosen, the last three count the pieces
-//! that can move past each stage (a piece that calls others stays C and is
+//! that can move past each stage (the piece holding main stays C and is
 //! not counted; before a plan there are no counts, only `Scan ○` or `Plan
 //! ○`); on the Project view only the first three show, then "then: scan,
 //! plan, and each piece". Under 100 columns (or wherever the line does not
@@ -225,12 +225,12 @@ impl Journey {
 }
 
 /// A unit's current stage, 1-based (6 Test program, 7 Rust, 8 Accept Rust),
-/// or 9 once it is done; `None` for a piece that cannot move (it stays C)
-/// or is blocked.
+/// or 9 once it is done; `None` for a piece that cannot move (it holds
+/// main) or is blocked.
 pub fn unit_stage(unit: &UnitView, state: &UnitState) -> Option<usize> {
     let verified = matches!(unit.report.status.as_str(), "verified" | "merged");
     Some(match state {
-        UnitState::StaysC(_) | UnitState::Blocked => return None,
+        UnitState::HoldsMain | UnitState::Blocked => return None,
         UnitState::Migrated(_) | UnitState::OriginUnknown => 9,
         UnitState::RustGreen => 8,
         UnitState::NoTestProgram | UnitState::TestProgramStale => 6,
@@ -330,8 +330,13 @@ impl App {
                     .zip(self.files.units.get(u))
                     .and_then(|(unit, info)| unit_stage(unit, &info.state));
                 let Some(stage) = stage else {
-                    // A piece that stays C has no stages of its own.
-                    return Journey::of(&done[..5], counts, None, Some("this piece stays C"));
+                    // The piece holding main has no stages of its own.
+                    return Journey::of(
+                        &done[..5],
+                        counts,
+                        None,
+                        Some("this piece holds main — stays C in this version"),
+                    );
                 };
                 for (i, d) in done.iter_mut().enumerate().skip(5) {
                     *d = stage > i + 1;
@@ -520,7 +525,8 @@ mod tests {
 
     /// A unit's screen: its own three stages — no test program on a zopfli
     /// unit with no `[unit.oracle]`, every stage done on the verified u001;
-    /// a piece that calls others has none.
+    /// the piece holding main has none; a piece that calls others has its
+    /// own (docs/BEYOND-LEAVES-DESIGN.md §5).
     #[test]
     fn a_units_screen_shows_its_own_stages() {
         let mut app = app_of("targets/zopfli", "journey-unit");
@@ -534,10 +540,12 @@ mod tests {
         app.select(Selection::Unit("u001-katajainen".into()));
         assert_eq!(app.journey().current(), None);
         app.select(Selection::Unit("u-lz77".into()));
+        assert_eq!(app.journey().short(), "Step 6 of 8: Test program");
+        app.select(Selection::Unit("u-zopfli_bin".into()));
         assert!(
             app.journey()
                 .long()
-                .ends_with("Plan ✓ · this piece stays C"),
+                .ends_with("Plan ✓ · this piece holds main — stays C in this version"),
             "{}",
             app.journey().long()
         );
@@ -591,7 +599,7 @@ mod tests {
             (UnitState::Waiting, Some(7)),
             (UnitState::RustGreen, Some(8)),
             (UnitState::Migrated(crate::files::Origin::Pipeline), Some(9)),
-            (UnitState::StaysC(vec!["u-x".into()]), None),
+            (UnitState::HoldsMain, None),
             // A verified unit whose verdict must be made again: Accept.
             (UnitState::Failing, Some(8)),
         ] {

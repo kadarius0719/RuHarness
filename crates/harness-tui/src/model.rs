@@ -158,6 +158,15 @@ pub struct UnitView {
     /// Its driver-generation attempts (`d-…`), by id: the chat's Continue
     /// of one reads its record here.
     pub driver_attempts: Vec<AttemptRecord>,
+    /// The pieces it calls, transitively, in the plan's execution order
+    /// (docs/BEYOND-LEAVES-DESIGN.md §1): what its test program and its
+    /// Rust are checked with, as the program stands.
+    pub callees: Vec<String>,
+    /// Of them, the ones linked as their accepted Rust whose own verdict is
+    /// not fresh and green (missing, out of date or red): a check of this
+    /// piece ran against a callee nobody has re-checked (the live proof's
+    /// first gap).
+    pub stale_callees: Vec<String>,
 }
 
 /// A unit's test program (its differential driver), as `harness gen-driver`
@@ -379,6 +388,7 @@ impl Snapshot {
                 .units
                 .push(unit_view(&ctx, &ledger, &facts, unit, now.as_ref())?);
         }
+        link_callees(&plan, &mut snapshot.units);
         // The program's digest for perf's currency: the features' when
         // computed, else hashed here — only with a workloads file.
         if has_workloads {
@@ -403,6 +413,57 @@ impl Snapshot {
         match &self.facts {
             Some(facts) => pairs::pairs(&self.root, facts, &unit.unit, crate_dir),
             None => Vec::new(),
+        }
+    }
+}
+
+/// Each unit's callees and, of them, the accepted ones whose own verdict
+/// is not fresh and green ([`UnitView::stale_callees`]). A plan whose
+/// order cannot be computed leaves both empty.
+fn link_callees(plan: &Plan, units: &mut [UnitView]) {
+    let lists: Vec<Vec<String>> = plan
+        .units
+        .iter()
+        .map(|u| {
+            harness_core::deps::transitive(plan, u)
+                .map(|deps| deps.into_iter().map(|d| d.id.clone()).collect())
+                .unwrap_or_default()
+        })
+        .collect();
+    let unsure: Vec<String> = units
+        .iter()
+        .filter(|u| {
+            matches!(u.report.status.as_str(), "verified" | "merged")
+                && u.crate_dir.is_some()
+                && !u.report.fresh_green()
+        })
+        .map(|u| u.unit.id.clone())
+        .collect();
+    for (view, list) in units.iter_mut().zip(lists) {
+        view.stale_callees = list
+            .iter()
+            .filter(|id| unsure.contains(id))
+            .cloned()
+            .collect();
+        view.callees = list;
+    }
+}
+
+impl Snapshot {
+    /// The units' indices in the plan's execution order (leaves first), the
+    /// plan's own order when it cannot be computed.
+    pub fn execution_order(&self) -> Vec<usize> {
+        let plan = Plan {
+            schema_version: 1,
+            target: String::new(),
+            units: self.units.iter().map(|u| u.unit.clone()).collect(),
+        };
+        match plan.execution_order() {
+            Ok(order) => order
+                .iter()
+                .filter_map(|u| self.units.iter().position(|v| v.unit.id == u.id))
+                .collect(),
+            Err(_) => (0..self.units.len()).collect(),
         }
     }
 }
@@ -528,6 +589,8 @@ fn unit_view(
             harness_core::deps::now_or_none(ctx, facts, unit, harness_core::deps::Stand::OriginalC)
                 .as_deref(),
         ),
+        callees: Vec::new(),
+        stale_callees: Vec::new(),
         // A driver attempt that cannot be read is not shown, as a malformed
         // superseded.jsonl is not: `bench check` reports it.
         driver_attempts: attempts::load_unit_driver_attempts(ledger, &unit.id).unwrap_or_default(),

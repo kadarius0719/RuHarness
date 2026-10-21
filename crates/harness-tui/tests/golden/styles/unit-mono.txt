@@ -3,9 +3,9 @@
   @1-7 fg - BOLD | REVERSED "Files"
   @8-23 fg - BOLD "───────────────┐"
   @25-51 fg - BOLD "u-cache · no test program"
-│▾ harness…0000000 ✓1/4││Step 6 of 8: Test program                             │
+│▾ harness…000000 ✓1/10││Step 6 of 8: Test program                             │
   @0-0 fg - BOLD "│"
-  @3-17 fg - BOLD "harness…0000000"
+  @3-16 fg - BOLD "harness…000000"
   @23-23 fg - BOLD "│"
   @38-49 fg - BOLD "Test program"
 │  ▾ Pieces (11)       ││◇ u-cache no test program                             │
@@ -26,25 +26,25 @@
 │      ◇ u-hash no test││                                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│      · u-lz77 stays C││5 exported functions: ZopfliCacheToSublen (22 lines), │
+│      ◇ u-lz77 no test││5 exported functions: ZopfliCacheToSublen (22 lines), │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│      · u-tree stays C││ZopfliCleanCache (5 lines), ZopfliInitCache (19       │
+│      ◇ u-tree no test││ZopfliCleanCache (5 lines), ZopfliInitCache (19       │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│      · u-b…ze stays C││lines), ZopfliMaxCachedSublen (11 lines),             │
+│      ◇ u-b…ze no test││lines), ZopfliMaxCachedSublen (11 lines),             │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│      · u-g…er stays C││ZopfliSublenToCache (32 lines)                        │
+│      ◇ u-g…er no test││ZopfliSublenToCache (32 lines)                        │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
 │      ◇ u-util no test││Its C: 1 file — src/zopfli/cache.c                    │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│      · u-z…er stays C││No Rust yet                                           │
+│      ◇ u-z…er no test││No Rust yet                                           │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│      · u-z…ib stays C││5 of your features run it · still C — see Features    │
+│      ◇ u-z…ib no test││5 of your features run it · still C — see Features    │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
 │      · u-z…in stays C││Tries: none yet                                       │

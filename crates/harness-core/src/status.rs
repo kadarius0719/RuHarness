@@ -160,6 +160,13 @@ pub struct UnitReport {
     /// `contradiction`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub made_elsewhere: bool,
+    /// The pieces it calls whose code, or whose form (C or accepted Rust),
+    /// differs from what its verdict was built with, in the plan's
+    /// execution order: why `dependencies` is in `stale`
+    /// (docs/BEYOND-LEAVES-DESIGN.md §4). Empty when it is not, or when
+    /// today's list cannot be computed (a broken plan).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed_callees: Vec<String>,
 }
 
 impl UnitReport {
@@ -365,6 +372,7 @@ fn compute(
 
     let mut coverage = None;
     let mut made_elsewhere = false;
+    let mut changed_callees = Vec::new();
     let verdict_path = ledger.verdict_latest_path(&unit.id);
     let verdict = match Verdict::load(&verdict_path) {
         Ok(v) => {
@@ -409,6 +417,7 @@ fn compute(
                 crate::deps::now_or_none(ctx, facts, unit, crate::deps::Stand::AsItStands);
             if deps_now.as_deref() != Some(v.inputs.dependencies.as_slice()) {
                 stale.push("dependencies".into());
+                changed_callees = changed(deps_now.as_deref(), &v.inputs.dependencies);
             }
             VerdictReport {
                 state: VerdictState::Present,
@@ -465,7 +474,32 @@ fn compute(
         attempts,
         features: coverage,
         made_elsewhere,
+        changed_callees,
     })
+}
+
+/// The pieces whose entry differs between today's list (`now`, `None` when
+/// it cannot be computed) and the recorded one: each once, today's order
+/// first, then any the verdict linked that the plan no longer names.
+fn changed(
+    now: Option<&[crate::deps::Dependency]>,
+    recorded: &[crate::deps::Dependency],
+) -> Vec<String> {
+    let Some(now) = now else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = Vec::new();
+    for d in now.iter().filter(|d| !recorded.contains(d)) {
+        if !out.contains(&d.unit) {
+            out.push(d.unit.clone());
+        }
+    }
+    for d in recorded {
+        if !now.iter().any(|n| n.unit == d.unit) && !out.contains(&d.unit) {
+            out.push(d.unit.clone());
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -694,6 +728,7 @@ mod tests {
             attempts: Vec::new(),
             features: None,
             made_elsewhere: false,
+            changed_callees: Vec::new(),
         }
     }
 

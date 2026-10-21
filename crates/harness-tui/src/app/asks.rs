@@ -718,11 +718,8 @@ impl App {
             .get(i)
             .map(|x| x.state.clone())
             .unwrap_or_else(|| crate::files::unit_state(u));
-        if let UnitState::StaysC(deps) = &state {
-            return Err(format!(
-                "{unit} calls {}, so in this version it stays C — the judge tests each piece alone",
-                deps.join(", ")
-            ));
+        if state == UnitState::HoldsMain {
+            return Err(format!("{unit} {}", crate::files::HOLDS_MAIN));
         }
         if !(state.before_rust() || state == UnitState::Failing) {
             return Err(format!(
@@ -789,11 +786,8 @@ impl App {
             .get(i)
             .map(|x| x.state.clone())
             .unwrap_or_else(|| crate::files::unit_state(u));
-        if let UnitState::StaysC(deps) = &state {
-            return Err(format!(
-                "{unit} calls {}, so in this version it stays C — the judge tests each piece alone",
-                deps.join(", ")
-            ));
+        if state == UnitState::HoldsMain {
+            return Err(format!("{unit} {}", crate::files::HOLDS_MAIN));
         }
         if u.driver == crate::model::DriverState::Validated {
             return Err(format!(

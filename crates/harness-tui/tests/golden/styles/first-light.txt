@@ -1,23 +1,23 @@
-  Files                    harness-tui-theme-first-0000000000 · 1 of the 4 that
+  Files                    harness-tui-theme-first-0000000000 · 1 of the 10 tha
   @0-23 fg 25 BOLD | REVERSED "Files"
-  @26-78 fg 25 bg 254 BOLD "harness-tui-theme-first-0000000000 · 1 of the 4 that"
-│▾ harness…0000000 ✓1/4│ │Step 6 of 8: Test program 1/4                        │
+  @26-78 fg 25 bg 254 BOLD "harness-tui-theme-first-0000000000 · 1 of the 10 tha"
+│▾ harness…000000 ✓1/10│ │Step 6 of 8: Test program 1/10                       │
   @0-0 fg 25 BOLD "│"
   @1-2 fg 238 BOLD | REVERSED "▾"
-  @3-18 fg - BOLD | REVERSED "harness…0000000"
-  @19-22 fg 240 BOLD | REVERSED "✓1/4"
+  @3-17 fg - BOLD | REVERSED "harness…000000"
+  @18-22 fg 240 BOLD | REVERSED "✓1/10"
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
-  @39-54 fg - BOLD "Test program 1/4"
+  @39-55 fg - BOLD "Test program 1/10"
   @79-79 fg 244 NONE "│"
-│  ▾ Pieces (11)       │ │Next: 1 of the 4 that can move is in Rust — open     │
+│  ▾ Pieces (11)       │ │Next: 1 of the 10 that can move is in Rust — open    │
   @0-0 fg 25 BOLD "│"
   @1-4 fg 238 NONE "▾"
   @5-15 fg 25 BOLD "Pieces (11)"
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
   @26-30 fg 23 BOLD "Next:"
-  @31-73 fg - BOLD "1 of the 4 that can move is in Rust — open"
+  @31-74 fg - BOLD "1 of the 10 that can move is in Rust — open"
   @79-79 fg 244 NONE "│"
 │    ▸ ✓ u001…inen done│ │u-cache: Enter                                       │
   @0-0 fg 25 BOLD "│"
@@ -42,32 +42,32 @@
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      · u-lz77 stays C│ │Pieces (11): 1 ✓ done · 3 ◇ no test program · 7 ·    │
+│      ◇ u-lz77 no test│ │Pieces (11): 1 ✓ done · 9 ◇ no test program · 1 ·    │
   @0-0 fg 25 BOLD "│"
-  @7-8 fg 240 NONE "·"
-  @16-22 fg 240 NONE "stays C"
+  @7-8 fg 240 NONE "◇"
+  @16-22 fg 240 NONE "no test"
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
   @26-37 fg - BOLD "Pieces (11):"
   @79-79 fg 244 NONE "│"
-│      · u-tree stays C│ │stays C                                              │
+│      ◇ u-tree no test│ │holds main                                           │
   @0-0 fg 25 BOLD "│"
-  @7-8 fg 240 NONE "·"
-  @16-22 fg 240 NONE "stays C"
+  @7-8 fg 240 NONE "◇"
+  @16-22 fg 240 NONE "no test"
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      · u-b…ze stays C│ │                                                     │
+│      ◇ u-b…ze no test│ │                                                     │
   @0-0 fg 25 BOLD "│"
-  @7-8 fg 240 NONE "·"
-  @16-22 fg 240 NONE "stays C"
+  @7-8 fg 240 NONE "◇"
+  @16-22 fg 240 NONE "no test"
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      · u-g…er stays C│ │Features: 7 — 5 hold so far, 2 still all C           │
+│      ◇ u-g…er no test│ │Features: 7 — 5 hold so far, 2 still all C           │
   @0-0 fg 25 BOLD "│"
-  @7-8 fg 240 NONE "·"
-  @16-22 fg 240 NONE "stays C"
+  @7-8 fg 240 NONE "◇"
+  @16-22 fg 240 NONE "no test"
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
   @26-34 fg - BOLD "Features:"
@@ -79,17 +79,17 @@
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      · u-z…er stays C│ │                                                     │
+│      ◇ u-z…er no test│ │                                                     │
   @0-0 fg 25 BOLD "│"
-  @7-8 fg 240 NONE "·"
-  @16-22 fg 240 NONE "stays C"
+  @7-8 fg 240 NONE "◇"
+  @16-22 fg 240 NONE "no test"
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      · u-z…ib stays C│ │                                                     │
+│      ◇ u-z…ib no test│ │                                                     │
   @0-0 fg 25 BOLD "│"
-  @7-8 fg 240 NONE "·"
-  @16-22 fg 240 NONE "stays C"
+  @7-8 fg 240 NONE "◇"
+  @16-22 fg 240 NONE "no test"
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"

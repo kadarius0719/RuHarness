@@ -1,16 +1,16 @@
-┌ Files ───────────────┐┌ harness-tui-heads00-0000000000 · 1 of the 4 that can ┐
-│▾ harness…0000000 ✓1/4││Step 6 of 8: Test program 1/4                         │
-│  ▾ Pieces (11)       ││Next: 1 of the 4 that can move is in Rust — open      │
+┌ Files ───────────────┐┌ harness-tui-heads00-0000000000 · 1 of the 10 that can┐
+│▾ harness…000000 ✓1/10││Step 6 of 8: Test program 1/10                        │
+│  ▾ Pieces (11)       ││Next: 1 of the 10 that can move is in Rust — open     │
 │    ▸ ✓ u001…inen done││u-cache: Enter                                        │
 │      ◇ u-c…he no test││                                                      │
 │      ◇ u-hash no test││26 files scanned                                      │
-│      · u-lz77 stays C││Pieces (11): 1 ✓ done · 3 ◇ no test program · 7 ·     │
-│      · u-tree stays C││stays C                                               │
-│      · u-b…ze stays C││                                                      │
-│      · u-g…er stays C││Features: 7 — 5 hold so far, 2 still all C            │
+│      ◇ u-lz77 no test││Pieces (11): 1 ✓ done · 9 ◇ no test program · 1 ·     │
+│      ◇ u-tree no test││holds main                                            │
+│      ◇ u-b…ze no test││                                                      │
+│      ◇ u-g…er no test││Features: 7 — 5 hold so far, 2 still all C            │
 │      ◇ u-util no test││                                                      │
-│      · u-z…er stays C││                                                      │
-│      · u-z…ib stays C││                                                      │
+│      ◇ u-z…er no test││                                                      │
+│      ◇ u-z…ib no test││                                                      │
 │      · u-z…in stays C││                                                      │
 │  ▾ Features (7)      ││                                                      │
 │      ◉ Comp…zip holds││                                                      │

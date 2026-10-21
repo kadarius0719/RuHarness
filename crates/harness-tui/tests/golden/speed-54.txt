@@ -1,16 +1,16 @@
 ┌ Files ───────────────┐┌ Speed (1 of 1) ──────────────────────────────────────┐
-│▾ harness…0000000 ✓1/4││Step 6 of 8: Test program 1/4                         │
+│▾ harness…000000 ✓1/10││Step 6 of 8: Test program 1/10                        │
 │  ▾ Pieces (11)       ││Next: u001-katajainen's Rust is slower than the C —   │
 │    ▸ ✓ u001…inen done││open it under Pieces to see how to change it, if speed│
 │      ◇ u-c…he no test││matters there                                         │
 │      ◇ u-hash no test││                                                      │
-│      · u-lz77 stays C││Speed — your workloads, the C against the Rust in use │
-│      · u-tree stays C││measured on Apple M3 with 2 compilers — see each row ·│
-│      · u-b…ze stays C││as verify builds them · 15 runs each · compares what  │
-│      · u-g…er stays C││the program prints and how it ends                    │
+│      ◇ u-lz77 no test││Speed — your workloads, the C against the Rust in use │
+│      ◇ u-tree no test││measured on Apple M3 with 2 compilers — see each row ·│
+│      ◇ u-b…ze no test││as verify builds them · 15 runs each · compares what  │
+│      ◇ u-g…er no test││the program prints and how it ends                    │
 │      ◇ u-util no test││                                                      │
-│      · u-z…er stays C││The original C                                        │
-│      · u-z…ib stays C││  big-text                  CPU 1.22 s · 12.4 MB      │
+│      ◇ u-z…er no test││The original C                                        │
+│      ◇ u-z…ib no test││  big-text                  CPU 1.22 s · 12.4 MB      │
 │      · u-z…in stays C││  many-small                too short to time         │
 │  ▾ Features (7)      ││  compress-a-big-text-file  CPU 12.4 s · 124 MB       │
 │      ◉ Comp…zip holds││    last try: the C ends or prints differently from   │

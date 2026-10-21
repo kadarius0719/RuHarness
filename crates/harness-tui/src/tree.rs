@@ -317,7 +317,7 @@ pub fn rows(
                 push_node(&mut rows, 2, sel, children, open && children);
                 if open && children {
                     // Its Rust, only once it exists: a row saying "no Rust
-                    // yet" read as a promise, and never kept for a piece
+                    // yet" read as a promise, and never kept for the piece
                     // that stays C (2026-10-20).
                     if u.crate_dir.is_some() {
                         push_node(&mut rows, 3, Selection::Crate(id.clone()), false, false);

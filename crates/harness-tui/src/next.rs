@@ -52,7 +52,7 @@ pub fn cause_action(cause: &Cause) -> Option<Action> {
         Cause::Contradiction
         | Cause::PromotionInterrupted { .. }
         | Cause::StaleVerdict
-        | Cause::CalleeChanged
+        | Cause::CalleeChanged(_)
         | Cause::MadeElsewhere { .. } => Some(Action::Act(Act::Verify)),
         Cause::SourceChanged => Some(Action::Act(Act::Plan)),
         Cause::ChangedOutside | Cause::NoEvidence => None,
@@ -136,7 +136,7 @@ impl App {
                 Some(Action::Migrate),
             ),
             // Why is the line above it on the card.
-            UnitState::StaysC(_) => advice("nothing to do on it in this version", None),
+            UnitState::HoldsMain => advice("nothing to do on it in this version", None),
             UnitState::Waiting => self.waiting_advice(unit),
             UnitState::RustGreen
             | UnitState::RustTried
@@ -165,17 +165,6 @@ impl App {
                                 .as_deref()
                                 .map(crate::app::short_id)
                                 .unwrap_or_default()
-                        ),
-                        None,
-                    )
-                } else if !unit.unit.depends_on.is_empty() {
-                    // The judge tests each unit alone (the guide's Part 7):
-                    // never recommended, the Migrate item stays listed.
-                    advice(
-                        format!(
-                            "it calls other pieces ({}), so in this version it stays C — the judge \
-                             tests each piece alone",
-                            unit.unit.depends_on.join(", ")
                         ),
                         None,
                     )

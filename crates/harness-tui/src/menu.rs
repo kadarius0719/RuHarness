@@ -694,20 +694,14 @@ impl App {
                 .is_some_and(|i| i.state.needs_test_program()),
             _ => false,
         };
-        // A piece that calls others stays C: both items greyed, saying so
-        // (fix pass, item 2).
+        // The piece holding main stays C: both items greyed, saying so
+        // (fix pass, item 2). A piece that calls others moves like any
+        // other (docs/BEYOND-LEAVES-DESIGN.md §5).
         let stays_c = match sel {
-            Selection::Unit(_) => {
-                owner
-                    .and_then(|u| self.files.units.get(u))
-                    .and_then(|i| match &i.state {
-                        UnitState::StaysC(deps) => Some(format!(
-                            "it calls {}, so in this version it stays C",
-                            deps.join(", ")
-                        )),
-                        _ => None,
-                    })
-            }
+            Selection::Unit(_) => owner
+                .and_then(|u| self.files.units.get(u))
+                .filter(|i| i.state == UnitState::HoldsMain)
+                .map(|_| format!("it {}", crate::files::HOLDS_MAIN)),
             _ => None,
         };
         // With the chat off, the reason names the command line's way.

@@ -910,6 +910,7 @@ mod tests {
             attempts: vec![],
             features: None,
             made_elsewhere: false,
+            changed_callees: vec![],
         };
         assert!(report(&r).get("features").is_none());
         r.features = Some(Coverage::Current);

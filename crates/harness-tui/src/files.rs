@@ -156,8 +156,9 @@ pub enum Cause {
     StaleVerdict,
     /// The verdict is out of date only because a piece the unit calls
     /// changed — its Rust was accepted, or its code changed since
-    /// (docs/BEYOND-LEAVES-DESIGN.md §4) ("Re-check").
-    CalleeChanged,
+    /// (docs/BEYOND-LEAVES-DESIGN.md §4) ("Re-check"): which ones, in the
+    /// plan's order (empty when the plan cannot say).
+    CalleeChanged(Vec<String>),
     /// The crate matches neither a recorded attempt's candidate nor what the
     /// oracle last judged.
     ChangedOutside,
@@ -177,40 +178,49 @@ pub enum Cause {
 impl Cause {
     /// The cause alone, plainly, for the unit's one state line ("needs
     /// attention: its verdict was made on another computer, not here yet").
-    pub fn lead(&self) -> &'static str {
+    pub fn lead(&self) -> String {
         match self {
-            Cause::Contradiction => "its status and its verdict disagree",
-            Cause::PromotionInterrupted { .. } => "an Accept was interrupted",
-            Cause::SourceChanged => "its C changed since it was planned",
-            Cause::StaleVerdict => "its verdict is out of date",
-            Cause::CalleeChanged => "its verdict is out of date (a piece it calls changed)",
-            Cause::ChangedOutside => "its Rust changed outside the harness",
-            Cause::NoEvidence => "its verdict is missing",
-            Cause::MadeElsewhere { .. } => "its verdict was made on another computer, not here yet",
+            Cause::Contradiction => "its status and its verdict disagree".into(),
+            Cause::PromotionInterrupted { .. } => "an Accept was interrupted".into(),
+            Cause::SourceChanged => "its C changed since it was planned".into(),
+            Cause::StaleVerdict => "its verdict is out of date".into(),
+            Cause::CalleeChanged(changed) => {
+                format!("its verdict is out of date ({})", callee_changed(changed))
+            }
+            Cause::ChangedOutside => "its Rust changed outside the harness".into(),
+            Cause::NoEvidence => "its verdict is missing".into(),
+            Cause::MadeElsewhere { .. } => {
+                "its verdict was made on another computer, not here yet".into()
+            }
         }
     }
 
     /// The cause and its action in a few words, for a list of units
     /// ("verdict made elsewhere — Re-check with the judge").
-    pub fn short(&self) -> &'static str {
+    pub fn short(&self) -> String {
         match self {
-            Cause::Contradiction => "status and verdict disagree — Re-check with the judge",
+            Cause::Contradiction => "status and verdict disagree — Re-check with the judge".into(),
             Cause::PromotionInterrupted { .. } => {
-                "an Accept was interrupted — Re-check with the judge"
+                "an Accept was interrupted — Re-check with the judge".into()
             }
-            Cause::SourceChanged => "its C changed since the plan — Refresh the plan",
-            Cause::StaleVerdict => "verdict out of date — Re-check with the judge",
-            Cause::CalleeChanged => {
-                "out of date (a piece it calls changed) — Re-check with the judge"
-            }
+            Cause::SourceChanged => "its C changed since the plan — Refresh the plan".into(),
+            Cause::StaleVerdict => "verdict out of date — Re-check with the judge".into(),
+            Cause::CalleeChanged(changed) => format!(
+                "out of date ({}) — Re-check with the judge",
+                callee_changed(changed)
+            ),
             Cause::ChangedOutside => {
                 "its Rust changed outside the harness — restore it, or record it (harness \
                  override)"
+                    .into()
             }
             Cause::NoEvidence => {
                 "its verdict is missing — restore it (git), or record its Rust (harness override)"
+                    .into()
             }
-            Cause::MadeElsewhere { .. } => "verdict made elsewhere — Re-check with the judge",
+            Cause::MadeElsewhere { .. } => {
+                "verdict made elsewhere — Re-check with the judge".into()
+            }
         }
     }
 
@@ -233,9 +243,10 @@ impl Cause {
                     .into()
             }
             Cause::StaleVerdict => "its verdict is out of date — Re-check it".into(),
-            Cause::CalleeChanged => {
-                "its verdict is out of date (a piece it calls changed) — Re-check it".into()
-            }
+            Cause::CalleeChanged(changed) => format!(
+                "its verdict is out of date ({}) — Re-check it",
+                callee_changed(changed)
+            ),
             Cause::ChangedOutside => {
                 "changed outside the harness — restore it, or record it with `harness \
                  override` (see Help)"
@@ -256,6 +267,30 @@ impl Cause {
     }
 }
 
+/// "a piece it calls changed: u-checksum" — which callee, when known
+/// (docs/BEYOND-LEAVES-DESIGN.md §5: the hint and the card say which).
+pub fn callee_changed(changed: &[String]) -> String {
+    match changed {
+        [] => "a piece it calls changed".into(),
+        [one] => format!("a piece it calls changed: {one}"),
+        many => format!("pieces it calls changed: {}", many.join(", ")),
+    }
+}
+
+/// "a piece it calls is out of date itself (u-checksum)": said beside a
+/// caller's state when an accepted callee's own verdict is not fresh and
+/// green (the live proof's first gap), `None` when none is.
+pub fn stale_callees_words(stale: &[String]) -> Option<String> {
+    match stale {
+        [] => None,
+        [one] => Some(format!("a piece it calls is out of date itself ({one})")),
+        many => Some(format!(
+            "pieces it calls are out of date themselves ({})",
+            many.join(", ")
+        )),
+    }
+}
+
 /// Who a migrated unit's crate is attributed to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Origin {
@@ -268,6 +303,13 @@ pub enum Origin {
     /// A hand edit.
     Human,
 }
+
+/// The words for the piece holding `main` (the command line's refusal).
+pub const HOLDS_MAIN: &str = "holds main — stays C in this version";
+
+/// Why it does, for its card and its View.
+pub const HOLDS_MAIN_WHY: &str =
+    "It holds main — stays C in this version: its test program would have to replace main";
 
 /// A unit's state (§2.3, first match wins).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -287,9 +329,11 @@ pub enum UnitState {
     /// stopped at a hand-off (a run of the command line's, or the
     /// cockpit's).
     Waiting,
-    /// `· stays C (calls u-x)`: pending, it calls other units, and the judge
-    /// tests each unit alone — it cannot move in this version.
-    StaysC(Vec<String>),
+    /// `· holds main`: pending, the piece defines the program's `main`
+    /// (its plan symbols name it) — it stays C in this version, its test
+    /// program would have to replace `main` (docs/BEYOND-LEAVES-DESIGN.md
+    /// §1). A piece that calls others has the stage words like any other.
+    HoldsMain,
     /// 11 `✓? Rust green — accept it`: pending, with a green attempt bound
     /// to today's inputs that waits for Accept (§9.4).
     RustGreen,
@@ -317,7 +361,7 @@ impl UnitState {
             UnitState::RustGreen => "✓?",
             UnitState::RustTried => "◐",
             UnitState::Waiting => "⚑",
-            UnitState::StaysC(_) => "·",
+            UnitState::HoldsMain => "·",
             UnitState::TestProgramReady => "◈",
             UnitState::TestProgramStale | UnitState::NoTestProgram => "◇",
             // The fallback has no glyph (§2.3): only its word.
@@ -337,9 +381,9 @@ impl UnitState {
             UnitState::Migrated(Origin::Human) => "done (by hand)".into(),
             UnitState::OriginUnknown => "done".into(),
             UnitState::Waiting => "waiting for your answer".into(),
-            // What it calls is said on its card and in the greyed items,
+            // Why it stays C is said on its card and in the greyed items,
             // not in the row (the row stays short).
-            UnitState::StaysC(_) => "stays C".into(),
+            UnitState::HoldsMain => "holds main".into(),
             UnitState::RustGreen => "Rust green — accept it".into(),
             UnitState::RustTried => "Rust tried".into(),
             UnitState::TestProgramReady => "test program ready".into(),
@@ -349,20 +393,10 @@ impl UnitState {
         }
     }
 
-    /// Why a piece that calls others stays C, for its card: "It calls
-    /// u-cache and u-hash, so in this version it stays C — …".
-    pub fn stays_c_why(&self) -> Option<String> {
-        let UnitState::StaysC(deps) = self else {
-            return None;
-        };
-        let calls = match deps.split_last() {
-            Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
-            Some((last, _)) => last.clone(),
-            None => "other pieces".into(),
-        };
-        Some(format!(
-            "It calls {calls}, so in this version it stays C — the judge tests each piece alone"
-        ))
+    /// Why the piece holding `main` stays C, under its state and on its
+    /// card.
+    pub fn holds_main_why(&self) -> Option<String> {
+        (*self == UnitState::HoldsMain).then(|| HOLDS_MAIN_WHY.to_string())
     }
 
     /// Its word in a narrow pane (under about 36 columns), when the whole
@@ -372,7 +406,9 @@ impl UnitState {
             UnitState::Attention(_) => "attention".into(),
             UnitState::Migrated(_) | UnitState::OriginUnknown => "done".into(),
             UnitState::Waiting => "waiting".into(),
-            UnitState::StaysC(_) => "stays C".into(),
+            // Its whole word, "holds main", does not fit beside six
+            // letters of its name; what it means does.
+            UnitState::HoldsMain => "stays C".into(),
             UnitState::RustGreen => "accept?".into(),
             UnitState::RustTried => "tried".into(),
             UnitState::TestProgramReady => "ready".into(),
@@ -671,7 +707,7 @@ pub fn unit_state(unit: &UnitView) -> UnitState {
     if present && !r.verdict.stale.is_empty() {
         // Out of date only because a piece it calls changed: said so.
         if r.verdict.stale.iter().all(|s| s == "dependencies") {
-            return UnitState::Attention(Cause::CalleeChanged);
+            return UnitState::Attention(Cause::CalleeChanged(r.changed_callees.clone()));
         }
         return UnitState::Attention(Cause::StaleVerdict);
     }
@@ -702,9 +738,10 @@ pub fn unit_state(unit: &UnitView) -> UnitState {
         {
             return UnitState::Waiting;
         }
-        // The judge tests each unit alone: one that calls others stays C.
-        if !unit.unit.depends_on.is_empty() && acceptable(unit).is_none() {
-            return UnitState::StaysC(unit.unit.depends_on.clone());
+        // The piece holding `main` stays C in this version; a piece that
+        // calls others moves, its callees linked as the program stands.
+        if unit.unit.holds_main() && acceptable(unit).is_none() {
+            return UnitState::HoldsMain;
         }
         return if acceptable(unit).is_some() {
             UnitState::RustGreen
@@ -1145,14 +1182,17 @@ mod tests {
             .iter()
             .filter(|u| u.state == UnitState::NoTestProgram)
             .count();
-        assert_eq!(planned, 3);
-        // The pieces that call others stay C (fix pass, item 2).
-        let stays = files
+        assert_eq!(planned, 9);
+        // Only the piece holding main stays C; the pieces that call others
+        // move (docs/BEYOND-LEAVES-DESIGN.md §5).
+        let stays: Vec<&str> = files
             .units
             .iter()
-            .filter(|u| matches!(u.state, UnitState::StaysC(_)))
-            .count();
-        assert_eq!(stays, 7);
+            .zip(&snap.units)
+            .filter(|(i, _)| i.state == UnitState::HoldsMain)
+            .map(|(_, u)| u.unit.id.as_str())
+            .collect();
+        assert_eq!(stays, ["u-zopfli_bin"]);
         let three = snap
             .units
             .iter()
@@ -1383,18 +1423,73 @@ mod tests {
             .position(|u| u.unit.id == "u-lib")
             .unwrap();
         assert_eq!(snap.units[i].report.verdict.stale, ["dependencies"]);
+        // Which piece changed is said (docs/BEYOND-LEAVES-DESIGN.md §5).
+        let cause = Cause::CalleeChanged(vec!["u-dep".into()]);
+        assert_eq!(files.units[i].state, UnitState::Attention(cause.clone()));
         assert_eq!(
-            files.units[i].state,
-            UnitState::Attention(Cause::CalleeChanged)
+            cause.short(),
+            "out of date (a piece it calls changed: u-dep) — Re-check with the judge"
         );
         assert_eq!(
-            Cause::CalleeChanged.short(),
-            "out of date (a piece it calls changed) — Re-check with the judge"
+            cause.lead(),
+            "its verdict is out of date (a piece it calls changed: u-dep)"
         );
         assert_eq!(
-            crate::next::cause_action(&Cause::CalleeChanged),
+            Cause::CalleeChanged(vec!["u-a".into(), "u-b".into()]).lead(),
+            "its verdict is out of date (pieces it calls changed: u-a, u-b)"
+        );
+        assert_eq!(
+            crate::next::cause_action(&cause),
             Some(crate::menu::Action::Act(crate::app::Act::Verify))
         );
+        // u-lib calls u-dep; u-dep is pending, so its own verdict is no
+        // concern of u-lib's (its C is what u-lib is checked with).
+        assert_eq!(snap.units[i].callees, ["u-dep"]);
+        assert!(snap.units[i].stale_callees.is_empty());
+    }
+
+    /// The live proof's first gap: a piece whose callee is linked as its
+    /// accepted Rust while that callee's own verdict is red (or out of
+    /// date) is told so — its check ran against Rust nobody has re-checked.
+    #[test]
+    fn a_callee_out_of_date_itself_is_named_on_its_caller() {
+        let t = Copy::of(CASE, "callee-unsure");
+        t.write("test_case/src/dep.c", "int dep(void) { return 1; }\n");
+        t.scanned("test_case/src/dep.c", &[("dep", "public", 1)]);
+        t.edit("migration/plan.toml", |s| {
+            format!(
+                "{s}\n[[unit]]\nid = \"u-caller\"\nstatus = \"pending\"\n\
+                 files = [\"test_case/src/dep.c\"]\nsymbols = [\"dep\"]\n\
+                 depends_on = [\"u-lib\"]\n"
+            )
+        });
+        let caller = |snap: &Snapshot| {
+            snap.units
+                .iter()
+                .find(|u| u.unit.id == "u-caller")
+                .cloned()
+                .unwrap()
+        };
+        // u-lib is accepted and fresh green: nothing to say.
+        let (snap, _) = t.read();
+        assert_eq!(caller(&snap).callees, ["u-lib"]);
+        assert!(caller(&snap).stale_callees.is_empty());
+        // Its verdict red: said on the caller.
+        t.edit("migration/units/u-lib/oracle-latest.json", |s| {
+            s.replacen("\"green\": true", "\"green\": false", 1)
+        });
+        let (snap, _) = t.read();
+        assert_eq!(caller(&snap).stale_callees, ["u-lib"]);
+        assert_eq!(
+            stale_callees_words(&caller(&snap).stale_callees).as_deref(),
+            Some("a piece it calls is out of date itself (u-lib)")
+        );
+        // A pending callee's verdict is no concern: its C is linked.
+        t.edit("migration/plan.toml", |s| {
+            s.replacen("status = \"verified\"", "status = \"pending\"", 1)
+        });
+        let (snap, _) = t.read();
+        assert!(caller(&snap).stale_callees.is_empty());
     }
 
     /// Rule 7, SAFE-4: a crate edited outside the harness matches neither a

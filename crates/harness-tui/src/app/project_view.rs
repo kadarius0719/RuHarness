@@ -60,7 +60,8 @@ pub struct ToolProgress {
     pub accept: usize,
     /// Of them, with a try that waits for an answer.
     pub answer: usize,
-    /// Of them, calling other pieces: they stay C in this version.
+    /// Of them, the piece holding main: it stays C in this version (a piece
+    /// that calls others moves, docs/BEYOND-LEAVES-DESIGN.md §5).
     pub stay_c: usize,
     /// The person's features file is written.
     pub features: bool,
@@ -88,7 +89,7 @@ impl ToolProgress {
                 p.done += 1;
                 continue;
             }
-            if !u.depends_on.is_empty() {
+            if u.holds_main() {
                 p.stay_c += 1;
                 continue;
             }

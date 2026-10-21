@@ -1350,6 +1350,13 @@ fn unit_lead(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
         if let UnitState::Attention(cause) = &s {
             spans.push(Span::raw(format!(": {}", cause.lead())));
         }
+        // A callee linked as its Rust whose own check is out of date (the
+        // live proof's first gap): said beside the state.
+        if let Some(more) = crate::files::stale_callees_words(&unit.stale_callees)
+            .filter(|_| *s != UnitState::HoldsMain)
+        {
+            spans.push(Span::styled(format!(" · {more}"), attention()));
+        }
         if let Some(h) = &unit.report.write_in_flight {
             spans.push(Span::styled(
                 format!(" · being written by `{}`", h.command),
@@ -1369,8 +1376,8 @@ fn unit_lead(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
             lines.extend(wrapped(&text, width, style));
         }
     }
-    // A piece that stays C: what it calls, under its state.
-    if let Some(why) = state.and_then(UnitState::stays_c_why) {
+    // The piece holding main: why it stays C, under its state.
+    if let Some(why) = state.and_then(UnitState::holds_main_why) {
         lines.extend(wrapped(&why, width, Style::default()));
     }
     // The Next step: the unit's (or the attempt's) one action, the cause
@@ -2197,11 +2204,7 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
     if !app.snapshot.units.is_empty() {
         let mut counts: Vec<(String, usize)> = Vec::new();
         for info in &app.files.units {
-            // The pieces that stay C count as one group, whatever they call.
-            let word = match &info.state {
-                UnitState::StaysC(_) => info.state.short_word(),
-                s => s.word(),
-            };
+            let word = info.state.word();
             let key = format!("{} {word}", info.state.glyph()).trim().to_string();
             match counts.iter_mut().find(|(k, _)| *k == key) {
                 Some((_, n)) => *n += 1,
@@ -4206,8 +4209,7 @@ const HELP_LEGEND: &[(&str, &str)] = &[
     ),
     (
         "·",
-        "stays C: a piece that calls other pieces cannot be tested alone in this version; also \
-         a header",
+        "holds main: the piece with the program's main stays C in this version; also a header",
     ),
     ("⊘", "blocked"),
     ("!", "changed since the scan"),
@@ -5455,7 +5457,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::app::tests::{app, app_of, arm, attempt, key, LIB_C, PROVENANCE};
 
@@ -5476,7 +5478,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Instant;
 
-    fn text(buffer: &Buffer) -> String {
+    pub(crate) fn text(buffer: &Buffer) -> String {
         let area = buffer.area;
         let mut out = String::new();
         for y in 0..area.height {
@@ -5538,7 +5540,7 @@ mod tests {
         assert_eq!(dialog_height(3, 30), 7);
     }
 
-    fn render(app: &mut App, width: u16, height: u16) -> Buffer {
+    pub(crate) fn render(app: &mut App, width: u16, height: u16) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|f| draw(f, app)).unwrap();
         terminal.backend().buffer().clone()
@@ -6135,6 +6137,43 @@ mod tests {
             .starts_with("u-lib waits for your answer"));
     }
 
+    /// The tool's Next step recommends the first piece in the plan's
+    /// execution order, not in the file's (docs/BEYOND-LEAVES-DESIGN.md
+    /// §5): with u-lz77 (which calls u-cache and u-hash) listed first, the
+    /// leaf u-cache is still the one to open.
+    #[test]
+    fn the_next_piece_is_the_first_in_execution_order() {
+        let mut app = app_of("targets/zopfli", "next-order");
+        let i = app
+            .snapshot
+            .units
+            .iter()
+            .position(|u| u.unit.id == "u-lz77")
+            .unwrap();
+        let unit = app.snapshot.units.remove(i);
+        app.snapshot.units.insert(0, unit);
+        let info = app.files.units.remove(i);
+        app.files.units.insert(0, info);
+        assert_eq!(app.snapshot.units[0].unit.id, "u-lz77");
+        let next = app.next_step().expect("a Next step");
+        assert!(
+            next.text.ends_with("— open u-cache: Enter"),
+            "{}",
+            next.text
+        );
+        let order: Vec<&str> = app
+            .snapshot
+            .execution_order()
+            .into_iter()
+            .map(|i| app.snapshot.units[i].unit.id.as_str())
+            .collect();
+        let at = |id: &str| order.iter().position(|o| *o == id).unwrap();
+        assert!(
+            at("u-cache") < at("u-lz77") && at("u-hash") < at("u-lz77"),
+            "{order:?}"
+        );
+    }
+
     /// Fix pass, item 8: a unit row keeps its state word in a narrow pane —
     /// short (`no test`) when the whole one does not fit — and never cuts
     /// its name below 6 letters.
@@ -6147,7 +6186,8 @@ mod tests {
         assert!(row.contains("u-hash no test"), "{row}");
         // Cut in the middle, six letters kept, the word short.
         assert!(screen.contains("◇ u-c…he no test"), "{screen}");
-        assert!(screen.contains("· u-b…ze stays C"), "{screen}");
+        assert!(screen.contains("◇ u-b…ze no test"), "{screen}");
+        assert!(screen.contains("· u-z…in stays C"), "{screen}");
         assert!(UnitState::TestProgramReady.short_word() == "ready");
         assert_eq!(UnitState::RustGreen.short_word(), "accept?");
     }
@@ -8497,7 +8537,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         let next = app.next_step().expect("a Next step");
         assert!(
             next.text
-                .ends_with("1 of the 4 that can move is in Rust — open u-cache: Enter"),
+                .ends_with("1 of the 10 that can move is in Rust — open u-cache: Enter"),
             "{}",
             next.text
         );
@@ -8528,30 +8568,43 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         let next = app.next_step().expect("a Next step");
         assert!(
             next.text
-                .ends_with("1 of the 4 that can move is in Rust — Migrate u-cache: Enter"),
+                .ends_with("1 of the 10 that can move is in Rust — Migrate u-cache: Enter"),
             "{}",
             next.text
         );
         assert_eq!(next.action, Some(crate::menu::Action::Migrate));
-        // A unit that calls other units stays C in this version: said, and
-        // nothing recommended in its menu.
+        // A unit that calls other units moves like any other
+        // (docs/BEYOND-LEAVES-DESIGN.md §5): its stage words, its test
+        // program recommended, nothing greyed for what it calls.
         app.select(Selection::Unit("u-lz77".into()));
         let screen = text(&render(&mut app, 160, 40));
+        assert!(screen.contains("◇ u-lz77 no test program "), "{screen}");
+        assert!(!screen.contains("stays C"), "{screen}");
+        app.open_menu();
+        let Mode::Menu(m) = &app.mode else {
+            panic!("a menu")
+        };
+        assert_eq!(m.items[0].label, "Make the test program — ask in chat");
+        assert_eq!(m.items[0].greyed, None);
+        app.mode = Mode::Normal;
+        // The piece holding main stays C in this version: said, and nothing
+        // recommended in its menu; out of the tool's count (fix pass, item
+        // 2).
+        app.select(Selection::Unit("u-zopfli_bin".into()));
+        let screen = text(&render(&mut app, 160, 40));
         assert!(
-            screen.contains("It calls u-cache and u-hash, so in this version it stays C — the judge tests each piece alone"),
+            screen.contains(
+                "It holds main — stays C in this version: its test program would have to replace main"
+            ),
             "{screen}"
         );
-        // Its own word and mark; out of the tool's count (fix pass, item 2).
-        assert!(
-            screen.contains("· u-lz77 stays C") && !screen.contains("stays C (calls"),
-            "{screen}"
-        );
+        assert!(screen.contains("· u-zopfli_bin holds main"), "{screen}");
         app.open_menu();
         let Mode::Menu(m) = &app.mode else {
             panic!("a menu")
         };
         assert!(m.reason.is_none());
-        let why = "it calls u-cache, u-hash, so in this version it stays C";
+        let why = "it holds main — stays C in this version";
         for label in [
             "Make the test program — ask in chat",
             "Migrate — ask in chat",

@@ -163,13 +163,14 @@ fn state_of<'a>(app: &'a App, id: &str) -> Option<&'a UnitState> {
 }
 
 /// The counts the tool's summary uses: pieces that can move (blocked and
-/// stays-C left out), of them done; pieces that stay C.
+/// the piece holding main left out — a piece that calls others can move),
+/// of them done; pieces that stay C.
 pub(crate) fn piece_counts(app: &App) -> (usize, usize, usize) {
     let (mut pieces, mut done, mut stay) = (0, 0, 0);
     for info in &app.files.units {
         match &info.state {
             UnitState::Blocked => {}
-            UnitState::StaysC(_) => stay += 1,
+            UnitState::HoldsMain => stay += 1,
             UnitState::Migrated(_) | UnitState::OriginUnknown => {
                 pieces += 1;
                 done += 1;
@@ -617,12 +618,23 @@ fn units(app: &App) -> Explained {
         "The program's pieces: {}, each a group of C functions that move to Rust together.",
         plural(n, "piece", "pieces")
     );
-    // Why some do not move is said here, not on the Next line.
+    // Why one does not move is said here, not on the Next line.
+    let main: Vec<String> = app
+        .snapshot
+        .units
+        .iter()
+        .zip(&app.files.units)
+        .filter(|(_, i)| i.state == UnitState::HoldsMain)
+        .map(|(u, _)| u.unit.id.clone())
+        .collect();
+    let holds = match main.as_slice() {
+        [one] => format!("{one} holds main — stays C in this version"),
+        many => format!("{} hold main — they stay C in this version", and_list(many)),
+    };
     let hint = if stay > 0 {
         fit(&[
             format!(
-                "The program's pieces: {}; {stay} call other pieces, so in this version they \
-                 stay C.",
+                "The program's pieces: {}; {holds}.",
                 moved_words(done, pieces)
             ),
             all,
@@ -635,12 +647,13 @@ fn units(app: &App) -> Explained {
         format!("{}.", capitalised(&moved_words(done, pieces))),
     ];
     if stay > 0 {
-        card.push(format!(
-            "{} other pieces, so in this version {} C.",
-            plural(stay, "piece calls", "pieces call"),
-            if stay == 1 { "it stays" } else { "they stay" }
-        ));
+        card.push(format!("{}.", capitalised(&holds)));
     }
+    card.push(
+        "They move in the plan's order: a piece that calls others moves after them, checked \
+         with them as the program stands."
+            .into(),
+    );
     card.push("Each piece goes: a test program, then its Rust, then your Accept.".into());
     Explained {
         title: format!("Pieces ({n})"),
@@ -660,9 +673,7 @@ fn unit_state_clause(s: &UnitState) -> String {
             "its Rust is done and passed the judge's check".into()
         }
         UnitState::Waiting => "a try stopped to wait for your answer".into(),
-        UnitState::StaysC(deps) => {
-            format!("it calls {}, so in this version it stays C", and_list(deps))
-        }
+        UnitState::HoldsMain => "it holds main — stays C in this version".into(),
         UnitState::RustGreen => "a try passed every check and waits for your Accept".into(),
         UnitState::RustTried => "a model tried its Rust; no try has passed every check".into(),
         UnitState::TestProgramReady => "its test program is ready, so its Rust can be made".into(),
@@ -676,17 +687,45 @@ fn unit_state_clause(s: &UnitState) -> String {
 
 /// A cause in plain words (never the harness's own name for the judge's
 /// record).
-fn cause_words(c: &Cause) -> &'static str {
+fn cause_words(c: &Cause) -> String {
     match c {
-        Cause::Contradiction => "its status and the judge's check disagree",
-        Cause::PromotionInterrupted { .. } => "an Accept was interrupted",
-        Cause::SourceChanged => "its C changed since it was planned",
-        Cause::StaleVerdict => "the judge's check is out of date",
-        Cause::CalleeChanged => "the judge's check is out of date: a piece it calls changed",
-        Cause::ChangedOutside => "its Rust was changed outside the cockpit",
-        Cause::NoEvidence => "the judge's check of its Rust is missing",
-        Cause::MadeElsewhere { .. } => "the judge's check was made on another computer",
+        Cause::Contradiction => "its status and the judge's check disagree".into(),
+        Cause::PromotionInterrupted { .. } => "an Accept was interrupted".into(),
+        Cause::SourceChanged => "its C changed since it was planned".into(),
+        Cause::StaleVerdict => "the judge's check is out of date".into(),
+        Cause::CalleeChanged(changed) => format!(
+            "the judge's check is out of date: {}",
+            crate::files::callee_changed(changed)
+        ),
+        Cause::ChangedOutside => "its Rust was changed outside the cockpit".into(),
+        Cause::NoEvidence => "the judge's check of its Rust is missing".into(),
+        Cause::MadeElsewhere { .. } => "the judge's check was made on another computer".into(),
     }
+}
+
+/// "It calls u-checksum: its test program and its Rust are checked with
+/// u-checksum as the program stands — its Rust once accepted, else its C"
+/// (docs/BEYOND-LEAVES-DESIGN.md §5), for a piece that calls others.
+pub(crate) fn calls_words(u: &UnitView) -> Option<String> {
+    if u.unit.depends_on.is_empty() {
+        return None;
+    }
+    let with = if u.callees.is_empty() {
+        &u.unit.depends_on
+    } else {
+        &u.callees
+    };
+    let its = if with.len() == 1 {
+        "its Rust once accepted, else its C"
+    } else {
+        "each one's Rust once accepted, else its C"
+    };
+    Some(format!(
+        "It calls {}: its test program and its Rust are checked with {} as the program stands \
+         — {its}",
+        and_list(&u.unit.depends_on),
+        and_list(with)
+    ))
 }
 
 /// Where a unit's functions are: "src/a.c", "src/a.c and src/b.c", "3
@@ -723,17 +762,19 @@ fn unit(app: &App, id: &str) -> Explained {
     } else {
         "that move to Rust together"
     };
+    // A callee whose own check is out of date: said with the state (the
+    // live proof's first gap).
+    let unsure = crate::files::stale_callees_words(&u.stale_callees);
     let hint = match &state {
-        UnitState::StaysC(deps) => fit(&[
-            format!(
-                "{id} calls {}; in this version the judge tests each piece alone, so a piece \
-                 that calls other pieces stays C.",
-                and_list(deps)
-            ),
-            format!("{id} calls other pieces; the judge tests each piece alone, so it stays C."),
+        UnitState::HoldsMain => fit(&[
+            format!("{id} holds main — stays C in this version: its test program would have to replace main."),
+            format!("{id} holds main — stays C in this version."),
         ]),
         s => {
-            let clause = unit_state_clause(s);
+            let clause = match &unsure {
+                Some(more) => format!("{}; {more}", unit_state_clause(s)),
+                None => unit_state_clause(s),
+            };
             fit(&[
                 format!(
                     "{id} is one piece of the program: {funcs} in {} {moves}; {clause}.",
@@ -748,19 +789,36 @@ fn unit(app: &App, id: &str) -> Explained {
             ])
         }
     };
+    let state_clause = match &unsure {
+        Some(more) if state != UnitState::HoldsMain => {
+            format!("{}; {more}", unit_state_clause(&state))
+        }
+        _ => unit_state_clause(&state),
+    };
     let mut card = vec![
         format!(
             "One piece of the program: {funcs} in {} {moves}.",
             files_words(u)
         ),
-        format!("Now: {}.", unit_state_clause(&state)),
+        format!("Now: {state_clause}."),
     ];
-    if let UnitState::StaysC(_) = state {
-        card.push(
-            "The judge tests each piece alone against its C; a piece that calls other pieces \
-             cannot be tested that way yet."
-                .into(),
-        );
+    if let Some(why) = state.holds_main_why() {
+        card.push(format!("{why}; the other pieces move around it."));
+    }
+    if let Some(calls) = calls_words(u) {
+        card.push(format!("{calls}."));
+    }
+    if !u.stale_callees.is_empty() {
+        card.push(format!(
+            "Re-check {} first: this piece was checked with {}, which nobody has checked as it \
+             is now.",
+            and_list(&u.stale_callees),
+            if u.stale_callees.len() == 1 {
+                "its Rust"
+            } else {
+                "their Rust"
+            }
+        ));
     }
     match &u.crate_dir {
         Some(dir) => {
@@ -1475,14 +1533,91 @@ mod tests {
         );
     }
 
+    /// A piece that calls others says what it is checked with, which
+    /// callee changed when its verdict is out of date for it, and a callee
+    /// out of date itself (docs/BEYOND-LEAVES-DESIGN.md §5; the live
+    /// proof's first gap) — on the hint, the card and the View's state
+    /// line.
+    #[test]
+    fn a_caller_says_what_it_calls_and_which_changed() {
+        let mut app = app_of(crate::testutil::READ_SCALEFACTORS, "explain-caller");
+        let sel = Selection::Unit("u-lib".into());
+        {
+            let u = &mut app.snapshot.units[0];
+            u.unit.depends_on = vec!["u-checksum".into()];
+            u.callees = vec!["u-checksum".into()];
+            u.stale_callees = vec!["u-checksum".into()];
+        }
+        let h = hint(&app, &sel);
+        assert!(
+            h.ends_with("; a piece it calls is out of date itself (u-checksum)."),
+            "{h}"
+        );
+        let card = explain(&app, &sel).card;
+        assert!(
+            card.contains(
+                &"It calls u-checksum: its test program and its Rust are checked with u-checksum \
+                  as the program stands — its Rust once accepted, else its C."
+                    .to_string()
+            ),
+            "{card:#?}"
+        );
+        assert!(
+            card[1].ends_with("; a piece it calls is out of date itself (u-checksum)."),
+            "{card:#?}"
+        );
+        assert!(
+            card.iter()
+                .any(|l| l.starts_with("Re-check u-checksum first")),
+            "{card:#?}"
+        );
+        app.select(sel.clone());
+        let screen = crate::view::tests::text(&crate::view::tests::render(&mut app, 160, 40));
+        assert!(
+            screen.contains("a piece it calls is out of date itself (u-checksum)"),
+            "{screen}"
+        );
+        // Out of date because the callee changed: which one, on the hint
+        // and the card.
+        app.files.units[0].state =
+            UnitState::Attention(crate::files::Cause::CalleeChanged(
+                vec!["u-checksum".into()],
+            ));
+        app.snapshot.units[0].stale_callees.clear();
+        let h = hint(&app, &sel);
+        assert!(
+            h.contains("the judge's check is out of date: a piece it calls changed: u-checksum"),
+            "{h}"
+        );
+        let card = explain(&app, &sel).card;
+        assert_eq!(
+            card[1],
+            "Now: it needs attention: the judge's check is out of date: a piece it calls \
+             changed: u-checksum."
+        );
+    }
+
     #[test]
     fn the_sentences_say_what_a_row_is() {
         let app = app_of("targets/zopfli", "explain-words");
         assert_eq!(
-            hint(&app, &Selection::Unit("u-lz77".into())),
-            "u-lz77 calls u-cache and u-hash; in this version the judge tests each piece alone, \
-             so a piece that calls other pieces stays C."
+            hint(&app, &Selection::Unit("u-zopfli_bin".into())),
+            "u-zopfli_bin holds main — stays C in this version: its test program would have to \
+             replace main."
         );
+        // A piece that calls others moves: its card says what it is checked
+        // with (docs/BEYOND-LEAVES-DESIGN.md §5).
+        let card = explain(&app, &Selection::Unit("u-lz77".into())).card;
+        assert!(
+            card.contains(
+                &"It calls u-cache and u-hash: its test program and its Rust are checked with \
+                  u-cache and u-hash as the program stands — each one's Rust once accepted, else \
+                  its C."
+                    .to_string()
+            ),
+            "{card:#?}"
+        );
+        assert_eq!(card[1], "Now: it has no test program yet.", "{card:#?}");
         // No record says which try made it: the sentence leaves it out.
         assert_eq!(
             hint(&app, &Selection::Crate("u001-katajainen".into())),

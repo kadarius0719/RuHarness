@@ -1,17 +1,17 @@
 ┌ Files ──────────────────────────────────────────────────────┐┌ u-cache · no test program ────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│▾ harness-tui-fit-0000000000                             ✓1/4││Map ✓ · Configure ✓ · Accept program ✓ · Scan ✓ · Plan ✓ · Test program ○ · Rust · Accept Rust                                         │
+│▾ harness-tui-fit-0000000000                            ✓1/10││Map ✓ · Configure ✓ · Accept program ✓ · Scan ✓ · Plan ✓ · Test program ○ · Rust · Accept Rust                                         │
 │  ▾ Pieces (11)                                              ││◇ u-cache no test program                                                                                                              │
 │    ▸ ✓ u001-katajainen                                  done││Next: Make the test program — run harness gen-driver u-cache (the chat is off)                                                         │
 │      ◇ u-cache                               no test program││                                                                                                                                       │
 │      ◇ u-hash                                no test program││5 exported functions: ZopfliCacheToSublen (22 lines), ZopfliCleanCache (5 lines), ZopfliInitCache (19 lines), ZopfliMaxCachedSublen (11│
-│      · u-lz77                                        stays C││lines), ZopfliSublenToCache (32 lines)                                                                                                 │
-│      · u-tree                                        stays C││Its C: 1 file — src/zopfli/cache.c                                                                                                     │
-│      · u-blocksplitter-deflate-squeeze               stays C││No Rust yet                                                                                                                            │
-│      · u-gzip_container                              stays C││5 of your features run it · still C — see Features                                                                                     │
+│      ◇ u-lz77                                no test program││lines), ZopfliSublenToCache (32 lines)                                                                                                 │
+│      ◇ u-tree                                no test program││Its C: 1 file — src/zopfli/cache.c                                                                                                     │
+│      ◇ u-blocksplitter-deflate-squeeze       no test program││No Rust yet                                                                                                                            │
+│      ◇ u-gzip_container                      no test program││5 of your features run it · still C — see Features                                                                                     │
 │      ◇ u-util                                no test program││Tries: none yet                                                                                                                        │
-│      · u-zlib_container                              stays C││                                                                                                                                       │
-│      · u-zopfli_lib                                  stays C││▸ C source (Tab to the View, then Enter)                                                                                               │
-│      · u-zopfli_bin                                  stays C││                                                                                                                                       │
+│      ◇ u-zlib_container                      no test program││                                                                                                                                       │
+│      ◇ u-zopfli_lib                          no test program││▸ C source (Tab to the View, then Enter)                                                                                               │
+│      · u-zopfli_bin                               holds main││                                                                                                                                       │
 │  ▾ Features (7)                                             ││                                                                                                                                       │
 │      ◉ Compress to gzip        holds so far · 1 of 10 pieces││                                                                                                                                       │
 │      ◉ Compress to zlib        holds so far · 1 of 10 pieces││                                                                                                                                       │

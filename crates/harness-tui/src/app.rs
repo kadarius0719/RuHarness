@@ -2923,7 +2923,7 @@ impl App {
                 vec![
                     format!(
                         "Cuts the C into pieces in {}/plan.toml: functions that call each other \
-                         move together, and a piece that calls another stays C in this version.",
+                         move together, and the piece holding main stays C in this version.",
                         self.snapshot.ledger_rel()
                     ),
                     "Each piece then goes: a test program, its Rust, your Accept.".into(),
@@ -4196,13 +4196,15 @@ impl App {
             );
         }
         // Units with no Rust yet that can move: the first, in the plan's
-        // order. A unit that calls other units stays C in this version (the
-        // judge tests each unit alone — the guide's Part 7).
-        let leaf = |id: &str| {
-            self.snapshot
-                .unit(id)
-                .is_some_and(|u| u.unit.depends_on.is_empty())
-        };
+        // execution order (leaves first), so the program gains its Rust
+        // bottom-up; the piece holding main stays C in this version
+        // (docs/BEYOND-LEAVES-DESIGN.md §1, §5).
+        let in_order: Vec<(&str, &UnitState)> = self
+            .snapshot
+            .execution_order()
+            .into_iter()
+            .filter_map(|i| states.get(i).copied())
+            .collect();
         // A piece whose attempt waits for an answer: answer it, before any
         // new attempt (fix pass, item 3).
         if let Some((id, _)) = states.iter().find(|(_, s)| **s == UnitState::Waiting) {
@@ -4211,7 +4213,7 @@ impl App {
                 Some(Action::OpenUnit(id.to_string())),
             );
         }
-        let movable = |(id, s): &&(&str, &UnitState)| no_rust(s) && leaf(id);
+        let movable = |(_, s): &&(&str, &UnitState)| no_rust(s);
         // The one count about moving: the pieces that can move are the
         // denominator (the whole-journey check, item 4).
         let (pieces, done, _) = crate::explain::piece_counts(self);
@@ -4219,7 +4221,7 @@ impl App {
         // A unit with its test program moves first; with none ready, the
         // first unit is opened for its test program (§9.4). One line, the
         // verb — key form (fix pass, item 6).
-        if let Some((id, _)) = states
+        if let Some((id, _)) = in_order
             .iter()
             .filter(movable)
             .find(|(_, s)| !s.needs_test_program())
@@ -4229,7 +4231,7 @@ impl App {
                 Some(Action::Migrate),
             );
         }
-        if let Some((id, _)) = states.iter().find(movable) {
+        if let Some((id, _)) = in_order.iter().find(movable) {
             return say(
                 format!("{how_many} — open {id}: Enter"),
                 Some(Action::OpenUnit(id.to_string())),
@@ -4242,12 +4244,12 @@ impl App {
         if !states.iter().any(|(_, s)| in_rust(s))
             || !states
                 .iter()
-                .all(|(id, s)| in_rust(s) || **s == UnitState::Blocked || !leaf(id))
+                .all(|(_, s)| in_rust(s) || matches!(s, UnitState::Blocked | UnitState::HoldsMain))
         {
             return None;
         }
-        // One line, `verb — key` (2026-10-20): why the others stay C is
-        // the Units row's hint and card, not this line.
+        // One line, `verb — key` (2026-10-20): why one stays C is the
+        // Units row's hint and card, not this line.
         let stay = states
             .iter()
             .filter(|(_, s)| !in_rust(s) && **s != UnitState::Blocked)
