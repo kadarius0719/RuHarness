@@ -1142,6 +1142,74 @@ from the mixed side), and the DECISIONS handoff.
   function values without an edge; digraphs): separate tasks; the probe instruments
   definitions, not calls, so they do not affect the map.
 
+## 14. A file from the project as a scenario's input; scenarios that cannot be checks; the chat's fix (2026-10-21)
+
+The person's first features, proposed by the chat (COCKPIT-WRAPPER-DESIGN §9.6) and saved: for
+t-unlzg, a decoder, every decode scenario could only feed text or random bytes and expect the
+header check to refuse them — a scenario's `input` is one of three built-in samples, and none is
+LZG data. For t-benchmark, four of eight scenarios were refused at the map as `c-side-unstable`:
+a benchmark prints timings. Both are limits of the file, not of the judge. Three changes.
+
+**14.1 A file from the project as the input.** `input` accepts, besides `sample:text|rand|empty`,
+a relative path in the project — the workloads file's rule (docs/PERF-DESIGN.md §3.1), verbatim:
+as written, relative, UTF-8, no control character, no component starting with `.` or `-`, not
+under `migration/`, no `..`; resolved, its canonical path lies in the canonical target root,
+outside the canonical ledger folder and any `.git`; a regular file, never through a link; at
+most **8 MiB** (scenarios run on every check; a workload's 64 MiB is for one timed run). The
+bytes are read **once** per `verify` / `features map` and copied into the run's `run/` folder
+under the file's own basename (so a program that looks at the extension sees `small.lzg`; the
+basename must match `^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`, else refused at the loader with "name
+the file so its name is plain"), with the fixed modification time the samples get; `{input}` is
+that basename. The scenario's digest (§2.4) covers the input's name and bytes, as a workload's
+does (not its path): a changed file makes every verdict that ran the scenario "not checked since
+you changed them", as an edited scenario does. The sandbox profile reads it from the build
+folder as it reads the samples (§4.1 step 4; the copy lives beside `sample_text.txt`).
+
+A file the run cannot use is the scenario's problem, never the file's: a new reason in §6.1's
+table, `input-unusable`, with the workloads' sentences made the scenario's — "its input
+bench/small.lzg is not here — put the file back or change the scenario"; "… is a link — copy the
+file in instead"; "… leads outside the project through a linked folder — copy the file in"; "… is
+a folder — name a file"; "… is over 8 MiB — use a smaller input"; "… is under migration/ — move
+it"; "… cannot be read (permission denied) — fix its permissions". The map marks the scenario
+`⚑ a scenario cannot run` with that reason, as for `c-side-*`; every other scenario runs. Help,
+the starter's comment and the features topic say a scenario may name a small file from the
+project, committed, so a fresh clone can run it.
+
+**14.2 Scenarios that cannot be checks: the chat knows before proposing.** The chat's brief
+(crates/harness-tui/src/chat_brief.md, the proposing section) gains the rule: never propose a
+scenario whose output carries timings, dates, random values, process ids or paths unless the
+program has an option that silences them (then use it); when the program's whole output is such
+(a benchmark), say so in one sentence and propose only its usage and wrong-input scenarios, and
+point the person at a workload for Speed instead. And: when a scenario needs a real input, name a
+small file in the project if the unit's pairs show one; otherwise write the scenario with the
+file name it would need (e.g. `tests/small.lzg`) and tell the person, in the reply, that they
+must put that file there before the scenario can run (the map then says "its input … is not
+here").
+
+**14.3 The chat's fix.** On a feature or scenario row whose map says it cannot run (`⚑`, any
+reason of §6.1's table but `not-in-program`), the menu gains, under the model separator, **Fix
+the features file — ask in chat** (recommended there when the chat is on, before **Edit the
+features file**): it types into the chat `Scenario bench/default cannot be a check: the C
+program's output differs between runs. Change or remove it, and propose the corrected features
+file` (one line per scenario that cannot run, the reason in §6.1's words), the chat reads the
+current file (`harness_features_file`, a new read tool giving the file's text — the proposal
+tools exist; the chat could not see the file it was fixing) and writes a corrected proposal with
+`harness_features_propose`; the Next step then reads `Next: Read the chat's fix — Enter, then
+Edit from the chat's proposal`. Nothing is saved until the person saves, as §9.6. The same item
+for a workload that `perf` marks `input-unusable` or that it refuses, on the Speed row: **Fix the
+workloads file — ask in chat**.
+
+**Tests.** The loader: a project file accepted, each refusal of 14.1 with its sentence, the
+basename rule, the 8 MiB cap, a `sample:` value unchanged; the digest over name and bytes; the
+run: the file copied under its basename with the fixed time, `{input}` the basename, the sandbox
+profile naming the copy; the map: `input-unusable` for a missing file, with the sentence, and the
+other scenarios still run; the brief: the stability rule present; the cockpit: the Fix item's
+greying, recommendation and typed question, the Next step with a fix proposal; harness-mcp:
+`harness_features_file` listed in cockpit mode, the text returned, refused blind. Docs: §2.1's
+`input` bullet and §6.1's table here; SCHEMAS (features.toml's `input`, the reason); the features
+topic; the guide where Part 8 writes a features file (the gate green); the brief; the cockpit
+topic (the Fix item).
+
 ## R. Design review — history
 
 §R and §R2 name sections and rules of the first and second revisions; where a later revision changed a rule, §R3 (or §R2) says so — the rule text above governs.

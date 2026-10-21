@@ -1203,6 +1203,8 @@ with a proposal; the brief's syntax sections present. Docs: the cockpit and feat
 models topic (the chat can propose features and workloads), SCHEMAS (the two proposal files),
 CHAT-PANE-DESIGN's brief summary, the guide where Part 8/9 quote the Features menu.
 
+*Addendum (2026-10-21): the chat's fix of a scenario that cannot run, a file from the project as a scenario's input, and the brief's stability rule are docs/FEATURES-DESIGN.md §14; the **Fix the features file — ask in chat** item is specified there.*
+
 ### 9.7 A readable default: the theme chosen from the terminal's background; panes that look like places; fewer blue things (2026-10-20)
 
 The person, two days into the colour work, with the terminal theme on a green-on-black profile:
