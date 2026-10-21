@@ -1131,6 +1131,76 @@ and the key bar name `i`. Docs: the cockpit topic (the hint line, `i`, the short
 TUTORIAL's keys table, the guide's quoted screens where the Ready line or a dialog body changed
 (the gate stays green), SCHEMAS's mirror.
 
+### 9.6 A model proposes the features and the workloads (2026-10-20)
+
+The person, at the end of t-benchmark's journey with no features yet: "it would be good to have
+the option to allow a model to write the feature and workload test" — and, for someone who has
+no idea what they are doing, as a way to learn what one is. Their screenshot: asked for an
+example features file, the chat could only decline (it may not write files, and its brief holds
+neither file's syntax). The shape that fits is the build configuration's (§9.1 Write the build
+configuration, docs/PROJECT-MAP-DESIGN.md's `config.proposed.toml`): the model writes a
+*proposal*, the cockpit opens it in the person's editor as a draft, and nothing is checked until
+the person saves. Writing stays the person's; proposing is the model's.
+
+- **Two items.** On the Features row (and on the Features view's heading), under the model
+  separator: **Propose features — ask in chat**; on the Speed row: **Propose a workload — ask in
+  chat**. Each types its question into the chat, as the Project view's items do (§9.1): "Propose
+  features for t-benchmark: what a person does with it and can see the result of" / "Propose a
+  workload for t-benchmark: a run long enough to time, with a real input". Greyed with its reason
+  while the chat cannot be used, never recommended by the Next step unless the Features (or
+  Speed) row is the Next step's row and the chat is on — then it is the recommended item, before
+  **Write your features file**, with "· uses a model" after its reason, as §9.1's one rule.
+- **What the chat does.** It reads what it already can (`harness_status`, `harness_unit`, the
+  program's `main` and its options through the cockpit's source reads — add a read tool
+  `harness_program` giving the tool's main file, its exported symbols and the map's words for
+  it, if the existing reads do not already serve the main file's text), writes the proposal with
+  a new harness-mcp tool, `harness_features_propose` (`text`: the whole file in `features.toml`'s
+  syntax) or `harness_workloads_propose` (`text`: `workloads.toml`'s), and then tells the person,
+  in one sentence per scenario, what each one checks and why it chose it. The brief gains both
+  files' syntax (docs/FEATURES-DESIGN.md §2.1 and docs/PERF-DESIGN.md §3.1, verbatim as rules),
+  the rule of what a feature is ("something a person does with the program and can see the
+  result of; each scenario one run of the whole program; three to six scenarios covering what
+  the program is for, its options, and one wrong input"), what a workload is ("a run long enough
+  to time, half a second or more of the C, with a real input in the project"), and that it
+  writes a proposal the person edits and saves, never the file.
+- **The tools write one file each and nothing else**: `migration/features/features.proposed.toml`
+  and `migration/perf/workloads.proposed.toml`, after the same validation the save path runs
+  (`harness_core::features` loader; the workloads loader) — a proposal that does not validate is
+  refused with the loader's message, and the chat fixes it and proposes again (as the map's
+  answer is refused by `project ask`'s validators). The file starts with a comment naming it as
+  the model's proposal, the model and the date, and each `[[scenario]]` / `[[workload]]` may carry
+  the chat's one-line why as a comment above it (the proposal text is the chat's; the tool only
+  checks it). The tools are cockpit-mode tools: they run in harness-mcp's own process like
+  `harness_map_answer`, and refuse when the target is not adopted, when `migration/features` (or
+  `migration/perf`) is a symlink, when the text is over the file cap, and when a draft of the
+  person's own is kept (the draft slot is theirs: "a draft of yours is kept — save or discard it
+  first"). Never in a blind session (the `--cockpit` guard as for the map tools).
+- **The cockpit opens the proposal.** When a proposal exists and there is no features file,
+  **Write your features file** opens the proposal as the draft instead of the starter (the dialog
+  says so: "The chat's proposal, 4 scenarios in 3 features, opens in nano: read it, change what
+  you like, save"); when a file exists, the Features heading's menu gains **Edit from the chat's
+  proposal…**, which opens the proposal as the draft against the current file's digest (saving
+  replaces the file, as any edit). After a save the proposal file is removed (its text lives in
+  the file now); the same for workloads with **Write / Edit your workloads file**. The Next step
+  on a Features row with a proposal and no file: `Next: Read the chat's proposal — Enter, then
+  Write your features file`. Everything after the editor returns is §7.2's flow unchanged
+  (validation, the armed Save dialog, `harness features save --expect`).
+- **For the learner.** The chat's reply names each scenario in a sentence; the proposal's
+  comments repeat them in the file the person is about to edit; the Features view, once saved,
+  shows each scenario's row as today. A learner's first features file is thus three good
+  examples with their reasons, in their own editor, that they can change and save.
+- **The command line** gets nothing new: a person on the CLI writes the file or runs `harness
+  features map`; proposals are the chat's.
+
+**Tests.** The two tools: listed in cockpit mode (COCKPIT_TOOLS gains both — the person rebuilds
+harness-mcp beside the cockpit, as the out-of-date dialog says), refused when blind, on a
+symlink, on a draft kept, on invalid text (the loader's message), accepted and written with the
+header comment; the two items' greying, recommendation and typed question; Write opening the
+proposal as the draft with the dialog's words; the proposal removed after a save; the Next step
+with a proposal; the brief's syntax sections present. Docs: the cockpit and features topics, the
+models topic (the chat can propose features and workloads), SCHEMAS (the two proposal files),
+CHAT-PANE-DESIGN's brief summary, the guide where Part 8/9 quote the Features menu.
+
 ## 10. The chat pane
 
 Built 2026-09-28 in its own design: docs/CHAT-PANE-DESIGN.md, which governs the chat's place on
