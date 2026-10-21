@@ -1,6 +1,6 @@
 ┌ Files ───────────────────────────────┐┌ Chat — waiting for you · haiku-4-5 ───────────────────[New]─[?]─ View ─ Chat ┐
 │▾ harness-tui-cha…dens-0000000000 ✓1/1││› Please migrate u-lib.                                                       │
-│  ▾ Units (1)                         ││                                                                              │
+│  ▾ Pieces (1)                        ││                                                                              │
 │    ▸ ✓ u-lib                     done││I will ask to migrate u-lib.                                                  │
 │    Features (none yet)               ││                                                                              │
 │    Speed — not set up                ││  · read the project's status — done                                          │

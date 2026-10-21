@@ -8,9 +8,9 @@
   @1-22 fg - BOLD | REVERSED "▾ harness…0000000 ✓1/4"
   @23-23 fg LightBlue BOLD "│"
   @38-53 fg - BOLD "Test program 1/4"
-│  ▾ Units (11)        ││Next: 1 of the 4 that can move is in Rust — open      │
+│  ▾ Pieces (11)       ││Next: 1 of the 4 that can move is in Rust — open      │
   @0-0 fg LightBlue BOLD "│"
-  @5-14 fg LightBlue BOLD "Units (11)"
+  @5-15 fg LightBlue BOLD "Pieces (11)"
   @23-23 fg LightBlue BOLD "│"
   @25-29 fg Cyan BOLD "Next:"
   @30-72 fg - BOLD "1 of the 4 that can move is in Rust — open"
@@ -25,11 +25,11 @@
 │    ▸ ◇ u-hash no test││26 files scanned                                      │
   @0-0 fg LightBlue BOLD "│"
   @23-23 fg LightBlue BOLD "│"
-│    ▸ · u-lz77 stays C││Units (11): 1 ✓ done · 3 ◇ no test program · 7 · stays│
+│    ▸ · u-lz77 stays C││Pieces (11): 1 ✓ done · 3 ◇ no test program · 7 ·     │
   @0-0 fg LightBlue BOLD "│"
   @23-23 fg LightBlue BOLD "│"
-  @25-35 fg - BOLD "Units (11):"
-│    ▸ · u-tree stays C││C                                                     │
+  @25-36 fg - BOLD "Pieces (11):"
+│    ▸ · u-tree stays C││stays C                                               │
   @0-0 fg LightBlue BOLD "│"
   @23-23 fg LightBlue BOLD "│"
 │    ▸ · u-b…ze stays C││                                                      │

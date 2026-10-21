@@ -1142,7 +1142,7 @@ mod tests {
             .units
             .iter()
             .position(|u| u.unit.files.len() == 3)
-            .expect("a 3-file unit");
+            .expect("a 3-file piece");
         for f in &snap.units[three].unit.files {
             assert_eq!(files.file(f).unwrap().state, FileState::Owned(three), "{f}");
         }

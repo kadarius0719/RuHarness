@@ -2638,7 +2638,7 @@ harness-tui --target targets/lzg
 
 **You should see** a full-screen view:
 
-- the **Files** pane on the left, with the project row `lzg`, then `Units (5)` with its five units under it, then `Features (none yet)`, `Speed — not set up`, and last the folder `src/`, folded (`▸`), its marks summed up at its right edge;
+- the **Files** pane on the left, with the project row `lzg`, then `Pieces (5)` with its five units under it, then `Features (none yet)`, `Speed — not set up`, and last the folder `src/`, folded (`▸`), its marks summed up at its right edge;
 - the **View** on the right, starting with a line that says where you are among the eight steps a program goes through: on a wide window `Map ✓ · Configure ✓ · Accept program ✓ · Scan ✓ · Plan ✓ · Test program 1/2 · Rust 0/2 ○ · Accept Rust 0/2` (two of the five pieces can move to Rust; one has its test program, from Part 3; the `○` sits on the step the Next line names), on a narrower one `Step 7 of 8: Rust 0/2`; then a line `Next: 2 of the 5 can move to Rust now — Migrate u-checksum: Enter`, then a summary such as `7 files scanned`, `Units (5): 1 ◈ test program ready · 3 · stays C · 1 ◇ no test program` and `Features: none yet — see Features`; its title says in words how many of the C files are in Rust (`0 of … C files in Rust`);
 - the line `Ready — ↑↓ to choose a row, Enter for what you can do` under the panes; once you move, that line says what the selected row is, in one sentence (press `i` for a card that says more, `Esc` to close it);
 - a key bar at the bottom, like `↑↓ move   ←→ fold/open   Enter actions   Tab pane   …   q quit`.
@@ -2662,7 +2662,7 @@ The cockpit acts on whatever is selected, so you select the unit first.
 
 **Do** these, one press at a time, and check the screen after each:
 
-1. Press `↓` once. **You should see** the highlight on `Units (5)`, the second row.
+1. Press `↓` once. **You should see** the highlight on `Pieces (5)`, the second row.
 2. If that row shows `▸`, press `→`. **You should see** `▾` in place of `▸`, and the five units listed under it, `u-checksum` first. (If it already showed `▾`, skip this press.)
 3. Press `↓` once. **You should see** the highlight on `u-checksum`, and the View change to the unit, as below.
 
@@ -2672,12 +2672,12 @@ The cockpit acts on whatever is selected, so you select the unit first.
 - `◈ u-checksum test program ready`;
 - `Next: No Rust yet — ask the chat to migrate it (a model writes the Rust, the judge checks it, you accept it)`;
 - `1 exported function: _LZG_CalcChecksum (… lines)` and `Its C: 1 file — …checksum.c`;
-- `No Rust yet` and `Attempts: none yet`;
+- `No Rust yet` and `Tries: none yet`;
 - last, `▸ C source (Tab to the View, then Enter)`: the code, folded.
 
 **What it means.** The unit has its test program (Part 3) and no Rust yet. You only moved the selection. To read its C, press `Tab` (the View now has the keys, and the heading reads `▸ C source (Enter to open)`), then `Enter`; the C shows alone, since there is no Rust beside it yet. `Tab` until Files is highlighted again brings you back.
 
-**If you do not see that.** No `Units (5)` row: press `g` to make the cockpit read the project again.
+**If you do not see that.** No `Pieces (5)` row: press `g` to make the cockpit read the project again.
 
 ---
 
@@ -2774,7 +2774,7 @@ If the bottom of the dialog asks you to scroll, press `↓` until it says `ready
 - `Paused: the chat answers turn 1`
 - `Checked: same outputs as C — passed`, and similar lines
 - `Verdict: GREEN — all 8 checks passed`
-- `Recorded attempt a-<12hex>: green`
+- `Recorded try a-<12hex>: green`
 
 The one line that matters is the last. **The run is over when the line under the panes reads:**
 
@@ -2803,7 +2803,7 @@ Accepting is your decision, so look first.
 **Do** these, one press at a time, and check the screen after each:
 
 1. Press `Tab` to leave the chat. **You should see** the focus go to the Files list on the left.
-2. Press `↑` or `↓` until `u-checksum`, under `Units (5)`, is highlighted. **You should see** the highlight on `u-checksum`.
+2. Press `↑` or `↓` until `u-checksum`, under `Pieces (5)`, is highlighted. **You should see** the highlight on `u-checksum`.
 3. Press `→` to open it. **You should see** new rows under `u-checksum`: its `crate` row and, below it, an attempt row `a-<4hex>` marked `✓`.
 4. Press `↓` until the attempt row is highlighted. **You should see** the View change to the attempt, as below.
 
@@ -3882,7 +3882,7 @@ harness-tui --target targets/lzg
 
 Press one key at a time, and check the screen after each:
 
-1. In Files, press `↓` until `u-version`, under `Units (5)`, is highlighted (if `Units (5)` shows `▸`, press `→` on it first, as in Step 4.3). **You should see** the highlight on `u-version`, and the View change to that unit.
+1. In Files, press `↓` until `u-version`, under `Pieces (5)`, is highlighted (if `Pieces (5)` shows `▸`, press `→` on it first, as in Step 4.3). **You should see** the highlight on `u-version`, and the View change to that unit.
 2. Press `Enter`. **You should see** the menu of Step 4.4, now for `u-version`.
 3. **Migrate — ask in chat** is first and highlighted, as in Step 4.4: press `Enter`. **You should see** the chat pane in focus, with `Migrate u-version` typed into its input line.
 4. Press `Enter` to send it. **You should see** the chat start, as in Step 4.5, and then the line below.
@@ -4608,7 +4608,7 @@ git status --short
 
 | Word | Plain meaning |
 |---|---|
-| **Files** | The list on the left of the cockpit: the project, the groups `Units`, `Features` and `Speed`, then the project's folders and files (the folder folded until you open it). The highlighted row is the one you have **selected**. |
+| **Files** | The list on the left of the cockpit: the project, the groups `Pieces`, `Features` and `Speed`, then the project's folders and files (the folder folded until you open it). The highlighted row is the one you have **selected**. |
 | **View** | The large area on the right. It shows details of the selected row. |
 | `✓` | Migrated: this piece is Rust now. On a folder, `✓2/5` means 2 of its 5 C files are Rust; the View's title says it in words. |
 | `◇` | Planned: the unit is still C. |
@@ -4643,7 +4643,7 @@ harness-tui --target targets/lzg
 1. Press `?`. **You should see** the help's first page: six keys (`↑ ↓`, `Enter`, `Tab`, `Esc`, `?`, `q`), the three marks you meet first (`◇` no Rust yet, `✓` done, `⚠` needs attention), and `↓ more: every key, the mouse, every mark, features, speed, the chat` at its foot.
 2. Press `↓`. **You should see** the rest: every key and every symbol the cockpit uses (`◉`, `◌` and more), each with its meaning. Whenever a symbol in this part is unclear, `?` then `↓` explains it.
 3. Press any other key (`Esc`, say). **You should see** the help close.
-4. Press `↑` until the first row, `lzg`, is highlighted (it usually is already). **You should see** at the right edge of that row a summary like `✓2/5`, and the View's title saying it in words: `lzg · 2 of 5 C files in Rust`. The View starts with the step line, then a `Next:` line, then a summary: the files scanned, the units by state, and a line beginning `Features: 3 — …`.
+4. Press `↑` until the first row, `lzg`, is highlighted (it usually is already). **You should see** at the right edge of that row a summary like `✓2/2`, and the View's title saying it in words: `lzg · all 2 that can move are in Rust`. The View starts with the step line, then a `Next:` line, then a summary: the files scanned, the units by state, and a line beginning `Features: 3 — …`.
 
 **What it means.** The other 3 units stay in C in this version of RuHarness (Part 7 explains why).
 
@@ -4679,7 +4679,7 @@ harness-tui --target targets/lzg
 **Do** these, one press at a time, and check the screen after each:
 
 1. Press `←` until `lzg` is highlighted again. **You should see** the highlight move up the list until it rests on `lzg`.
-2. Press `↓` once. **You should see** the highlight on `Units (5)`, the second row.
+2. Press `↓` once. **You should see** the highlight on `Pieces (5)`, the second row.
 3. If that row shows `▸`, press `→` (if it shows `▾`, skip this press). **You should see** the five units listed under it: `u-checksum`, `u-decode`, `u-encode`, `u-version`, `u-lzg`. These are the five pieces Part 2 planned.
 4. Press `↓` to highlight `u-checksum`. **You should see** the View below.
 
@@ -4690,13 +4690,13 @@ harness-tui --target targets/lzg
 - `1 exported function: _LZG_CalcChecksum (… lines)` and `Its C: 1 file — …checksum.c`;
 - a line about its Rust that ends `the judge says green, up to date`;
 - a cyan line saying how many of your features run this unit (the colour depends on your Terminal's theme);
-- `Attempts: …`, how many and how they came out;
-- a row of checks similar to `✓ same exports ✓ allowed calls only ✓ driver shape ✓ same outputs as C ✓ whole program ×3 ✓ sanitizers ✓ scenarios ×3 (1 run this unit)`;
+- `Tries: …`, how many and how they came out;
+- a row of checks similar to `✓ same exports ✓ allowed calls only ✓ driver shape ✓ same outputs as C ✓ whole program ×3 ✓ sanitizers ✓ scenarios ×3 (1 run this piece)`;
 - last, `▸ C source (Tab to the View, then Enter)`: the code, folded. `Tab`, then `Enter` would open it (the C beside its Rust, as in Step 9.3); you do not need it here.
 
 **What it means.** This is the same verdict `harness verify` printed in Part 5, in short form.
 
-**If you do not see that.** `green, but … — re-check` means something changed since the last verify: Step 9.6's re-check refreshes it. If you cannot find `Units (5)`, press `↑` until `lzg` is highlighted: `Units (5)` is the row under it.
+**If you do not see that.** `green, but … — re-check` means something changed since the last verify: Step 9.6's re-check refreshes it. If you cannot find `Pieces (5)`, press `↑` until `lzg` is highlighted: `Pieces (5)` is the row under it.
 
 ### Step 9.5 — Show the checks, then close them
 
@@ -4764,16 +4764,16 @@ Ready. Last: Re-check u-checksum — GREEN — all 11 checks passed (<time>)
 
 **Do** these, one press at a time, and check the screen after each:
 
-1. Press `←` until `Units (5)` is highlighted. **You should see** the highlight on `Units (5)`.
-2. Press `←` once more. **You should see** the units fold away under `Units (5)`.
+1. Press `←` until `Pieces (5)` is highlighted. **You should see** the highlight on `Pieces (5)`.
+2. Press `←` once more. **You should see** the units fold away under `Pieces (5)`.
 3. Press `↓` until `Features (3)` is highlighted; if it shows `▸`, press `→`. **You should see** the three features under it: `compress`, `version` and `no-file`.
 4. Press `↓` to select each feature in turn. **You should see** the View for each, as below.
 
 **You should see:**
 
-- `compress`: it runs code in 3 units (checksum, encode and lzg), and 1 of them is Rust. It shows a mark like `◉ holds so far · 1 of 3 units`, and under it the mark in words: `◉ runs Rust now: 1 of its 3 units is in Rust, and each passed this feature's checks`.
+- `compress`: it runs code in 3 units (checksum, encode and lzg), and 1 of them is Rust. It shows a mark like `◉ holds so far · 1 of 3 pieces`, and under it the mark in words: `◉ runs Rust now: 1 of its 3 units is in Rust, and each passed this feature's checks`.
 - `version`: the same, with `u-version` as its Rust unit.
-- `no-file`: it reaches only C, shown as `◌ still all C`, and in words `◌ still all C: none of the units it runs is in Rust yet`.
+- `no-file`: it reaches only C, shown as `◌ still all C`, and in words `◌ still all C: none of the pieces it runs is in Rust yet`.
 
 **What it means.** This is Part 8's feature map, shown per feature.
 
@@ -5339,7 +5339,7 @@ harness-tui --target targets/lzg
 2. Press `Tab`. **You should see** the focus move into the View.
 3. Press `↓` onto a row. **You should see** that row's full sentence below the list.
 4. Press `Esc`. **You should see** the focus back on the Files list, on the Speed row.
-5. Press `↑` until `u-checksum` under `Units (5)` is highlighted (open `Units (5)` with `→` if it is closed, as in Step 9.4). **You should see** below its verdict lines `Speed: <answer> on <workload>`, and on the next line its range (when the answer has one), `parallel` when the program uses several **cores** (the processor's workers that can run at the same time), and how many of the workloads say the same. If a row is slower, a `Next:` line says what you could do about it.
+5. Press `↑` until `u-checksum` under `Pieces (5)` is highlighted (open `Pieces (5)` with `→` if it is closed, as in Step 9.4). **You should see** below its verdict lines `Speed: <answer> on <workload>`, and on the next line its range (when the answer has one), `parallel` when the program uses several **cores** (the processor's workers that can run at the same time), and how many of the workloads say the same. If a row is slower, a `Next:` line says what you could do about it.
 6. Press `↓` until the Speed row is highlighted again, then press `Enter`. **You should see** three actions: **Edit the workloads file**, **Measure speed** and **Measure the program as it stands**; under the line `Uses a model — can take minutes`, **Propose a workload — ask in chat** (it types a question into the chat, which writes a proposal you open, change and save; greyed with its reason while the chat is off).
 7. Press `Esc`. **You should see** the menu close without running anything.
 8. Press `?`, then `↓` until you reach **Speed**. **You should see** the speed words and what they mean. Press any key to close the help.
@@ -6752,10 +6752,10 @@ with the card saying `not scanned and planned yet` under `Its build configuratio
 
 ```text
 Map ✓ · Configure ✓ · Accept program ✓ · Scan ✓ · Plan ✓ · Test program 0/2 ○ · Rust 0/2 · Accept Rust 0/2
-Next: 2 of the 4 can move to Rust now — open u-checksum: Enter
+Next: none of the 2 that can move is in Rust yet — open u-checksum: Enter
 ```
 
-and under `Units (4)`: `◇ u-checksum no test program`, `· u-encode stays C`, `◇ u-version no test program`, `· u-lzg stays C`.
+and under `Pieces (4)`: `◇ u-checksum no test program`, `· u-encode stays C`, `◇ u-version no test program`, `· u-lzg stays C`.
 
 **What it means.** The tool is cut into four pieces; two can move to Rust (the counts are of those two), and the two that call other pieces stay C, as Part 7 explained. The `○` sits on the step the `Next:` line names.
 

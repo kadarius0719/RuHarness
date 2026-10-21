@@ -1,12 +1,12 @@
 ┌ Files ───────────────────────────────┐┌ u-lib · done ────────────────────────────────────────────────────────────────┐
 │▾ harness-tui-gdialog-0000000000  ✓1/1││All 8 steps done ✓                                                            │
-│  ▾ Units (1)                         ││✓ u-lib done                                                                  │
+│  ▾ Pieces (1)                        ││✓ u-lib done                                                                  │
 │    ▸ ✓ u-lib                     done││Next: In Rust and checked — nothing to do                                     │
 │    Features (none yet)               ││                                                                              │
 │    Speed — not set up                ││1 exported function: read_scalefactors (44 lines)                             │
 │  ▸ test_case/                    ✓1/1││Its C: 1 file — test_case/src/lib.c                                           │
 │                                      ││Its Rust: from try a-13c9 · the judge says green, up to date                  │
-│                                      ││Attempts: 3 — 2 green, 1 red (listed under its row in the tree)               │
+│                                      ││Tries: 3 — 2 green, 1 red (listed under its row in the tree)                  │
 │                                      ││Checks  – whole program not run  ✓ same exports  ✓ allowed calls only         │
 │                     ┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐  ✓ boundary calls   │
 │                     │Builds u-lib's Rust and runs it against the C in the sandbox.             │                     │

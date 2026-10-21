@@ -200,6 +200,7 @@ pub(crate) fn moved_words(done: usize, movable: usize) -> String {
         (1, 1) => "its one piece that can move is in Rust".into(),
         (1, _) => "its one piece that can move is not in Rust yet".into(),
         (m, 0) => format!("none of the {m} that can move is in Rust yet"),
+        (m, d) if d >= m => format!("all {m} that can move are in Rust"),
         (m, d) => format!(
             "{d} of the {m} that can move {} in Rust",
             if d == 1 { "is" } else { "are" }
@@ -628,7 +629,7 @@ fn units(app: &App) -> Explained {
     }
     card.push("Each piece goes: a test program, then its Rust, then your Accept.".into());
     Explained {
-        title: format!("Units ({n})"),
+        title: format!("Pieces ({n})"),
         hint,
         shorter: Vec::new(),
         card,

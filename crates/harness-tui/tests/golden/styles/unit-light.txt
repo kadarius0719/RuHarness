@@ -10,10 +10,10 @@
   @25-25 fg 244 NONE "│"
   @39-50 fg - BOLD "Test program"
   @79-79 fg 244 NONE "│"
-│  ▾ Units (11)        │ │◇ u-cache no test program                            │
+│  ▾ Pieces (11)       │ │◇ u-cache no test program                            │
   @0-0 fg 25 BOLD "│"
   @1-4 fg 238 NONE "▾"
-  @5-14 fg 25 BOLD "Units (11)"
+  @5-15 fg 25 BOLD "Pieces (11)"
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
   @26-27 fg 240 NONE "◇"
@@ -104,14 +104,14 @@
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ · u-z…in stays C│ │Attempts: none yet                                   │
+│    ▸ · u-z…in stays C│ │Tries: none yet                                      │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 238 NONE "▸"
   @7-8 fg 240 NONE "·"
   @16-22 fg 240 NONE "stays C"
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
-  @26-34 fg - BOLD "Attempts:"
+  @26-31 fg - BOLD "Tries:"
   @79-79 fg 244 NONE "│"
 │  ▾ Features (7)      │ │                                                     │
   @0-0 fg 25 BOLD "│"

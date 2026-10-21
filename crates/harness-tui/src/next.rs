@@ -99,7 +99,7 @@ impl App {
                         Some(Action::Act(Act::Scan)),
                     )),
                     Some(FileState::NotInPlan) => Some(advice(
-                        "this file is in no unit yet — Refresh the plan",
+                        "this file is in no piece yet — Refresh the plan",
                         Some(Action::Act(Act::Plan)),
                     )),
                     Some(FileState::Owned(_)) => {
@@ -158,7 +158,7 @@ impl App {
                 }) {
                     advice(
                         format!(
-                            "attempt {} waits for an answer to its hand-off — open it, then \
+                            "try {} waits for an answer to its hand-off — open it, then \
                              Resume",
                             aw.attempt
                                 .as_deref()
@@ -172,8 +172,8 @@ impl App {
                     // never recommended, the Migrate item stays listed.
                     advice(
                         format!(
-                            "it calls other units ({}), so in this version it stays C — the judge \
-                             tests each unit alone",
+                            "it calls other pieces ({}), so in this version it stays C — the judge \
+                             tests each piece alone",
                             unit.unit.depends_on.join(", ")
                         ),
                         None,
@@ -242,7 +242,7 @@ impl App {
                     && !matches!(self.speed.group, crate::speed::Group::NoFile)
                 {
                     advice(
-                        "in Rust and checked — Measure this unit's speed to compare it with the C",
+                        "in Rust and checked — Measure this piece's speed to compare it with the C",
                         Some(Action::Act(Act::Measure)),
                     )
                 } else {
@@ -365,7 +365,7 @@ impl App {
         }
         if r.promoted {
             return Some(advice(
-                "this is the Rust the unit uses — nothing to do",
+                "this is the Rust the piece uses — nothing to do",
                 None,
             ));
         }
@@ -423,7 +423,7 @@ impl App {
                     featmap::MapStatus::OutOfDate(_) => {
                         "the map is out of date — Map the features again"
                     }
-                    _ => "not mapped yet — Map the features, so each says which units it runs",
+                    _ => "not mapped yet — Map the features, so each says which pieces it runs",
                 },
                 Some(Action::Act(Act::MapFeatures)),
             ),
@@ -433,7 +433,7 @@ impl App {
                     None,
                 ),
                 None => advice(
-                    "nothing to do — choose a feature to see which units it runs",
+                    "nothing to do — choose a feature to see which pieces it runs",
                     None,
                 ),
             },
@@ -445,7 +445,7 @@ impl App {
         use featmap::FeatureState as S;
         let f = self.features.feature(id)?;
         Some(match &f.state {
-            S::Failing => advice("open the failing unit below and Show its checks", None),
+            S::Failing => advice("open the failing piece below and Show its checks", None),
             S::ScenarioCannotRun => advice(
                 "change or remove the scenario that cannot run (Edit the features file)",
                 Some(Action::EditFeatures),
@@ -468,18 +468,18 @@ impl App {
             ),
             S::MapIncomplete => advice("see the scenario flagged below", None),
             S::ReachesNoUnit => advice(
-                "nothing to do — or add a scenario that reaches a unit",
+                "nothing to do — or add a scenario that reaches a piece",
                 None,
             ),
             S::AllMigrated | S::HoldsSoFar { .. } => advice(
-                "nothing to do — it keeps being checked as more units move to Rust",
+                "nothing to do — it keeps being checked as more pieces move to Rust",
                 None,
             ),
             S::AllC => advice(
-                "migrate one of its units below; every Re-check then checks this feature",
+                "migrate one of its pieces below; every Re-check then checks this feature",
                 None,
             ),
-            S::SeeUnits => advice("see its units below", None),
+            S::SeeUnits => advice("see its pieces below", None),
         })
     }
 
@@ -509,7 +509,7 @@ impl App {
                 Some(Action::Act(Act::Measure)),
             ),
             Group::COnly => advice(
-                "only the C is measured: a unit is measured once its Rust is verified",
+                "only the C is measured: a piece is measured once its Rust is verified",
                 None,
             ),
             Group::Units { .. } => {
@@ -531,7 +531,7 @@ impl App {
                 }) {
                     advice(
                         format!(
-                            "{}'s Rust is slower than the C — open it under Units to see how to \
+                            "{}'s Rust is slower than the C — open it under Pieces to see how to \
                              change it, if speed matters there",
                             u.id
                         ),

@@ -8,9 +8,9 @@
   @3-17 fg - BOLD "harness…0000000"
   @23-23 fg LightBlue BOLD "│"
   @38-49 fg - BOLD "Test program"
-│  ▾ Units (11)        ││◇ u-cache no test program                             │
+│  ▾ Pieces (11)       ││◇ u-cache no test program                             │
   @0-0 fg LightBlue BOLD "│"
-  @5-14 fg LightBlue BOLD "Units (11)"
+  @5-15 fg LightBlue BOLD "Pieces (11)"
   @23-23 fg LightBlue BOLD "│"
   @27-34 fg - BOLD "u-cache"
 │    ▸ ✓ u001…inen done││Next: Make the test program — run harness gen-driver  │
@@ -48,10 +48,10 @@
 │    ▸ · u-z…ib stays C││5 of your features run it · still C — see Features    │
   @0-0 fg LightBlue BOLD "│"
   @23-23 fg LightBlue BOLD "│"
-│    ▸ · u-z…in stays C││Attempts: none yet                                    │
+│    ▸ · u-z…in stays C││Tries: none yet                                       │
   @0-0 fg LightBlue BOLD "│"
   @23-23 fg LightBlue BOLD "│"
-  @25-33 fg - BOLD "Attempts:"
+  @25-30 fg - BOLD "Tries:"
 │  ▾ Features (7)      ││                                                      │
   @0-0 fg LightBlue BOLD "│"
   @5-16 fg LightBlue BOLD "Features (7)"

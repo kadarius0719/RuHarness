@@ -1,7 +1,7 @@
 ┌ Files ───────────────┐┌ Speed (1 of 1) ──────────────────────────────────────┐
 │▾ harness…0000000 ✓1/4││Step 6 of 8: Test program 1/4                         │
-│  ▾ Units (11)        ││Next: u001-katajainen's Rust is slower than the C —   │
-│    ▸ ✓ u001…inen done││open it under Units to see how to change it, if speed │
+│  ▾ Pieces (11)       ││Next: u001-katajainen's Rust is slower than the C —   │
+│    ▸ ✓ u001…inen done││open it under Pieces to see how to change it, if speed│
 │    ▸ ◇ u-c…he no test││matters there                                         │
 │    ▸ ◇ u-hash no test││                                                      │
 │    ▸ · u-lz77 stays C││Speed — your workloads, the C against the Rust in use │
@@ -15,7 +15,7 @@
 │  ▾ Features (7)      ││  compress-a-big-text-file  CPU 12.4 s · 124 MB       │
 │      ◉ Compres…o gzip││    last try: the C ends or prints differently from   │
 │      ◉ Compres…o zlib││    one run to the next                               │
-│      ◉ Compres…eflate││As it stands (1 of 2 units — 1 left out)              │
+│      ◉ Compres…eflate││As it stands (1 of 2 pieces — 1 left out)             │
 │      ◉ Say wha…t does││  big-text                  slower 6.2 % (5.6–6.8 %)  │
 │      ◉ Compres…uickly││  many-small                too short to time         │
 │      ◌ Show the help ││u001-katajainen                                       │

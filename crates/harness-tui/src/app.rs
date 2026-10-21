@@ -1042,18 +1042,18 @@ pub fn retry_refusal(r: &AttemptRecord, providers: &[String]) -> Option<String> 
         return Some("a hand edit has no run to retry".into());
     }
     if r.outcome == "in-progress" {
-        return Some(format!("attempt {} is not finished", r.id));
+        return Some(format!("try {} is not finished", r.id));
     }
     if r.seeded_from.is_some() != r.steer_note.is_some() {
         return Some(format!(
-            "attempt {} records only half of a steer (its seed or its note): inconsistent, \
+            "try {} records only half of a steer (its seed or its note): inconsistent, \
              not retried",
             r.id
         ));
     }
     if blind(r) {
         return Some(format!(
-            "attempt {} is a blind `external` hand-off: only the audited protocol \
+            "try {} is a blind `external` hand-off: only the audited protocol \
              (targets/tractor/handoff-tools) retries it",
             r.id
         ));
@@ -1066,13 +1066,13 @@ pub fn retry_refusal(r: &AttemptRecord, providers: &[String]) -> Option<String> 
         // harness-mcp retries only a steer attempt: an unseeded one is
         // steered from instead (§R5 S-NEW-3).
         return Some(format!(
-            "attempt {} was asked for in chat and the chat answers its turns — ask the chat \
+            "try {} was asked for in chat and the chat answers its turns — ask the chat \
              {}",
             r.id,
             if r.seeded_from.is_some() {
                 "to retry it"
             } else {
-                "for a steer attempt from it"
+                "for a steered try from it"
             }
         ));
     }
@@ -1477,14 +1477,14 @@ impl App {
                 "plan: no changes".into()
             } else if self.in_git() {
                 format!(
-                    "plan changed {n} unit{} — review `git diff {}/plan.toml` (c for the lines)",
+                    "plan changed {n} piece{} — review `git diff {}/plan.toml` (c for the lines)",
                     if n == 1 { "" } else { "s" },
                     self.snapshot.ledger_rel()
                 )
             } else {
                 // No git here: its diff is no way to look (fix pass, item 6).
                 format!(
-                    "plan changed {n} unit{} — review the plan's changes with c",
+                    "plan changed {n} piece{} — review the plan's changes with c",
                     if n == 1 { "" } else { "s" }
                 )
             });
@@ -1761,7 +1761,7 @@ impl App {
                             run,
                             Tone::Warn,
                             format!(
-                                "resumed run is on attempt {attempt}, not the awaited \
+                                "resumed run is on try {attempt}, not the awaited \
                                  {expected} — shown, not chased"
                             ),
                         );
@@ -1840,7 +1840,7 @@ impl App {
                     } else {
                         Tone::Bad
                     },
-                    format!("attempt {id} {outcome} ({promotion})"),
+                    format!("try {id} {outcome} ({promotion})"),
                 )
             }
             Event::Promote {
@@ -2303,17 +2303,17 @@ impl App {
             }
         }
         let find_unit = || -> Result<&UnitView, String> {
-            let id = unit.ok_or("no unit")?;
+            let id = unit.ok_or("no piece")?;
             self.snapshot
                 .unit(id)
-                .ok_or_else(|| format!("unit {id} is gone"))
+                .ok_or_else(|| format!("piece {id} is gone"))
         };
         let find_attempt = || -> Result<(&UnitView, &AttemptView), String> {
             let u = find_unit()?;
-            let id = attempt.ok_or("select an attempt first")?;
+            let id = attempt.ok_or("select a try first")?;
             u.attempt(id)
                 .map(|a| (u, a))
-                .ok_or_else(|| format!("attempt {id} is gone"))
+                .ok_or_else(|| format!("try {id} is gone"))
         };
         let pending = |argv, label: String, unit: Option<&str>, attempt: Option<&str>| Pending {
             stdin: None,
@@ -2380,13 +2380,13 @@ impl App {
                 let r = &a.record;
                 if r.outcome != "green" || a.last_result() != "green" {
                     return Err(format!(
-                        "attempt {} is {} — only a green attempt can be accepted",
+                        "try {} is {} — only a green try can be accepted",
                         r.id, r.outcome
                     ));
                 }
                 if !a.bound {
                     return Err(format!(
-                        "attempt {} is bound to superseded inputs — re-run migrate",
+                        "try {} is bound to superseded inputs — re-run migrate",
                         r.id
                     ));
                 }
@@ -2407,19 +2407,16 @@ impl App {
                 let (u, a) = find_attempt()?;
                 let r = &a.record;
                 if r.outcome == "in-progress" {
-                    return Err(format!("attempt {} is not finished", r.id));
+                    return Err(format!("try {} is not finished", r.id));
                 }
                 if !a.bound {
                     return Err(format!(
-                        "attempt {} is bound to superseded inputs — it cannot seed",
+                        "try {} is bound to superseded inputs — it cannot seed",
                         r.id
                     ));
                 }
                 if a.candidate.is_none() || a.verdict.is_none() {
-                    return Err(format!(
-                        "attempt {} has no candidate and verdict to revise",
-                        r.id
-                    ));
+                    return Err(format!("try {} has no Rust and check to revise", r.id));
                 }
                 let note = note.ok_or("no note")?;
                 let provider = self
@@ -2468,20 +2465,20 @@ impl App {
                 ))
             }
             Act::Resume => {
-                let id = attempt.ok_or("select the paused attempt first")?;
+                let id = attempt.ok_or("select the paused try first")?;
                 let aw = self
                     .awaiting
                     .iter()
                     .find(|aw| aw.attempt.as_deref() == Some(id))
                     .ok_or_else(|| {
-                        format!("attempt {id} is not waiting on a hand-off this cockpit posed")
+                        format!("try {id} is not waiting on a hand-off this cockpit posed")
                     })?;
                 let in_progress = self.snapshot.units.iter().any(|u| {
                     u.attempt(id)
                         .is_some_and(|a| a.record.outcome == "in-progress")
                 });
                 if !in_progress {
-                    return Err(format!("attempt {id} is no longer in progress"));
+                    return Err(format!("try {id} is no longer in progress"));
                 }
                 if !response_present(&aw.path) {
                     return Err(format!(
@@ -2570,7 +2567,7 @@ impl App {
             return Err("a command is running".into());
         }
         self.harness_argv(&[])?;
-        let unit = self.unit_view().ok_or("no unit")?;
+        let unit = self.unit_view().ok_or("no piece")?;
         let dir = self
             .shown_crate()
             .ok_or("nothing to edit: the crate does not exist")?;
@@ -2634,19 +2631,19 @@ impl App {
     }
 
     fn diff(&self) -> Result<Mode, String> {
-        let unit = self.unit_view().ok_or("no unit")?;
-        let shown = self.shown_attempt().ok_or("select an attempt to compare")?;
+        let unit = self.unit_view().ok_or("no piece")?;
+        let shown = self.shown_attempt().ok_or("select a try to compare")?;
         let base_id = unit
             .provenance
             .attempt()
-            .ok_or("the crate's provenance names no single attempt to compare with")?;
+            .ok_or("the crate's provenance names no single try to compare with")?;
         let base = unit
             .attempt(base_id)
             .and_then(AttemptView::crate_dir)
-            .ok_or_else(|| format!("attempt {base_id} has no crate"))?;
+            .ok_or_else(|| format!("try {base_id} has no crate"))?;
         let this = shown
             .crate_dir()
-            .ok_or_else(|| format!("attempt {} has no crate", shown.record.id))?;
+            .ok_or_else(|| format!("try {} has no crate", shown.record.id))?;
         let mut lines = diff_crates((base, base_id), (this, &shown.record.id));
         if lines.is_empty() {
             lines.push("the Rust sources are identical".into());
@@ -2677,7 +2674,7 @@ impl App {
             format!(
                 "The chat writes a small C program that calls {calls} with chosen inputs and \
                  prints what comes back. The judge runs it against the C to check it works, then \
-                 keeps it as the unit's test program."
+                 keeps it as the piece's test program."
             ),
             format!(
                 "It writes: the driver under {}/units/{unit}/ and the plan's entry for it.",
@@ -2715,7 +2712,7 @@ impl App {
 
     /// The dialog's lines of an act, from its card's (`full`).
     fn short_words(&self, p: &Pending, full: &[String]) -> Vec<String> {
-        let unit = p.unit.as_deref().unwrap_or("the unit");
+        let unit = p.unit.as_deref().unwrap_or("the piece");
         let attempt = p.attempt.clone().unwrap_or_default();
         let ledger = self.snapshot.ledger_rel();
         let arg = |flag: &str| {
@@ -2870,7 +2867,7 @@ impl App {
             .map(|u| u.unit.symbols.clone())
             .unwrap_or_default();
         match symbols.len() {
-            0 => "the unit's functions".to_string(),
+            0 => "the piece's functions".to_string(),
             1..=4 => {
                 let (last, rest) = symbols.split_last().expect("not empty");
                 if rest.is_empty() {
@@ -2887,7 +2884,7 @@ impl App {
     /// the object, and every file it writes and what changes (§5.1), at
     /// length.
     pub fn act_words(&self, p: &Pending) -> (String, Vec<String>) {
-        let unit = p.unit.as_deref().unwrap_or("the unit");
+        let unit = p.unit.as_deref().unwrap_or("the piece");
         // Full ids in the dialog: a short id may name two attempts (SAFE-13).
         let attempt = p.attempt.clone().unwrap_or_default();
         let routing = || self.migrate_model.clone();
@@ -2930,7 +2927,7 @@ impl App {
                         self.snapshot.ledger_rel()
                     ),
                     "Each piece then goes: a test program, its Rust, your Accept.".into(),
-                    "Read the pieces afterwards in the tree, under Units.".into(),
+                    "Read the pieces afterwards in the tree, under Pieces.".into(),
                 ],
             ),
             // The changes are named once: the dialog's line says c (the
@@ -3008,7 +3005,7 @@ impl App {
                     format!(
                         "Writes units/{unit}/oracle-latest.json and .md (and \
                          oracle-last-green.json when green) and {unit}'s status in plan.toml: \
-                         green → verified; red → a verified unit becomes \"in progress\" (a \
+                         green → verified; red → a verified piece becomes \"in progress\" (a \
                          merged one keeps its status)."
                     ),
                     "Changes no code. The crate is unchanged since the cockpit last showed it."
@@ -3061,8 +3058,8 @@ impl App {
                 });
                 let (provider, model) = match p.act {
                     Act::Retry => (
-                        format!("{} (from the attempt record)", provider.unwrap_or_default()),
-                        format!("{} (from the attempt record)", model.unwrap_or_default()),
+                        format!("{} (from the try's record)", provider.unwrap_or_default()),
+                        format!("{} (from the try's record)", model.unwrap_or_default()),
                     ),
                     // The chat's acts name the model that answers.
                     _ if p.chat.is_some() && provider.as_deref() == Some(EXTERNAL_PROVIDER) => (
@@ -3095,9 +3092,7 @@ impl App {
                 };
                 let mut body = vec![
                     format!("A model call: provider {provider}, model {model}."),
-                    format!(
-                        "Records a new attempt of {unit}; never promotes it. Can take minutes."
-                    ),
+                    format!("Records a new try of {unit}; never promotes it. Can take minutes."),
                 ];
                 if p.act == Act::Continue {
                     body[1] = if p
@@ -3113,7 +3108,7 @@ impl App {
                     } else {
                         format!(
                             "Files the chat's answer to the request it read and resumes the \
-                             attempt of {unit}; never promotes it. Can take minutes."
+                             try of {unit}; never promotes it. Can take minutes."
                         )
                     };
                 }
@@ -3126,7 +3121,7 @@ impl App {
                 {
                     body.push(
                         "The hand-off is answered by hand — see Help — or ask the chat to modify \
-                         this attempt instead."
+                         this try instead."
                             .into(),
                     );
                 }
@@ -3165,7 +3160,7 @@ impl App {
             Act::HandEdit => (
                 format!("Record your hand edit of {unit}?"),
                 vec![
-                    "Records a human attempt, checked by the judge; never accepts it.".into(),
+                    "Records your own try, checked by the judge; never accepts it.".into(),
                     "The edit is staged as exactly src/logic.rs + src/ffi.rs. Keep for later \
                      keeps it (E offers it again); Discard removes it."
                         .into(),
@@ -3299,7 +3294,7 @@ impl App {
             // Nothing shown, nothing to re-check (review NEW-2/NEW-8): say
             // so now rather than refuse at confirm with a false reason.
             if pending.shown_digest.is_none() {
-                let unit = pending.unit.as_deref().unwrap_or("the unit");
+                let unit = pending.unit.as_deref().unwrap_or("the piece");
                 self.notice = notice(format!(
                     "{}: open {unit} (or its crate) first — the cockpit re-checks only code it \
                      shows",
@@ -3363,12 +3358,11 @@ impl App {
         let ledger = self.config.ledger();
         let record = |unit: &str, attempt: &str| {
             let dir = harness_core::attempts::attempt_dir(&ledger, unit, attempt);
-            AttemptRecord::load(&dir)
-                .map_err(|e| format!("attempt {attempt} could not be read: {e}"))
+            AttemptRecord::load(&dir).map_err(|e| format!("try {attempt} could not be read: {e}"))
         };
         match p.act {
             Act::Verify => {
-                let id = p.unit.as_deref().ok_or("no unit")?;
+                let id = p.unit.as_deref().ok_or("no piece")?;
                 // The crate `verify` will judge: the one the plan names now.
                 let plan = harness_core::plan::Plan::load(&ledger.plan_path())
                     .map_err(|e| format!("the plan could not be read: {e}"))?;
@@ -3399,7 +3393,7 @@ impl App {
             // Accept replaces the unit crate: never code the harness does
             // not know, checked on the crate as it is now (review SAFE-8).
             Act::Accept => {
-                let id = p.unit.as_deref().ok_or("no unit")?;
+                let id = p.unit.as_deref().ok_or("no piece")?;
                 // The crate promote will replace: the one the plan names now,
                 // as it is on disk now — not the last read's (review N2-2).
                 let plan = harness_core::plan::Plan::load(&ledger.plan_path())
@@ -3428,7 +3422,7 @@ impl App {
             }
             Act::Retry => {
                 let (Some(u), Some(a)) = (p.unit.as_deref(), p.attempt.as_deref()) else {
-                    return Err("no attempt".into());
+                    return Err("no try".into());
                 };
                 match retry_refusal(&record(u, a)?, &self.config.providers) {
                     Some(why) => Err(why),
@@ -3437,17 +3431,17 @@ impl App {
             }
             Act::Resume => {
                 let (Some(u), Some(a)) = (p.unit.as_deref(), p.attempt.as_deref()) else {
-                    return Err("no attempt".into());
+                    return Err("no try".into());
                 };
                 let r = record(u, a)?;
                 if r.outcome != "in-progress" {
-                    return Err(format!("attempt {a} is no longer in progress"));
+                    return Err(format!("try {a} is no longer in progress"));
                 }
                 // Only a steer attempt's hand-off: a blind one is the audited
                 // protocol's (SAFE-12).
                 if r.seeded_from.is_none() || r.steer_note.is_none() {
                     return Err(format!(
-                        "attempt {a} is not a steer attempt: its hand-off is the audited \
+                        "try {a} is not a steered try: its hand-off is the audited \
                          protocol's to answer"
                     ));
                 }
@@ -3455,7 +3449,7 @@ impl App {
                     .awaiting
                     .iter()
                     .find(|aw| aw.attempt.as_deref() == Some(a))
-                    .ok_or_else(|| format!("attempt {a} is not waiting on this cockpit"))?;
+                    .ok_or_else(|| format!("try {a} is not waiting on this cockpit"))?;
                 if !response_present(&aw.path) {
                     return Err(format!("no response yet at {}", aw.path.display()));
                 }
@@ -3493,7 +3487,7 @@ impl App {
             Ok(())
         } else {
             Err(
-                "its Rust differs from every recorded attempt and from what the judge last \
+                "its Rust differs from every recorded try and from what the judge last \
                  checked — restore it, or record it with `harness override` (see Help)"
                     .into(),
             )
@@ -4125,7 +4119,7 @@ impl App {
         if let Some(u) = self.features.recheck.first() {
             return say(
                 format!(
-                    "open {u} (under Units), then Re-check — your features are not checked on it"
+                    "open {u} (under Pieces), then Re-check — your features are not checked on it"
                 ),
                 Some(Action::OpenUnit(u.clone())),
             );
@@ -4143,7 +4137,7 @@ impl App {
         {
             return say(
                 format!(
-                    "{} has a GREEN attempt waiting for you — open it and Accept it",
+                    "{} has a GREEN try waiting for you — open it and Accept it",
                     u.unit.id
                 ),
                 Some(Action::OpenUnit(u.unit.id.clone())),
@@ -5600,7 +5594,7 @@ impl App {
             .map(|f| crate::display::line(&f.name))
             .collect();
         Some(if names.is_empty() {
-            "None of your features runs this unit's functions.".into()
+            "None of your features runs this piece's functions.".into()
         } else {
             format!("Your features that run it: {}.", names.join(", "))
         })
@@ -6732,7 +6726,7 @@ pub(crate) mod tests {
             .expect("offered, greyed")
             .greyed
             .unwrap()
-            .contains("ask the chat for a steer attempt from it"));
+            .contains("ask the chat for a steered try from it"));
         // A live provider's: its own run shape, label included.
         app.config.providers.push("anthropic-live".into());
         record(&mut app, PROVENANCE, |r| {
@@ -6838,7 +6832,7 @@ pub(crate) mod tests {
         assert!(it
             .greyed
             .unwrap()
-            .contains("differs from every recorded attempt"));
+            .contains("differs from every recorded try"));
         // Put back: known again.
         std::fs::write(&logic, text).unwrap();
         assert!(app.reload(true));
@@ -7373,7 +7367,7 @@ pub(crate) mod tests {
         assert_eq!(app.pairs.len(), 1);
         assert!(
             app.pairs_digest.is_none(),
-            "an attempt's crate is not the unit crate"
+            "a try's crate is not the piece crate"
         );
     }
 
@@ -7631,7 +7625,7 @@ pub(crate) mod tests {
         // No git here: the details are the way to look (fix pass, item 6).
         assert_eq!(
             app.plan_notice.as_deref(),
-            Some("plan changed 1 unit — review the plan's changes with c")
+            Some("plan changed 1 piece — review the plan's changes with c")
         );
         // In a git checkout, its diff.
         std::fs::create_dir_all(app.config.target.join(".git")).unwrap();
@@ -7644,7 +7638,7 @@ pub(crate) mod tests {
         app.load_now();
         assert_eq!(
             app.plan_notice.as_deref(),
-            Some("plan changed 1 unit — review `git diff migration/plan.toml` (c for the lines)")
+            Some("plan changed 1 piece — review `git diff migration/plan.toml` (c for the lines)")
         );
         app.on_spawned(&app.act_argv(Act::Scan, None, None, None).unwrap());
         assert_eq!(app.plan_notice, None);
@@ -7873,7 +7867,7 @@ pub(crate) mod tests {
         record(&mut app, awaited, |r| r.seeded_from = None);
         arm(&mut app);
         assert_eq!(key(&mut app, 'y'), Command::None);
-        assert!(said(&app).contains("not a steer attempt"), "{}", said(&app));
+        assert!(said(&app).contains("not a steered try"), "{}", said(&app));
     }
 
     /// Review SAFE-1, SAFE-2: at confirm the plan is read again — a unit
@@ -7980,7 +7974,7 @@ pub(crate) mod tests {
         .unwrap();
         assert!(app.reload(true));
         assert!(!app.snapshot.units[0].report.source_fresh);
-        assert_eq!(app.next_step(), None, "a blocked unit is no next step");
+        assert_eq!(app.next_step(), None, "a blocked piece is no next step");
         let head = text.split("[[unit]]").next().unwrap().to_string();
         std::fs::write(&plan, head).unwrap();
         assert!(app.reload(true));
@@ -8083,7 +8077,7 @@ pub(crate) mod tests {
         assert!(app.reload(true));
         assert!(
             app.snapshot.units[0].attempt("-x").is_some(),
-            "the odd attempt is read"
+            "the odd try is read"
         );
         let err = app
             .act_argv(Act::Accept, Some("u-lib"), Some("-x"), None)

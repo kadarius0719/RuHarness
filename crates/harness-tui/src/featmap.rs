@@ -95,13 +95,13 @@ impl FeatureState {
             FeatureState::NotMapped => "not mapped yet".into(),
             FeatureState::MapOutOfDate => "map out of date".into(),
             FeatureState::MapIncomplete => "map incomplete".into(),
-            FeatureState::ReachesNoUnit => "reaches no unit".into(),
-            FeatureState::AllMigrated => "all its units migrated".into(),
+            FeatureState::ReachesNoUnit => "reaches no piece".into(),
+            FeatureState::AllMigrated => "all its pieces migrated".into(),
             FeatureState::HoldsSoFar { rust, of } => {
-                format!("holds so far · {rust} of {of} unit{}", plural(*of))
+                format!("holds so far · {rust} of {of} piece{}", plural(*of))
             }
             FeatureState::AllC => "still all C".into(),
-            FeatureState::SeeUnits => "see its units".into(),
+            FeatureState::SeeUnits => "see its pieces".into(),
         }
     }
 }
@@ -711,7 +711,7 @@ pub fn build(
                 ))
             }
             FeatureState::HoldsSoFar { .. } | FeatureState::AllC if red_units > 0 => Some(format!(
-                "{red_units} unit{} with a red verdict",
+                "{red_units} piece{} with a red check",
                 plural(red_units)
             )),
             _ => None,

@@ -117,7 +117,7 @@ fn a_recorded_round_is_played_through() {
     let mut c = chat(&tmp, &fixtures().join("round.jsonl"), "");
     assert_eq!(c.phase(), Phase::Idle);
     c.send(
-        "Please migrate this unit.",
+        "Please migrate this piece.",
         Some("[cockpit context] About: the project."),
         Instant::now(),
     )
@@ -150,7 +150,7 @@ fn a_recorded_round_is_played_through() {
     c.deny(&rid, "Continued by the cockpit …green…");
     pump_until(&mut c, |c, _| !c.turn);
     let t = text(&mut c);
-    assert!(t.contains("› Please migrate this unit."), "{t}");
+    assert!(t.contains("› Please migrate this piece."), "{t}");
     assert!(t.contains("· read the project's status — done"), "{t}");
     assert!(
         t.contains("· read the request of a-939463cb… (page 1) — done"),
@@ -193,7 +193,7 @@ fn a_recorded_round_is_played_through() {
 fn a_stop_withdraws_the_held_request() {
     let tmp = TmpDir::new("chat-stop");
     let mut c = chat(&tmp, &fixtures().join("stop.jsonl"), "");
-    c.send("Please migrate this unit.", None, Instant::now())
+    c.send("Please migrate this piece.", None, Instant::now())
         .unwrap();
     let ev = pump_until(&mut c, |_, e| !asks(e).is_empty());
     let (_, rid) = asks(&ev)[0].clone();
@@ -215,7 +215,7 @@ fn a_stop_withdraws_the_held_request() {
     let t = text(&mut c);
     assert!(t.contains("stopped"), "{t}");
     c.send(
-        "Never mind. What is the unit's status?",
+        "Never mind. What is the piece's status?",
         None,
         Instant::now(),
     )
@@ -231,7 +231,7 @@ fn a_stop_withdraws_the_held_request() {
 fn a_decline_is_answered() {
     let tmp = TmpDir::new("chat-decline");
     let mut c = chat(&tmp, &fixtures().join("decline.jsonl"), "");
-    c.send("Please migrate this unit.", None, Instant::now())
+    c.send("Please migrate this piece.", None, Instant::now())
         .unwrap();
     let ev = pump_until(&mut c, |_, e| !asks(e).is_empty());
     let (_, rid) = asks(&ev)[0].clone();
@@ -1396,17 +1396,17 @@ fn consecutive_reads_fold_into_one_line() {
     };
     assert_eq!(
         lines(&mut c),
-        ["· read the project's status and unit u-lzgmini"]
+        ["· read the project's status and piece u-lzgmini"]
     );
     ended(&mut c, &mut events, "t1", false);
     assert_eq!(
         lines(&mut c),
-        ["· read the project's status and unit u-lzgmini"]
+        ["· read the project's status and piece u-lzgmini"]
     );
     ended(&mut c, &mut events, "t2", false);
     assert_eq!(
         lines(&mut c),
-        ["· read the project's status and unit u-lzgmini — done"]
+        ["· read the project's status and piece u-lzgmini — done"]
     );
     // Another line between: the next read starts a line of its own.
     c.say(Tone::Dim, "something else");
@@ -1429,7 +1429,7 @@ fn consecutive_reads_fold_into_one_line() {
     let all = lines(&mut c);
     assert_eq!(
         all.last().unwrap(),
-        "· read unit u-checksum and the project's status — unit u-checksum failed"
+        "· read piece u-checksum and the project's status — piece u-checksum failed"
     );
     assert_eq!(all.len(), 3, "{all:?}");
 }

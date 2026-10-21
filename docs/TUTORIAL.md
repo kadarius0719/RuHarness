@@ -477,24 +477,27 @@ In the chat, letters are text. `Enter` sends (or, on an empty input, reviews a w
 | `⊖` | not part of this tool: a project file the open tool does not list |
 | `✓0/13` | on a folder: 0 of its 13 C files are in Rust (`⚠1`: one needs attention); the View's title says it in words |
 
-Beside an attempt row (under its unit), `✓` is GREEN, `✗` is RED, and `◐` is an attempt that has not finished (it stopped at a hand-off). Beside a feature, `◉` holds so far (it runs Rust now, and its migrated units pass), `◌` still all C, `✗` a unit's check of it failed, and `↻` needs a re-check; the help screen lists the rest.
+Beside a try row (under its piece), `✓` is GREEN, `✗` is RED, and `◐` is a try that has not finished (it stopped at a hand-off). On screen the cockpit says **piece** for a unit and **try** for an attempt; the commands and files keep `unit` and `attempt`. Beside a feature, `◉` holds so far (it runs Rust now, and its migrated units pass), `◌` still all C, `✗` a unit's check of it failed, and `↻` needs a re-check; the help screen lists the rest.
 
 **The menu items** (`Enter` on a row; the name shows what it applies to):
 
 | Menu item | Where | What it does |
 |---|---|---|
-| Scan the project · Refresh the plan · Find risky patterns in the C | The project | Scan, plan and detect, section 4. |
-| Migrate — ask in chat · Ask in chat… | A unit, or anywhere | Puts a request in the chat, or moves you there to ask. |
-| Re-check with the judge · Show the checks | A unit, or an attempt with a verdict | Runs the judge again; lists every check in words, passed or failed. |
-| Accept … into … · Replace …'s verified crate with … | A GREEN attempt | Makes it the unit's Rust (only you can); on a verified unit, swaps it in for the one in use (used with Speed). |
-| Compare with the promoted attempt | An attempt | What differs from the Rust already accepted. |
-| Modify with a note · Retry · Resume | An attempt | A new attempt with your note; the same again; continue a paused one. |
-| Hand edit · Continue my kept hand edit | A unit | Edit the Rust yourself; the judge judges it. |
+| Scan the project · Make the plan (afterwards Refresh the plan) · Find risky patterns in the C | The project | Scan, plan and detect, section 4. |
+| Make the test program — ask in chat | A piece with no test program | Puts the request in the chat; the chat writes the test program, the judge checks it against the C. |
+| Migrate — ask in chat · Ask in chat… | A piece, or anywhere | Puts a request in the chat, or moves you there to ask. |
+| Re-check with the judge · Show the checks | A piece, or a try with a verdict | Runs the judge again; lists every check in words, passed or failed. |
+| Accept … into … · Replace …'s verified crate with … | A GREEN try | Makes it the piece's Rust (only you can); on a verified unit, swaps it in for the one in use (used with Speed). |
+| Compare with the accepted try | A try | What differs from the Rust already accepted. |
+| Modify with a note · Retry · Resume | A try | A new try with your note; the same again; continue a paused one. |
+| Hand edit · Continue my kept hand edit | A piece | Edit the Rust yourself; the judge judges it. |
 | Write your features file · Map the features | Features | Section 10. |
-| Write your workloads file · Measure speed · Measure this unit's speed · Compare the outputs | Speed, or a verified unit | Section 12. |
+| Propose features — ask in chat · Propose a workload — ask in chat | Features, Speed | The chat writes a proposal that opens in your editor as a draft; nothing is saved until you save. |
+| Fix the features file — ask in chat | A feature with a scenario that cannot run | The chat proposes the corrected file; you read it and save. |
+| Write your workloads file · Measure speed · Measure this piece's speed · Compare the outputs | Speed, or a verified piece | Section 12. |
 | Map the project · Ask for a proposal — ask in chat · Ask for advice — ask in chat · Accept this program · Open tool … | A row of the Project view (a project with no `harness.toml`) | Section 13. |
 | Back to the project view | A tool's first row, on a mapped project | The project's programs and acts again. |
-| Open unit … | The project, when its Next step names a unit | Goes to that unit. |
+| Open piece … | The project, when its Next step names a piece | Goes to that piece. |
 | Cancel the running command · Re-read the project | Anywhere | Stop it (asked first); load the ledger again. |
 
 **When something looks wrong.** The cockpit says what went wrong in words, usually with what to do; `c` shows the exact command and everything it reported, which is what to share when you ask for help. The common cases:

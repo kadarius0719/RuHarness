@@ -189,8 +189,8 @@ fn each_act_the_next_step_names_changes_the_crate_perf_measures() {
     assert_eq!(
         words(&root),
         format!(
-            "Hand edit {UNIT}'s crate, then Replace {UNIT}'s verified crate with the new attempt \
-             and measure this unit again — and if it is not faster, Replace it back with {}",
+            "Hand edit {UNIT}'s crate, then Replace {UNIT}'s verified crate with the new try \
+             and measure this piece again — and if it is not faster, Replace it back with {}",
             harness_tui::model::short_id(&h1)
         )
     );

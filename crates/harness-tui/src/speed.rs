@@ -90,7 +90,7 @@ impl SpeedRow {
     /// own and current).
     fn difference_age(&self) -> String {
         if self.rust_changed() {
-            " — found before the unit's Rust changed — measure this unit again to check".into()
+            " — found before the piece's Rust changed — measure this piece again to check".into()
         } else if self.found_before {
             " — found before; the last measure ended another way — measure again to check".into()
         } else if !self.out_of_date.is_empty() {
@@ -137,7 +137,7 @@ pub fn change_words(unit: &UnitView, has_provider: bool, ledger_rel: &str) -> St
         let a = short_id(&a);
         let modify = format!(
             "Modify {a} with a note about speed (give these numbers), then Replace {id}'s \
-             verified crate with the new attempt, measure this unit again — and if it is not \
+             verified crate with the new try, measure this piece again — and if it is not \
              faster, Replace it back with {a}"
         );
         return if has_provider {
@@ -159,12 +159,12 @@ pub fn change_words(unit: &UnitView, has_provider: bool, ledger_rel: &str) -> St
         .is_some_and(|d| d.join("src/logic.rs").is_file() && d.join("src/ffi.rs").is_file());
     if let Some(a) = in_use.filter(|_| hand_editable) {
         return format!(
-            "Hand edit {id}'s crate, then Replace {id}'s verified crate with the new attempt and \
-             measure this unit again — and if it is not faster, Replace it back with {a}"
+            "Hand edit {id}'s crate, then Replace {id}'s verified crate with the new try and \
+             measure this piece again — and if it is not faster, Replace it back with {a}"
         );
     }
     format!(
-        "Commit the unit's crate first (git) — replacing it deletes it; edit it in your editor, \
+        "Commit the piece's crate first (git) — replacing it deletes it; edit it in your editor, \
          then run {} in a terminal (the cockpit cannot Re-check code it did not record), then \
          measure again",
         harness_core::runtime_view::command_line_for(&format!("verify {id}"), ledger_rel)
@@ -314,7 +314,7 @@ impl SpeedModel {
         }
         if !advice.differences.is_empty() {
             advice.next = Some(
-                "Compare the outputs; then change the unit's Rust (below) and measure this unit \
+                "Compare the outputs; then change the piece's Rust (below) and measure this piece \
                  again"
                     .into(),
             );
@@ -385,10 +385,10 @@ impl SpeedModel {
                 })
                 .collect();
             let which = if missing.is_empty() {
-                "no unit's Rust differs alone — it is how they work together".to_string()
+                "no piece's Rust differs alone — it is how they work together".to_string()
             } else {
                 format!(
-                    "to find which unit, measure each alone: {}",
+                    "to find which piece, measure each alone: {}",
                     missing
                         .iter()
                         .map(|id| {
@@ -478,7 +478,7 @@ impl SpeedModel {
                     }
                 }
                 let mut text = format!(
-                    "Speed: {measured} of {of} unit{} measured",
+                    "Speed: {measured} of {of} piece{} measured",
                     if *of == 1 { "" } else { "s" }
                 );
                 if !counts.is_empty() {
@@ -954,7 +954,7 @@ pub fn build(snapshot: &Snapshot) -> SpeedModel {
                 format!("the C is not checked here: no facts — run {scan}")
             } else {
                 format!(
-                    "the C and the units the program as it stands holds are not checked here: no \
+                    "the C and the pieces the program as it stands holds are not checked here: no \
                      facts — run {scan}"
                 )
             });
@@ -1132,7 +1132,7 @@ mod tests {
                 .filter(|h| h.contains("not checked here:"))
                 .collect::<Vec<_>>(),
             [
-                "the C and the units the program as it stands holds are not checked here: no \
+                "the C and the pieces the program as it stands holds are not checked here: no \
               facts — run harness scan"
             ]
         );
@@ -1174,7 +1174,7 @@ mod tests {
             "short": false, "platform_metrics": "macos-v6-cycles", "std": true,
             "c": five_runs(), "other": five_runs()
         }))
-        .expect("a unit row")
+        .expect("a piece row")
     }
 
     /// zopfli with one workload (big-text) and the rows asked for stored:
@@ -1246,7 +1246,7 @@ mod tests {
         let snapshot = Snapshot::load(&t).expect("loads");
         assert!(
             snapshot.units.is_empty(),
-            "no facts: no unit in the snapshot"
+            "no facts: no piece in the snapshot"
         );
         let m = build(&snapshot);
         assert_eq!(

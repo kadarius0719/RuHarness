@@ -1,6 +1,6 @@
 ┌ Files ─────────────────────┐┌ u-cache · no test program ─────────────────────────────────────────┐
 │▾ harness-tu…0000000000 ✓1/4││Step 6 of 8: Test program                                           │
-│  ▾ Units (11)              ││◇ u-cache no test program                                           │
+│  ▾ Pieces (11)             ││◇ u-cache no test program                                           │
 │    ▸ ✓ u001-katajainen done││Next: Make the test program — run harness gen-driver u-cache (the   │
 │    ▸ ◇ u-cache      no test││chat is off)                                                        │
 │    ▸ ◇ u-hash       no test││                                                                    │
@@ -10,7 +10,7 @@
 │    ▸ · u-gzip…ainer stays C││Its C: 1 file — src/zopfli/cache.c                                  │
 │    ▸ ◇ u-util       no test││No Rust yet                                                         │
 │    ▸ · u-zlib…ainer stays C││5 of your features run it · still C — see Features                  │
-│    ▸ · u-zopfli_lib stays C││Attempts: none yet                                                  │
+│    ▸ · u-zopfli_lib stays C││Tries: none yet                                                     │
 │    ▸ · u-zopfli_bin stays C││                                                                    │
 │  ▾ Features (7)            ││▸ C source (Tab to the View, then Enter)                            │
 │      ◉ Compress to gzip    ││                                                                    │
