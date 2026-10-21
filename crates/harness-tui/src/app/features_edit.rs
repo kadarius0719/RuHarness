@@ -498,7 +498,7 @@ impl App {
     /// The chat's proposal of `kind`'s file, read as the person's own
     /// file is: a regular file (never through a link), within the file's
     /// cap, UTF-8. `Ok(None)` when there is none; `Err` in words.
-    fn read_proposal(&self, kind: DraftKind) -> Result<Option<String>, String> {
+    pub(crate) fn read_proposal(&self, kind: DraftKind) -> Result<Option<String>, String> {
         let Some(path) = kind.proposed_path(&self.config) else {
             return Ok(None);
         };

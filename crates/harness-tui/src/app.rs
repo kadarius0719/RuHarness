@@ -18,7 +18,7 @@ pub mod asks;
 mod connect;
 pub mod features_edit;
 mod project_view;
-mod propose;
+pub mod propose;
 pub mod speed_acts;
 
 pub use project_view::{Pick, ProjectState};

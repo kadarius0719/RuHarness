@@ -20,7 +20,156 @@ use crate::next::Advice;
 use crate::tree::Selection;
 use harness_core::text::safe_line;
 
+/// The chat's proposal as the Features (Speed) view shows it, so the person
+/// reads the draft before opening the editor: its counts, its file, and one
+/// line per scenario (workload) — the chat's comment above it, else its
+/// arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Preview {
+    /// The proposal's file, root-relative.
+    pub path: String,
+    /// "3 features, 8 scenarios" or "2 workloads".
+    pub counts: String,
+    /// A feature's count alone ("3 features"), or the workloads' count.
+    pub what: String,
+    /// `feature/scenario` (or the workload's id) and what it does, each
+    /// filtered for the screen.
+    pub rows: Vec<(String, String)>,
+}
+
+/// The `#` comment lines right above each `[[table]]` header in `text`,
+/// in file order (empty when there is none; a blank line ends a comment).
+fn comments_above(text: &str, table: &str) -> Vec<String> {
+    let header = format!("[[{table}]]");
+    let mut out = Vec::new();
+    let mut run: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let t = line.trim();
+        if let Some(c) = t.strip_prefix('#') {
+            run.push(c.trim().to_string());
+        } else if t == header {
+            out.push(run.join(" "));
+            run.clear();
+        } else {
+            run.clear();
+        }
+    }
+    out
+}
+
+fn plural(n: usize, one: &str) -> String {
+    format!("{n} {one}{}", if n == 1 { "" } else { "s" })
+}
+
+/// The proposal's `text` read as its file (`kind`): its preview, or the
+/// loader's message in words.
+pub fn preview(kind: DraftKind, text: &str, path: String) -> Result<Preview, String> {
+    use harness_core::features;
+    use harness_core::perf::workloads;
+    let what_it_does = |comment: Option<&String>, args: &[String]| match comment {
+        Some(c) if !c.is_empty() => safe_line(c),
+        _ if args.is_empty() => "no arguments".to_string(),
+        _ => safe_line(&args.join(" ")),
+    };
+    match kind {
+        DraftKind::Features => {
+            const MARK: &str = "\u{1}";
+            let f = features::parse(text, std::path::Path::new(features::PROPOSED_FILE), MARK)
+                .map_err(|e| match e {
+                    harness_core::error::Error::InvalidPlan(m) => m
+                        .split_once(": ")
+                        .filter(|(head, _)| head.starts_with(MARK))
+                        .map_or(m.clone(), |(_, rest)| rest.to_string()),
+                    other => other.to_string(),
+                })?;
+            let comments = comments_above(text, "scenario");
+            let rows = f
+                .scenarios
+                .iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    (
+                        safe_line(&format!("{}/{}", s.feature, s.id)),
+                        what_it_does(comments.get(i), &s.args),
+                    )
+                })
+                .collect();
+            Ok(Preview {
+                path,
+                counts: format!(
+                    "{}, {}",
+                    plural(f.features.len(), "feature"),
+                    plural(f.scenarios.len(), "scenario")
+                ),
+                what: plural(f.features.len(), "feature"),
+                rows,
+            })
+        }
+        DraftKind::Workloads => {
+            let w = workloads::parse(text, std::path::Path::new(workloads::PROPOSED_FILE))
+                .map_err(|e| match e {
+                    workloads::ParseError::Rule(e) => {
+                        format!("line {}, column {}: {}", e.line, e.column, e.message)
+                    }
+                    workloads::ParseError::TooNew(e) => e.to_string(),
+                })?;
+            let comments = comments_above(text, "workload");
+            let rows = w
+                .workloads
+                .iter()
+                .enumerate()
+                .map(|(i, wl)| (safe_line(&wl.id), what_it_does(comments.get(i), &wl.args)))
+                .collect();
+            let n = plural(w.workloads.len(), "workload");
+            Ok(Preview {
+                path,
+                counts: n.clone(),
+                what: n,
+                rows,
+            })
+        }
+        DraftKind::BuildConfig => Err("not a proposal of features or workloads".into()),
+    }
+}
+
 impl App {
+    /// The chat's proposal of `kind`'s file, read with the opening's
+    /// safety (a regular file, the file's cap, UTF-8): `None` when there is
+    /// none; else its preview, or why it does not read, in words.
+    pub fn proposal_preview(&self, kind: DraftKind) -> Option<Result<Preview, String>> {
+        let full = kind.proposed_path(&self.config)?;
+        let path = full
+            .strip_prefix(&self.config.target)
+            .unwrap_or(&full)
+            .display()
+            .to_string();
+        match self.read_proposal(kind) {
+            Ok(None) => None,
+            Ok(Some(text)) => Some(preview(kind, &text, path)),
+            Err(why) => Some(Err(why)),
+        }
+    }
+
+    /// The hint line for the Features (Speed) row while a proposal waits
+    /// (§9.6): "The chat proposed 3 features; Write your features file
+    /// opens them as your draft."
+    pub fn proposal_hint(&self, kind: DraftKind) -> Option<String> {
+        let p = self.proposal_preview(kind)?.ok()?;
+        let noun = kind.noun();
+        Some(if self.has_own_file(kind) {
+            format!(
+                "The chat proposed {}; Edit from the chat's proposal… opens them against your \
+                 {noun} file.",
+                p.what
+            )
+        } else {
+            format!(
+                "The chat proposed {}; Write your {noun} file opens them as your draft.",
+                p.what
+            )
+        })
+    }
+
     /// Tell the chat which of the person's drafts are kept, before it
     /// reads what the runtime printed: a proposal of that file is refused
     /// while one is (the draft slot is theirs).

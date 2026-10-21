@@ -1005,6 +1005,10 @@ fn features(app: &App) -> Explained {
             .into(),
         format!("Their file: {path}"),
     ];
+    // The chat's proposal waiting: what Enter opens (§9.6).
+    let hint = app
+        .proposal_hint(crate::app::features_edit::DraftKind::Features)
+        .unwrap_or(hint);
     Explained {
         title,
         hint,
@@ -1083,6 +1087,9 @@ fn speed(app: &App) -> Explained {
         format!("Now: {state}."),
         format!("The workloads file: {path}"),
     ];
+    let hint = app
+        .proposal_hint(crate::app::features_edit::DraftKind::Workloads)
+        .unwrap_or(hint);
     Explained {
         title: app.speed.label(),
         hint,

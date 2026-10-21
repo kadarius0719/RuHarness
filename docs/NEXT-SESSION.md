@@ -154,7 +154,8 @@ read from a second, non-blocking opening of `/dev/tty`; no crate added) and uses
 `dark` or `light` theme; no answer: `COLORFGBG`, else `terminal` as before. `?` says which theme
 is on and why. In dark and light each pane's top row is a title band (the focused one in the
 section colour) with a blank column between the panes, and the section colour is kept for pane
-titles and group headings only (the colour-rules test holds the list). Open from it: the person
+titles and group headings only (the colour-rules test holds the list). Also: the Features (Speed) view shows the chat's proposal under its Next line, one line per
+scenario with the chat's why, so the draft is read before the editor opens. Open from it: the person
 sees the new default on their own terminal; `--theme terminal` gives back the earlier look.
 
 ## The work, in order

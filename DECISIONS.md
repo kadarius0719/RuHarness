@@ -3935,6 +3935,15 @@ from docs/COCKPIT-WRAPPER-DESIGN.md §9.7.
   `Checks`, the help's headings and the menu's model line; the colour-rules test holds that list
   and fails on any other use. The View's other headings are bold; the folded journey line is
   plain with the stage name bold; `Features (none yet)` and `Speed — not set up` are rows.
+- Also in this pass, from the person's screenshot ("I am not seeing any draft files? Just
+  suggestions, not actual code?"): the Features view, and the Speed view for workloads, shows the
+  chat's proposal under its Next line — its counts and file, one line per scenario with the
+  chat's one-line why from the file (else its arguments), and what Enter opens — read with the
+  opening's safety (a regular file, the cap, UTF-8); one that does not pass the rules says so with
+  the loader's words and "ask the chat to propose again". The row's hint line says "The chat
+  proposed 3 features; Write your features file opens them as your draft." The proposal is a file
+  in the person's project: `git status` there lists it as untracked, which the cockpit topic now
+  says.
 
 **Different from the design.** The help's headings (`Keys`, `States`, …) and the menu's
 `── Uses a model ──` keep the section colour: the design leaves the dialog and the menu unchanged

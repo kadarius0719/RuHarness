@@ -1975,6 +1975,85 @@ fn features_reach_words(app: &App, v: &harness_core::Verdict) -> String {
 
 /// A View's "Next: …" line and a blank line after it, when the node has
 /// one (pass 1 of the 2026-10-18 critique).
+/// The chat's proposal, under the Next line of the Features (Speed) view
+/// while one waits, so the person reads the draft before the editor opens:
+/// `The chat's proposal (3 features, 8 scenarios) — <its file>`, one line
+/// per scenario (`bench/default: <the chat's comment, else its
+/// arguments>`), then what Enter does. A proposal that does not read says
+/// so, and how to get another. Nothing when there is none.
+fn proposal_block(
+    app: &App,
+    kind: crate::app::features_edit::DraftKind,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let Some(preview) = app.proposal_preview(kind) else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    let p = match preview {
+        Ok(p) => p,
+        Err(why) => {
+            lines.extend(wrapped(
+                &format!(
+                    "⚠ The chat's proposal does not read: {} — ask the chat to propose again",
+                    display::line(&why)
+                ),
+                width,
+                attention(),
+            ));
+            lines.push(Line::from(""));
+            return lines;
+        }
+    };
+    // The path whole when the heading fits, else its last three parts (as
+    // the status line shortens it).
+    // Still too long: its end kept, the file's name in sight.
+    let head = format!("The chat's proposal ({}) — ", p.counts);
+    let room = width.saturating_sub(width_of(&head));
+    let path = if width_of(&p.path) <= room {
+        p.path.clone()
+    } else {
+        let short = short_path(&p.path);
+        let chars: Vec<char> = short.chars().collect();
+        let mut keep = chars.len();
+        while keep > 0
+            && width_of(&chars[chars.len() - keep..].iter().collect::<String>()) + 1 > room
+        {
+            keep -= 1;
+        }
+        if width_of(&short) <= room || keep == 0 {
+            short
+        } else {
+            format!(
+                "…{}",
+                chars[chars.len() - keep..].iter().collect::<String>()
+            )
+        }
+    };
+    lines.push(Line::from(clipped(
+        vec![Span::styled(head, bold()), Span::styled(path, label_role())],
+        width,
+    )));
+    for (id, does) in &p.rows {
+        lines.push(Line::from(clipped(
+            vec![Span::raw(format!("  {id}: ")), Span::raw(does.clone())],
+            width,
+        )));
+    }
+    let noun = kind.noun();
+    let enter = if app.has_own_file(kind) {
+        format!(
+            "Enter, then Edit from the chat's proposal… — opens it in your editor against your \
+             {noun} file"
+        )
+    } else {
+        format!("Enter: Write your {noun} file — opens it in your editor to change and save")
+    };
+    lines.extend(wrapped(&enter, width, Style::default()));
+    lines.push(Line::from(""));
+    lines
+}
+
 fn next_lines(app: &App, sel: &Selection, width: usize) -> Vec<Line<'static>> {
     let Some(next) = app.advice(sel) else {
         return Vec::new();
@@ -2329,6 +2408,11 @@ impl<'r> SpeedSection<'_, 'r> {
 fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<Line<'static>> {
     let model = &app.speed;
     let mut lines = next_lines(app, &Selection::Speed, width);
+    lines.extend(proposal_block(
+        app,
+        crate::app::features_edit::DraftKind::Workloads,
+        width,
+    ));
     match &model.group {
         speed::Group::NoFile => {
             lines.extend(wrapped(
@@ -2573,6 +2657,11 @@ fn features_view(
     links: &mut Vec<(usize, Selection)>,
 ) -> Vec<Line<'static>> {
     let mut lines = next_lines(app, &Selection::Features, width);
+    lines.extend(proposal_block(
+        app,
+        crate::app::features_edit::DraftKind::Features,
+        width,
+    ));
     let model = &app.features;
     match &model.group {
         featmap::Group::NoFile => {
@@ -6061,6 +6150,127 @@ mod tests {
         assert!(
             screen.contains("not run: not configured for this target (add"),
             "{screen}"
+        );
+    }
+
+    /// A proposal as harness-mcp writes it: its header, then the chat's
+    /// text, a one-line why above each scenario but the last.
+    const PROPOSED: &str =
+        "# The chat's proposal for your features file, written by m on 2026-10-20.\n\n\
+schema_version = 1\n\n[[feature]]\nid = \"gzip\"\nname = \"Compress to gzip\"\n\n\
+[[feature]]\nid = \"help\"\nname = \"Show the help\"\n\n\
+# Compresses English text to gzip.\n[[scenario]]\nfeature = \"gzip\"\nid = \"text\"\n\
+args = [\"-c\", \"{input}\"]\ninput = \"sample:text\"\n\n\
+# Compresses nothing at all.\n[[scenario]]\nfeature = \"gzip\"\nid = \"empty\"\n\
+args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
+[[scenario]]\nfeature = \"help\"\nid = \"flag\"\nargs = [\"-h\"]\n";
+
+    fn propose(app: &App, workloads: bool, text: &str) {
+        let kind = if workloads {
+            crate::app::features_edit::DraftKind::Workloads
+        } else {
+            crate::app::features_edit::DraftKind::Features
+        };
+        let path = kind.proposed_path(&app.config).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, text).unwrap();
+    }
+
+    /// The person saw only the chat's summary and asked where the draft
+    /// was: the Features view shows the proposal under its Next line —
+    /// its counts and file, one line per scenario (the chat's why, else its
+    /// arguments), and what Enter opens; the hint line says the same.
+    #[test]
+    fn the_features_view_shows_the_chats_proposal() {
+        let mut app = crate::app::tests::app_of_without_features("targets/zopfli", "proposed");
+        app.select(Selection::Features);
+        let none = text(&render(&mut app, 120, 40));
+        assert!(!none.contains("The chat's proposal"), "{none}");
+        assert_eq!(
+            app.proposal_hint(crate::app::features_edit::DraftKind::Features),
+            None
+        );
+        propose(&app, false, PROPOSED);
+        let buffer = render(&mut app, 120, 40);
+        golden("features-proposed.txt", &app, &buffer);
+        // Too long for this View: the file's end kept.
+        assert!(text(&buffer).contains("3 scenarios) — …atures/features.proposed.toml│"));
+        let screen = text(&render(&mut app, 160, 40));
+        for line in [
+            "The chat's proposal (2 features, 3 scenarios) — migration/features/features.proposed.toml",
+            "  gzip/text: Compresses English text to gzip.",
+            "  gzip/empty: Compresses nothing at all.",
+            "  help/flag: -h",
+            "Enter: Write your features file — opens it in your editor to change and save",
+        ] {
+            assert!(screen.contains(line), "{line}\n{screen}");
+        }
+        // Under the Next line.
+        let next = screen.find("Next:").unwrap();
+        assert!(screen.find("The chat's proposal").unwrap() > next);
+        assert_eq!(
+            app.proposal_hint(crate::app::features_edit::DraftKind::Features)
+                .as_deref(),
+            Some(
+                "The chat proposed 2 features; Write your features file opens them as your draft."
+            )
+        );
+        // A proposal that does not read: said, with the way out.
+        propose(
+            &app,
+            false,
+            "schema_version = 1\n[[scenario]]\nfeature = \"x\"\n",
+        );
+        let broken = text(&render(&mut app, 160, 40));
+        assert!(
+            broken.contains("The chat's proposal does not read:")
+                && broken.contains("propose again"),
+            "{broken}"
+        );
+        assert!(
+            !broken.contains("Enter: Write your features file —"),
+            "{broken}"
+        );
+        assert_eq!(
+            app.proposal_hint(crate::app::features_edit::DraftKind::Features),
+            None
+        );
+        // Not UTF-8: the same, in the opening's words.
+        propose(&app, false, "\u{FFFD}");
+        let path = crate::app::features_edit::DraftKind::Features
+            .proposed_path(&app.config)
+            .unwrap();
+        std::fs::write(&path, [0xff, 0xfe, 0x00]).unwrap();
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(screen.contains("not UTF-8 text"), "{screen}");
+    }
+
+    /// The same block on the Speed view, for a workloads proposal.
+    #[test]
+    fn the_speed_view_shows_the_chats_workloads_proposal() {
+        let mut app = crate::app::tests::app_of_without_features("targets/zopfli", "wl-proposed");
+        app.select(Selection::Speed);
+        propose(
+            &app,
+            true,
+            "# The chat's proposal for your workloads file.\n\nschema_version = 1\n\n\
+             # A long text, timed whole.\n[[workload]]\nid = \"big\"\n\
+             args = [\"-c\", \"{input}\"]\ninput = \"src/zopfli/deflate.c\"\n",
+        );
+        let screen = text(&render(&mut app, 160, 40));
+        for line in [
+            "The chat's proposal (1 workload) — migration/perf/workloads.proposed.toml",
+            "  big: A long text, timed whole.",
+            "Enter: Write your workloads file — opens it in your editor to change and save",
+        ] {
+            assert!(screen.contains(line), "{line}\n{screen}");
+        }
+        assert_eq!(
+            app.proposal_hint(crate::app::features_edit::DraftKind::Workloads)
+                .as_deref(),
+            Some(
+                "The chat proposed 1 workload; Write your workloads file opens them as your draft."
+            )
         );
     }
 
