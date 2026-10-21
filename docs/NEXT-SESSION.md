@@ -69,16 +69,13 @@ background query late (slow ssh) could have its reply read as keys (no DA query 
    the README's "move your own C program" door alone, past one unit, ideally to several promoted
    units, with every stumble written down. Step (g) of the map (record the first accepted tool's
    features before its first unit moves) happens inside it. Fix what the run shows first.
-2. **Past the leaf cap: pieces that call other pieces.** Today only a piece that calls nothing
-   else in the program moves (the judge tests each piece alone), so on liblzg two of four pieces
-   "stay C" and a large program would stop at its leaves. The design is the one
-   docs/PROJECT-MAP-DESIGN.md §8 "The fuller C–Rust boundary" names (written 2026-10-01, not
-   designed yet): migrate in dependency order, and let a piece's test program and its Rust link
-   the Rust of the pieces already moved (one combined Rust library per program at scale; Rust
-   calling C that has not moved yet; shared code in several programs moved once and checked in
-   every program that uses it). Design first, as the cockpit passes were; the person's words
-   (2026-10-20): the roadmap is moving a large application with several libraries, as many
-   files as possible.
+2. **Past the leaf cap: pieces that call other pieces.** Designed on 2026-10-21 from a spike that
+   proved it on liblzg (docs/BEYOND-LEAVES-DESIGN.md; DECISIONS 2026-10-21, "Beyond the
+   leaves"): the callees linked as the program stands in every build the judge makes, an
+   allow-list for the `extern` block, an import rule in capabilities, callee digests in the
+   verdict, the mixed program with every accepted piece. Pass A (the judge) and pass B (the
+   cockpit and docs), then the live walk on liblzg. The piece holding `main` and the combined
+   crate are the end-state design, later.
 3. **The last stage: "the program works".** Build each program with its Rust in place, run its
    own test suite and the person's features on that build, and say so on the journey line ("the
    program works with 2 of 4 pieces in Rust"). The whole-program check, the features and the

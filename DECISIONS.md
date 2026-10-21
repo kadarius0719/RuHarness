@@ -92,6 +92,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-10-20 — **A model proposes the features and the workloads** — two cockpit-mode harness-mcp tools write a checked proposal beside the person's file; Propose items on the Features and Speed rows; Write opens the proposal as the draft; the brief holds both files' syntax.
 - 2026-10-20 — **A readable default: the theme chosen from the terminal's background, title bands, fewer blue things** — the cockpit asks the terminal for its background and picks dark or light; panes get title bands and a gap; the section colour only on titles and group headings.
 - 2026-10-21 — **A project file as a scenario's input; the chat's fix** — `input` may name a small file in the project (the workloads' rules, 8 MiB), read once, copied under its basename; a file the run cannot use is the scenario's `input-unusable`; the brief's stability and real-input rules; Fix the features (workloads) file — ask in chat, with read tools for both files.
+- 2026-10-21 — **Beyond the leaves: the leaf cap was an assumption, not a rule** — the spike moved a calling piece green with the callee linked; BEYOND-LEAVES-DESIGN; callees as the program stands, an extern allow-list, callee digests in the verdict.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -4022,3 +4023,34 @@ on t-benchmark four of eight scenarios printed timings and could never be checks
 **Open.** Rebuild harness-mcp beside the cockpit (its tool list changed). The brief changed: the
 live chat tests once, and a live fix on t-benchmark (the timing scenarios) and t-unlzg (a real
 LZG file in the project).
+
+## 2026-10-21 — Beyond the leaves: the leaf cap was an assumption, not a rule
+
+**The spike.** An Opus agent took liblzg through the harness by hand and tried to move u-encode,
+which calls u-checksum. The walls, in order: the migrate gate ("calls u-checksum, so in this
+version it stays C" — one condition on the plan's `depends_on`, gone once a test program exists);
+the test program's build linking only the unit's own C (an undefined `_LZG_CalcChecksum`); the
+source rule check refusing any `extern` block; the differential link failing the same way on both
+sides and surfacing as a harness error with no verdict; the boundary driver likewise. None of the
+judge's checks objected to a Rust that calls C: symbol-set reads defined symbols only, and
+capabilities has no class for project functions. With the callee's code added to each link (spike
+edits, reverted), u-encode went green on every check, both with checksum.c and with u-checksum's
+Rust on the Rust side; two Rust staticlibs linked into the C program in either order (both
+`panic = "abort"`, as the template makes them), the program matched the C on 24 runs, and `perf
+run` built "the program as it stands — u-checksum, u-encode" and found nothing different. One
+combined crate over both unit crates worked too (the unit crates must stay `rlib` beside
+`staticlib`, and each dependency must be named in code), 381 KB with LTO against 1.42 MB. Side
+finding: symbol-set rejects LLVM's promoted constants (`anon.….llvm.…`), which any large piece can
+produce. A changed callee left the caller's verdict "fresh": verdicts hash only the unit's own
+files.
+
+**Decided.** docs/BEYOND-LEAVES-DESIGN.md: a piece moves when the plan knows every piece it
+calls; the callees are linked as the program stands (their Rust once accepted, else their C) by one
+function every build uses; a failed link is a red check; the `extern` block is allowed for the
+dependencies' symbols only, and the prompt names them; capabilities gains an import rule; the
+verdict and the driver record hash the callees, so accepting a callee's Rust makes its callers out
+of date; the mixed program links every accepted piece's Rust; the piece holding `main` stays C
+until the end-state design. Two passes, the judge then the cockpit, then a live walk.
+
+**Why not the combined crate now.** Two staticlibs link and run; the combined crate is an
+optimisation and the shape of the end state, not a requirement. It waits with `main`.
