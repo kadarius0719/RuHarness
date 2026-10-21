@@ -27,10 +27,11 @@
 //!   foreground; none in the terminal and mono themes)
 //!   (docs/COCKPIT-WRAPPER-DESIGN.md §9.4).
 //!
-//! The themes: **terminal** (the default: the terminal's own blue, cyan,
-//! magenta, green, red and yellow, so the person's terminal theme decides
-//! the look),
-//! **dark** and **light** (designed 256-colour values, tested for contrast)
+//! The themes: **terminal** (the terminal's own blue, cyan, magenta, green,
+//! red and yellow, so the person's terminal theme decides the look; the
+//! default only when the terminal does not say its background),
+//! **dark** and **light** (designed 256-colour values, tested for contrast;
+//! the default is one of them, chosen from the terminal's background, §9.7)
 //! and **mono** (no colour: bold, underline and reverse carry everything;
 //! the default when `NO_COLOR` is set). The file `cockpit.toml`
 //! ([`config_path`]) may name the theme and set any role's colour.
@@ -38,6 +39,7 @@
 //! The view draws through [`style`], which reads the palette of the drawing
 //! thread ([`set`]); `view::draw` sets it from `App::palette` each frame.
 
+use crate::background::{from_colorfgbg, Background};
 use ratatui::style::{Color, Modifier, Style};
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -45,7 +47,7 @@ use std::path::{Path, PathBuf};
 /// One of the four themes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Theme {
-    /// The terminal's own colours (the default).
+    /// The terminal's own colours (the default when the background is unknown).
     #[default]
     Terminal,
     /// Designed for a dark background.
@@ -54,6 +56,58 @@ pub enum Theme {
     Light,
     /// No colour: bold, underline and reverse only.
     Mono,
+}
+
+/// Where the theme came from (the help's first page says it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Source {
+    /// `--theme`.
+    Flag,
+    /// `RUHARNESS_THEME`.
+    Variable,
+    /// cockpit.toml's `[theme] name`.
+    File,
+    /// `NO_COLOR` is set.
+    NoColor,
+    /// The terminal's answer to the background query.
+    Background,
+    /// `COLORFGBG`'s background.
+    Colorfgbg,
+    /// Nothing said: the terminal theme.
+    #[default]
+    Default,
+}
+
+/// The theme and where it came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Chosen {
+    /// The theme.
+    pub theme: Theme,
+    /// Why it is the one.
+    pub from: Source,
+}
+
+impl Chosen {
+    /// The help's line: which theme is on and why.
+    pub fn words(self) -> String {
+        const CHOOSE: &str = "`--theme` or cockpit.toml to choose";
+        let name = self.theme.name();
+        match self.from {
+            Source::Flag => format!("theme: {name} (from --theme)"),
+            Source::Variable => format!("theme: {name} (from RUHARNESS_THEME)"),
+            Source::File => format!("theme: {name} (from cockpit.toml)"),
+            Source::NoColor => format!("theme: {name} (NO_COLOR is set — {CHOOSE})"),
+            Source::Background => {
+                format!("theme: {name} (from your terminal's background — {CHOOSE})")
+            }
+            Source::Colorfgbg => {
+                format!("theme: {name} (from COLORFGBG, your terminal's colours — {CHOOSE})")
+            }
+            Source::Default => {
+                format!("theme: {name} (your terminal did not say its background — {CHOOSE})")
+            }
+        }
+    }
 }
 
 /// A role a piece of the screen plays; its look comes from the palette.
@@ -194,29 +248,43 @@ impl Theme {
 
     /// The theme to start with: `--theme`, else `RUHARNESS_THEME`, else the
     /// file's `[theme] name`, else mono when `NO_COLOR` is set (to anything
-    /// but empty), else terminal. A bad flag or variable is an error in
-    /// words.
+    /// but empty), else the terminal's background as `query` answers it
+    /// (dark or light; docs/COCKPIT-WRAPPER-DESIGN.md §9.7), else
+    /// `COLORFGBG`'s background, else terminal. `query` is asked only when
+    /// nothing before it chose. A bad flag or variable is an error in words.
     pub fn choose(
         flag: Option<&str>,
         file: Option<Theme>,
         env: impl Fn(&str) -> Option<String>,
-    ) -> Result<Theme, String> {
+        query: impl FnOnce() -> Option<Background>,
+    ) -> Result<Chosen, String> {
         let named = |from: &str, value: &str| {
             Theme::parse(value).ok_or_else(|| format!("{from} {value:?}: the themes are {THEMES}"))
         };
+        let chosen = |theme, from| Ok(Chosen { theme, from });
         if let Some(value) = flag {
-            return named("--theme", value);
+            return chosen(named("--theme", value)?, Source::Flag);
         }
         if let Some(value) = env("RUHARNESS_THEME").filter(|v| !v.is_empty()) {
-            return named("RUHARNESS_THEME", &value);
+            return chosen(named("RUHARNESS_THEME", &value)?, Source::Variable);
         }
         if let Some(theme) = file {
-            return Ok(theme);
+            return chosen(theme, Source::File);
         }
         if env("NO_COLOR").is_some_and(|v| !v.is_empty()) {
-            return Ok(Theme::Mono);
+            return chosen(Theme::Mono, Source::NoColor);
         }
-        Ok(Theme::Terminal)
+        let of = |b| match b {
+            Background::Dark => Theme::Dark,
+            Background::Light => Theme::Light,
+        };
+        if let Some(b) = query() {
+            return chosen(of(b), Source::Background);
+        }
+        if let Some(b) = env("COLORFGBG").as_deref().and_then(from_colorfgbg) {
+            return chosen(of(b), Source::Colorfgbg);
+        }
+        chosen(Theme::Terminal, Source::Default)
     }
 
     /// The backgrounds a designed theme's colours were chosen for (the
@@ -624,7 +692,10 @@ mod tests {
 
     #[test]
     fn the_flag_then_the_variable_then_the_file_then_no_color() {
-        let choose = |flag, file, vars| Theme::choose(flag, file, env(vars));
+        // The terminal stays silent here (its answer is below).
+        let choose = |flag, file, vars| {
+            Theme::choose(flag, file, env(vars), || None).map(|c: Chosen| c.theme)
+        };
         assert_eq!(choose(None, None, &[]), Ok(Theme::Terminal));
         assert_eq!(choose(Some("light"), None, &[]), Ok(Theme::Light));
         assert_eq!(
@@ -649,14 +720,83 @@ mod tests {
         );
         assert_eq!(choose(None, None, &[("NO_COLOR", "1")]), Ok(Theme::Mono));
         assert_eq!(choose(None, None, &[("NO_COLOR", "")]), Ok(Theme::Terminal));
-        // Nothing is guessed from the terminal's variables.
+        // A silent terminal: COLORFGBG's background, when it says one.
         assert_eq!(
             choose(None, None, &[("COLORFGBG", "0;15")]),
+            Ok(Theme::Light)
+        );
+        assert_eq!(
+            choose(None, None, &[("COLORFGBG", "15;0")]),
+            Ok(Theme::Dark)
+        );
+        assert_eq!(
+            choose(None, None, &[("COLORFGBG", "default")]),
             Ok(Theme::Terminal)
         );
         let bad = choose(Some("solarized"), None, &[]).unwrap_err();
         assert!(bad.contains("terminal, dark, light and mono"), "{bad}");
         assert!(choose(None, None, &[("RUHARNESS_THEME", "x")]).is_err());
+    }
+
+    /// §9.7: with nothing named, the terminal's answer to the background
+    /// query, then COLORFGBG, then terminal; the query is asked only then.
+    #[test]
+    fn the_terminal_background_comes_after_everything_named() {
+        use crate::background::Background as B;
+        let choose = |flag, file, vars, answer: Option<B>| {
+            let asked = Cell::new(false);
+            let c = Theme::choose(flag, file, env(vars), || {
+                asked.set(true);
+                answer
+            });
+            (c, asked.get())
+        };
+        let ok = |theme, from| Ok(Chosen { theme, from });
+        let dark = Some(B::Dark);
+        // Everything named beats the answer, and it is never asked.
+        assert_eq!(
+            choose(Some("light"), None, &[], dark),
+            (ok(Theme::Light, Source::Flag), false)
+        );
+        assert_eq!(
+            choose(None, None, &[("RUHARNESS_THEME", "mono")], dark),
+            (ok(Theme::Mono, Source::Variable), false)
+        );
+        assert_eq!(
+            choose(None, Some(Theme::Terminal), &[], dark),
+            (ok(Theme::Terminal, Source::File), false)
+        );
+        assert_eq!(
+            choose(None, None, &[("NO_COLOR", "1")], dark),
+            (ok(Theme::Mono, Source::NoColor), false)
+        );
+        // The answer, dark or light, beats COLORFGBG.
+        assert_eq!(
+            choose(None, None, &[("COLORFGBG", "0;15")], dark),
+            (ok(Theme::Dark, Source::Background), true)
+        );
+        assert_eq!(
+            choose(None, None, &[], Some(B::Light)),
+            (ok(Theme::Light, Source::Background), true)
+        );
+        // No answer: COLORFGBG, else terminal.
+        assert_eq!(
+            choose(None, None, &[("COLORFGBG", "15;0")], None),
+            (ok(Theme::Dark, Source::Colorfgbg), true)
+        );
+        assert_eq!(
+            choose(None, None, &[], None),
+            (ok(Theme::Terminal, Source::Default), true)
+        );
+        // The help says which and why.
+        let c = Chosen {
+            theme: Theme::Dark,
+            from: Source::Background,
+        };
+        assert_eq!(
+            c.words(),
+            "theme: dark (from your terminal's background — `--theme` or cockpit.toml to choose)"
+        );
     }
 
     #[test]

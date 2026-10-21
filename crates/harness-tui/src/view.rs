@@ -190,7 +190,7 @@ fn headed(line: &str, width: usize) -> Vec<Line<'static>> {
             if let Some(at) = span.content.find(':') {
                 let (head, rest) = span.content.split_at(at + 1);
                 *first = Line::from(vec![
-                    Span::styled(head.to_string(), section_role()),
+                    Span::styled(head.to_string(), bold()),
                     Span::raw(rest.to_string()),
                 ]);
             }
@@ -841,7 +841,7 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
         }
         _ => None,
     };
-    let (name_text, pad, word_text) = if let Some((full, short)) = unit_words {
+    let (mut name_text, pad, word_text) = if let Some((full, short)) = unit_words {
         const KEEP: usize = 6;
         let keep = name_w.min(KEEP);
         let word_text = [full, short]
@@ -912,28 +912,42 @@ fn tree_row(app: &App, row: &Row, width: usize, selected: bool) -> Line<'static>
     } else {
         Style::default()
     };
-    if matches!(
+    // The tree's groups head their sections (`Units (n)`, `Features (n)`,
+    // `Speed`) in the section role; one with a state mark before it (the
+    // project's row) is bold, its mark carrying the colour. A group with
+    // nothing in it yet is a row, not a heading: plain, its state words in
+    // the label role (`Features (none yet)`, `Speed — not set up`); the
+    // Project view's action rows are plain (§9.7).
+    let empty_group = match sel {
+        Selection::Features if matches!(app.features.group, featmap::Group::NoFile) => {
+            Some("Features")
+        }
+        Selection::Speed if matches!(app.speed.group, speed::Group::NoFile) => Some("Speed"),
+        _ => None,
+    };
+    let mut state_tail = None;
+    if let Some(head) = empty_group {
+        if let Some(rest) = name_text.strip_prefix(head) {
+            state_tail = Some(rest.to_string());
+            name_text = head.to_string();
+        }
+    } else if matches!(
         sel,
-        Selection::Project
-            | Selection::Units
-            | Selection::Features
-            | Selection::Speed
-            | Selection::MapProject
-            | Selection::ProjectHome
-    ) {
-        // The tree's groups head their sections; one with a state mark
-        // before it stays bold, its mark carrying the colour.
-        name_style = if glyph.is_empty() {
-            section_role()
-        } else {
-            name_style.add_modifier(Modifier::BOLD)
-        };
+        Selection::Units | Selection::Features | Selection::Speed
+    ) && glyph.is_empty()
+    {
+        name_style = section_role();
+    } else if matches!(sel, Selection::Project) {
+        name_style = name_style.add_modifier(Modifier::BOLD);
     }
     let mut spans = vec![
         Span::styled(lead, label_role()),
         Span::styled(glyph_text, glyph_style(glyph)),
         Span::styled(name_text, name_style),
     ];
+    if let Some(tail) = state_tail {
+        spans.push(Span::styled(tail, label_role()));
+    }
     if !word_text.is_empty() {
         spans.push(Span::raw(" ".repeat(pad)));
         spans.push(Span::styled(word_text, muted()));
@@ -1079,6 +1093,67 @@ fn pane_block(title: String, focused: bool) -> Block<'static> {
     block
 }
 
+/// The designed themes draw each pane's top border row as a title band and
+/// put one blank column between the panes (docs/COCKPIT-WRAPPER-DESIGN.md
+/// §9.7); the terminal and mono themes keep the plain frame.
+pub(crate) fn bands() -> bool {
+    matches!(
+        theme::current().theme,
+        theme::Theme::Dark | theme::Theme::Light
+    )
+}
+
+/// The title band (§9.7), over a pane's frame just drawn in `area`: its top
+/// row filled across the pane's width — the panel colour under the title
+/// (bold, the section role) when the pane is not focused; the section colour
+/// with the title reversed when it is. Only in the designed themes; what
+/// sits on the border afterwards (the tab strip, the chat's buttons) is
+/// drawn over it as chips ([`band_chip`]).
+pub(crate) fn title_band(frame: &mut Frame, area: Rect, focused: bool) {
+    if !bands() || area.height == 0 {
+        return;
+    }
+    let fill = if focused {
+        section_role().patch(selected_row())
+    } else {
+        match theme::style(Role::Panel).bg {
+            Some(bg) => Style::default().bg(bg),
+            None => return,
+        }
+    };
+    let buf = frame.buffer_mut();
+    let row = Rect::new(area.x, area.y, area.width, 1).intersection(buf.area);
+    for x in row.left()..row.right() {
+        let cell = &mut buf[(x, row.y)];
+        if matches!(cell.symbol(), "─" | "┌" | "┐") {
+            cell.reset();
+            cell.set_symbol(" ");
+        }
+        cell.set_style(fill);
+    }
+}
+
+/// A control on a pane's top border, drawn over a title band (§9.7): its
+/// cells cleared of the band and set on the panel, so a label reads the same
+/// on the focused band as off it. Outside the designed themes, `style` as
+/// it is.
+pub(crate) fn band_chip(frame: &mut Frame, rect: Rect, style: Style) -> Style {
+    if !bands() {
+        return style;
+    }
+    let buf = frame.buffer_mut();
+    let rect = rect.intersection(buf.area);
+    for y in rect.top()..rect.bottom() {
+        for x in rect.left()..rect.right() {
+            buf[(x, y)].reset();
+        }
+    }
+    match theme::style(Role::Panel).bg {
+        Some(bg) => style.bg(bg),
+        None => style,
+    }
+}
+
 fn draw_files(frame: &mut Frame, app: &mut App, area: Rect) {
     let focused =
         app.focus == Focus::Files && matches!(app.mode, Mode::Normal | Mode::Details { .. });
@@ -1092,6 +1167,7 @@ fn draw_files(frame: &mut Frame, app: &mut App, area: Rect) {
     let block = pane_block(title, focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    title_band(frame, area, focused);
     app.hits.push((area, Hit::Pane(Focus::Files)));
     let height = inner.height as usize;
     // The tree's default folds follow its height (a group folded where its
@@ -1899,6 +1975,85 @@ fn features_reach_words(app: &App, v: &harness_core::Verdict) -> String {
 
 /// A View's "Next: …" line and a blank line after it, when the node has
 /// one (pass 1 of the 2026-10-18 critique).
+/// The chat's proposal, under the Next line of the Features (Speed) view
+/// while one waits, so the person reads the draft before the editor opens:
+/// `The chat's proposal (3 features, 8 scenarios) — <its file>`, one line
+/// per scenario (`bench/default: <the chat's comment, else its
+/// arguments>`), then what Enter does. A proposal that does not read says
+/// so, and how to get another. Nothing when there is none.
+fn proposal_block(
+    app: &App,
+    kind: crate::app::features_edit::DraftKind,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let Some(preview) = app.proposal_preview(kind) else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    let p = match preview {
+        Ok(p) => p,
+        Err(why) => {
+            lines.extend(wrapped(
+                &format!(
+                    "⚠ The chat's proposal does not read: {} — ask the chat to propose again",
+                    display::line(&why)
+                ),
+                width,
+                attention(),
+            ));
+            lines.push(Line::from(""));
+            return lines;
+        }
+    };
+    // The path whole when the heading fits, else its last three parts (as
+    // the status line shortens it).
+    // Still too long: its end kept, the file's name in sight.
+    let head = format!("The chat's proposal ({}) — ", p.counts);
+    let room = width.saturating_sub(width_of(&head));
+    let path = if width_of(&p.path) <= room {
+        p.path.clone()
+    } else {
+        let short = short_path(&p.path);
+        let chars: Vec<char> = short.chars().collect();
+        let mut keep = chars.len();
+        while keep > 0
+            && width_of(&chars[chars.len() - keep..].iter().collect::<String>()) + 1 > room
+        {
+            keep -= 1;
+        }
+        if width_of(&short) <= room || keep == 0 {
+            short
+        } else {
+            format!(
+                "…{}",
+                chars[chars.len() - keep..].iter().collect::<String>()
+            )
+        }
+    };
+    lines.push(Line::from(clipped(
+        vec![Span::styled(head, bold()), Span::styled(path, label_role())],
+        width,
+    )));
+    for (id, does) in &p.rows {
+        lines.push(Line::from(clipped(
+            vec![Span::raw(format!("  {id}: ")), Span::raw(does.clone())],
+            width,
+        )));
+    }
+    let noun = kind.noun();
+    let enter = if app.has_own_file(kind) {
+        format!(
+            "Enter, then Edit from the chat's proposal… — opens it in your editor against your \
+             {noun} file"
+        )
+    } else {
+        format!("Enter: Write your {noun} file — opens it in your editor to change and save")
+    };
+    lines.extend(wrapped(&enter, width, Style::default()));
+    lines.push(Line::from(""));
+    lines
+}
+
 fn next_lines(app: &App, sel: &Selection, width: usize) -> Vec<Line<'static>> {
     let Some(next) = app.advice(sel) else {
         return Vec::new();
@@ -2027,10 +2182,7 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
             continue;
         }
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            format!("{title}:"),
-            section_role(),
-        )));
+        lines.push(Line::from(Span::styled(format!("{title}:"), bold())));
         for (unit, state) in picked {
             // Each item says why and what to do, not its state again.
             let word = match state {
@@ -2066,10 +2218,7 @@ fn summary(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<
             continue;
         }
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            format!("{title}:"),
-            section_role(),
-        )));
+        lines.push(Line::from(Span::styled(format!("{title}:"), bold())));
         let changed = picked.iter().any(|f| f.state != FileState::New);
         for f in picked {
             let (glyph, _) = files::file_label(&app.files, &f.state);
@@ -2259,6 +2408,11 @@ impl<'r> SpeedSection<'_, 'r> {
 fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> Vec<Line<'static>> {
     let model = &app.speed;
     let mut lines = next_lines(app, &Selection::Speed, width);
+    lines.extend(proposal_block(
+        app,
+        crate::app::features_edit::DraftKind::Workloads,
+        width,
+    ));
     match &model.group {
         speed::Group::NoFile => {
             lines.extend(wrapped(
@@ -2297,7 +2451,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
     lines.extend(wrapped(
         "Speed — your workloads, the C against the Rust in use",
         width,
-        section_role(),
+        bold(),
     ));
     for h in &model.header {
         lines.extend(wrapped(h, width, label_role()));
@@ -2342,7 +2496,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
         // Units measured alone (`--unit`): the C alone is not, yet.
         section
             .lines
-            .push(Line::from(Span::styled("The original C", section_role())));
+            .push(Line::from(Span::styled("The original C", bold())));
         section.lines.extend(wrapped(
             "not measured yet — Measure speed on this row measures the C alone; measuring one \
              unit does not",
@@ -2351,7 +2505,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
         ));
     } else {
         section.push(
-            Line::from(Span::styled("The original C", section_role())),
+            Line::from(Span::styled("The original C", bold())),
             None,
             speed::SideKey::C,
             &model.c_rows,
@@ -2369,7 +2523,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
             )
         };
         section.push(
-            Line::from(clipped(vec![Span::styled(heading, section_role())], width)),
+            Line::from(clipped(vec![Span::styled(heading, bold())], width)),
             None,
             speed::SideKey::AsItStands,
             &model.program_rows,
@@ -2381,10 +2535,7 @@ fn speed_view(app: &App, width: usize, links: &mut Vec<(usize, Selection)>) -> V
     }
     for u in &model.units {
         section.push(
-            Line::from(clipped(
-                vec![Span::styled(u.id.clone(), section_role())],
-                width,
-            )),
+            Line::from(clipped(vec![Span::styled(u.id.clone(), bold())], width)),
             Some(Selection::Unit(u.id.clone())),
             speed::SideKey::Unit(u.id.clone()),
             &u.rows,
@@ -2506,6 +2657,11 @@ fn features_view(
     links: &mut Vec<(usize, Selection)>,
 ) -> Vec<Line<'static>> {
     let mut lines = next_lines(app, &Selection::Features, width);
+    lines.extend(proposal_block(
+        app,
+        crate::app::features_edit::DraftKind::Features,
+        width,
+    ));
     let model = &app.features;
     match &model.group {
         featmap::Group::NoFile => {
@@ -2682,7 +2838,7 @@ fn features_view(
                     plural_s(never.len())
                 ),
                 width,
-                section_role(),
+                bold(),
             ));
             for (file, name) in never.iter().take(20) {
                 links.push((lines.len(), Selection::Function(file.clone(), name.clone())));
@@ -2902,7 +3058,7 @@ fn feature_view(
     }
     lines.push(Line::from(""));
     lines.extend(map_preface(app, width));
-    lines.push(Line::from(Span::styled("Scenarios", section_role())));
+    lines.push(Line::from(Span::styled("Scenarios", bold())));
     let program = app.snapshot.program_name.clone();
     for s in &f.scenarios {
         let mut argv = vec![program.clone()];
@@ -2967,10 +3123,7 @@ fn feature_view(
         }
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "Where its code lives",
-        section_role(),
-    )));
+    lines.push(Line::from(Span::styled("Where its code lives", bold())));
     if f.scenarios.iter().all(|s| s.record.is_none()) {
         lines.extend(wrapped(
             "  (not known — map the features)",
@@ -3039,10 +3192,7 @@ fn feature_view(
     }
     if app.features.features.len() >= 2 && app.features.complete {
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "Only this feature runs",
-            section_role(),
-        )));
+        lines.push(Line::from(Span::styled("Only this feature runs", bold())));
         if f.specific.is_empty() {
             lines.extend(wrapped(
                 "  everything it runs is also run by another feature",
@@ -3132,6 +3282,7 @@ fn draw_view(frame: &mut Frame, app: &mut App, area: Rect) {
     let block = pane_block(ellipsis(&view_title(app), room.max(4)), focused);
     let mut inner = block.inner(area);
     frame.render_widget(block, area);
+    title_band(frame, area, focused);
     app.hits.push((area, Hit::Pane(Focus::View)));
     // The journey line under the title, on every screen (§9.4): where the
     // person is among the eight stages.
@@ -3306,7 +3457,7 @@ fn draw_unit(frame: &mut Frame, app: &mut App, area: Rect, unit: &UnitView) {
             },
             width,
         ),
-        section_role(),
+        Style::default(),
     ));
     // Folded, it is the View's one row to act on: Enter there opens it.
     if !open && app.focus == Focus::View {
@@ -4100,7 +4251,7 @@ pub const HELP_MORE: &str = "↓ more: every key, the mouse, every mark, feature
 /// The Project view's first help page: its panes and keys, its marks,
 /// what each state means and what mapping does (§9.3; a tool's page would
 /// say ✓ is "in Rust").
-fn help_project_page(width: usize, chat: bool) -> Vec<Line<'static>> {
+fn help_project_page(width: usize, chat: bool, theme: &str) -> Vec<Line<'static>> {
     let mut rows = Vec::new();
     let tab = if chat {
         "the next pane: Project, the card, Chat"
@@ -4142,6 +4293,7 @@ fn help_project_page(width: usize, chat: bool) -> Vec<Line<'static>> {
         Style::default(),
     ));
     rows.extend(wrapped(HELP_FILES_WIDTH, width, label_role()));
+    rows.extend(wrapped(theme, width, label_role()));
     rows.push(Line::from(""));
     rows.extend(wrapped(
         "↓ more: every key, the mouse, the chat",
@@ -4151,7 +4303,7 @@ fn help_project_page(width: usize, chat: bool) -> Vec<Line<'static>> {
     rows
 }
 
-fn help_first_page(width: usize, chat: bool) -> Vec<Line<'static>> {
+fn help_first_page(width: usize, chat: bool, theme: &str) -> Vec<Line<'static>> {
     let mut rows = Vec::new();
     for (k, v) in HELP_FIRST_KEYS {
         let v = if *k == "Tab" && !chat {
@@ -4165,6 +4317,7 @@ fn help_first_page(width: usize, chat: bool) -> Vec<Line<'static>> {
         rows.extend(wrapped(&format!("{g:<7} {v}"), width, Style::default()));
     }
     rows.extend(wrapped(HELP_FILES_WIDTH, width, label_role()));
+    rows.extend(wrapped(theme, width, label_role()));
     rows.push(Line::from(""));
     rows.extend(wrapped(HELP_MORE, width, bold()));
     rows
@@ -4693,12 +4846,13 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
         // Scroll 0 is the first page alone; ↓ opens the rest, its scroll
         // one less (↑ at its top goes back to the first page).
         Mode::Help { scroll: 0 } => {
+            let theme_words = app.theme_chosen.words();
             // A short page: no wider than its longest line needs.
             let width = pct(area.width, 86).clamp(40, 78).min(area.width);
             let rows = if app.in_project_view() {
-                help_project_page(width.saturating_sub(2) as usize, app.chat_on)
+                help_project_page(width.saturating_sub(2) as usize, app.chat_on, &theme_words)
             } else {
-                help_first_page(width.saturating_sub(2) as usize, app.chat_on)
+                help_first_page(width.saturating_sub(2) as usize, app.chat_on, &theme_words)
             };
             let rect = centered(
                 area,
@@ -4821,11 +4975,7 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
             }
             if !v.inputs.features_skipped.is_empty() {
                 rows.push(Line::from(""));
-                rows.extend(wrapped(
-                    "Your scenarios that could not run:",
-                    inner,
-                    section_role(),
-                ));
+                rows.extend(wrapped("Your scenarios that could not run:", inner, bold()));
                 for entry in &v.inputs.features_skipped {
                     if let Some((f, sc, reason)) = harness_core::features::parse_skip(entry) {
                         rows.extend(wrapped(
@@ -4982,6 +5132,19 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
+/// `r` with one blank column taken on its left and/or right, in the
+/// designed themes (the panes stand apart, §9.7); as it is otherwise.
+fn apart(r: Rect, left: bool, right: bool) -> Rect {
+    if !bands() {
+        return r;
+    }
+    let take = u16::from(left) + u16::from(right);
+    if r.width <= take + 20 {
+        return r;
+    }
+    Rect::new(r.x + u16::from(left), r.y, r.width - take, r.height)
+}
+
 /// Draw the whole cockpit, recording the layout and the clickable regions.
 pub fn draw(frame: &mut Frame, app: &mut App) {
     theme::set(app.palette);
@@ -5045,6 +5208,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                     Constraint::Length(chat_w),
                 ])
                 .areas(main);
+            // One blank column on each side of the View, taken from it (§9.7).
+            let view = apart(view, true, true);
             draw_files(frame, app, files);
             draw_view(frame, app, view);
             chat_pane::draw_chat(frame, app, chat_area, true, false);
@@ -5053,6 +5218,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Length(files_w), Constraint::Min(20)])
                 .areas(main);
+            let right = apart(right, true, false);
             draw_files(frame, app, files);
             if chat && app.focus == Focus::Chat {
                 chat_pane::draw_chat(frame, app, right, false, true);
@@ -5227,6 +5393,83 @@ mod tests {
         out
     }
 
+    /// Where the section role may appear (docs/COCKPIT-WRAPPER-DESIGN.md
+    /// §9.7), by screen, beside the pane titles on every screen's top row
+    /// (Files or Project, the View's title, the chat's) and the frames and
+    /// titles of a dialog, a menu and the help. A pattern ending in `(` is a
+    /// heading with its count (`Units (11)`); one starting `──` the menu's
+    /// separator; any other is the whole heading.
+    const SECTION_ALLOWED: [(&str, &[&str]); 5] = [
+        (
+            "the tool's tree",
+            &["Units (", "Features (", "Speed", "Speed ("],
+        ),
+        ("the Project view's tree", &["Programs (", "Libraries ("]),
+        ("a View", &["Checks"]),
+        (
+            "the help",
+            &[
+                "Keys",
+                "States",
+                "Features",
+                "Speed",
+                "Chat",
+                "What the states mean",
+            ],
+        ),
+        ("a menu", &["──"]),
+    ];
+
+    /// `text` (a run in the section colour) is on [`SECTION_ALLOWED`]; a
+    /// group with nothing in it yet (`Features (none yet)`, `Speed — not
+    /// set up`) is a row, never.
+    fn section_allowed(text: &str) -> bool {
+        // A focused pane's frame shares the colour: its edge is not the run's.
+        let text = text
+            .trim_start_matches(['│', ' '])
+            .trim_end_matches(['│', ' ']);
+        if text.contains("none yet") || text.contains("not set up") {
+            return false;
+        }
+        SECTION_ALLOWED
+            .iter()
+            .flat_map(|(_, patterns)| patterns.iter())
+            .any(|p| {
+                if p.ends_with('(') || p.starts_with("──") {
+                    text.starts_with(p)
+                } else {
+                    text == *p
+                }
+            })
+    }
+
+    #[test]
+    fn the_section_allow_list_says_no_to_rows_and_the_journey() {
+        for ok in [
+            "Units (11)",
+            "Features (7)",
+            "Speed",
+            "Speed (C only)",
+            "Programs (3) · 1 accepted",
+            "Checks",
+            "── uses a model ──",
+        ] {
+            assert!(section_allowed(ok), "{ok}");
+        }
+        for no in [
+            "Features (none yet)",
+            "Speed — not set up",
+            "Step 6 of 8: Test program",
+            "◂ Back to the project view",
+            "▸ C source (12 lines)",
+            "About: u-cache",
+            "Needs attention:",
+            "Scenarios",
+        ] {
+            assert!(!section_allowed(no), "{no}");
+        }
+    }
+
     /// The colour rules on one rendered screen, in `palette`: nothing dims or
     /// blinks, no dark grey, no background; every colour on screen is one of
     /// the palette's roles (in mono: none); every good, bad or attention run
@@ -5361,12 +5604,23 @@ mod tests {
         for y in 0..buffer.area.height {
             let cells = row(y);
             // A run starts its line: only frame, blank or a frame's rule
-            // before it, back to the pane's edge.
+            // before it, back to the pane's edge (a title band's edge: where
+            // the band's background or reverse ends, §9.7).
             let starts_line = |x: u16| {
+                let look = |x: u16| {
+                    let c = &buffer[(x, y)];
+                    (c.bg, c.modifier.contains(Modifier::REVERSED))
+                };
+                let band = look(x);
                 cells[..usize::from(x)]
                     .iter()
+                    .enumerate()
                     .rev()
-                    .take_while(|c| !matches!(c.as_str(), "│" | "┌" | "└" | "┐" | "┘"))
+                    .take_while(|(i, c)| {
+                        !matches!(c.as_str(), "│" | "┌" | "└" | "┐" | "┘")
+                            && look(*i as u16) == band
+                    })
+                    .map(|(_, c)| c)
                     .all(|c| matches!(c.as_str(), " " | "─" | "▾" | "▸"))
             };
             for r in runs(buffer, y) {
@@ -5399,6 +5653,13 @@ mod tests {
                         starts_line(x) && !next_step,
                         "{}",
                         at("the section colour off a heading or a pane title")
+                    );
+                    // Only where §9.7 allows it: a pane's title (the top
+                    // row) or a heading on the allow-list.
+                    assert!(
+                        y == 0 || section_allowed(text),
+                        "{}",
+                        at("the section colour on what is not a pane title or a group heading")
                     );
                 }
                 if Some(r.fg) == own(Role::Notice) {
@@ -5514,6 +5775,36 @@ mod tests {
     /// with their styles (the text goldens hold the words; these hold the
     /// colours): the rules hold in every theme, and a change of colour is a
     /// reviewed diff.
+    #[test]
+    fn the_designed_themes_draw_title_bands_and_a_gap() {
+        for theme in Theme::ALL {
+            let mut app = app_of("targets/zopfli", "theme-bands");
+            app.palette = Palette::of(theme);
+            let buffer = render(&mut app, 80, 30);
+            let files = files_width(&app, 80);
+            let (corner, view_corner) = (&buffer[(0, 0)], &buffer[(files + 1, 0)]);
+            if matches!(theme, Theme::Dark | Theme::Light) {
+                let panel = theme.bg(Role::Panel).unwrap();
+                // The focused pane (Files): its band in the section colour,
+                // reversed, across its width.
+                assert_eq!(corner.symbol(), " ", "{}", theme.name());
+                assert!(corner.modifier.contains(Modifier::REVERSED));
+                assert_eq!(corner.fg, theme.fg(Role::Section).unwrap());
+                // The View's band on the panel; one blank column before it.
+                assert_eq!(view_corner.symbol(), " ");
+                assert_eq!(view_corner.bg, panel, "{}", theme.name());
+                let gap = &buffer[(files, 5)];
+                assert_eq!((gap.symbol(), gap.bg), (" ", Color::Reset));
+                assert_eq!(buffer[(files + 1, 5)].symbol(), "│");
+            } else {
+                // Unchanged: the plain frame, the panes side by side.
+                assert_eq!(corner.symbol(), "┌", "{}", theme.name());
+                assert_eq!(buffer[(files, 0)].symbol(), "┌");
+                assert_eq!(corner.bg, Color::Reset);
+            }
+        }
+    }
+
     #[test]
     fn three_screens_in_four_themes() {
         for theme in Theme::ALL {
@@ -5859,6 +6150,127 @@ mod tests {
         assert!(
             screen.contains("not run: not configured for this target (add"),
             "{screen}"
+        );
+    }
+
+    /// A proposal as harness-mcp writes it: its header, then the chat's
+    /// text, a one-line why above each scenario but the last.
+    const PROPOSED: &str =
+        "# The chat's proposal for your features file, written by m on 2026-10-20.\n\n\
+schema_version = 1\n\n[[feature]]\nid = \"gzip\"\nname = \"Compress to gzip\"\n\n\
+[[feature]]\nid = \"help\"\nname = \"Show the help\"\n\n\
+# Compresses English text to gzip.\n[[scenario]]\nfeature = \"gzip\"\nid = \"text\"\n\
+args = [\"-c\", \"{input}\"]\ninput = \"sample:text\"\n\n\
+# Compresses nothing at all.\n[[scenario]]\nfeature = \"gzip\"\nid = \"empty\"\n\
+args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
+[[scenario]]\nfeature = \"help\"\nid = \"flag\"\nargs = [\"-h\"]\n";
+
+    fn propose(app: &App, workloads: bool, text: &str) {
+        let kind = if workloads {
+            crate::app::features_edit::DraftKind::Workloads
+        } else {
+            crate::app::features_edit::DraftKind::Features
+        };
+        let path = kind.proposed_path(&app.config).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, text).unwrap();
+    }
+
+    /// The person saw only the chat's summary and asked where the draft
+    /// was: the Features view shows the proposal under its Next line —
+    /// its counts and file, one line per scenario (the chat's why, else its
+    /// arguments), and what Enter opens; the hint line says the same.
+    #[test]
+    fn the_features_view_shows_the_chats_proposal() {
+        let mut app = crate::app::tests::app_of_without_features("targets/zopfli", "proposed");
+        app.select(Selection::Features);
+        let none = text(&render(&mut app, 120, 40));
+        assert!(!none.contains("The chat's proposal"), "{none}");
+        assert_eq!(
+            app.proposal_hint(crate::app::features_edit::DraftKind::Features),
+            None
+        );
+        propose(&app, false, PROPOSED);
+        let buffer = render(&mut app, 120, 40);
+        golden("features-proposed.txt", &app, &buffer);
+        // Too long for this View: the file's end kept.
+        assert!(text(&buffer).contains("3 scenarios) — …atures/features.proposed.toml│"));
+        let screen = text(&render(&mut app, 160, 40));
+        for line in [
+            "The chat's proposal (2 features, 3 scenarios) — migration/features/features.proposed.toml",
+            "  gzip/text: Compresses English text to gzip.",
+            "  gzip/empty: Compresses nothing at all.",
+            "  help/flag: -h",
+            "Enter: Write your features file — opens it in your editor to change and save",
+        ] {
+            assert!(screen.contains(line), "{line}\n{screen}");
+        }
+        // Under the Next line.
+        let next = screen.find("Next:").unwrap();
+        assert!(screen.find("The chat's proposal").unwrap() > next);
+        assert_eq!(
+            app.proposal_hint(crate::app::features_edit::DraftKind::Features)
+                .as_deref(),
+            Some(
+                "The chat proposed 2 features; Write your features file opens them as your draft."
+            )
+        );
+        // A proposal that does not read: said, with the way out.
+        propose(
+            &app,
+            false,
+            "schema_version = 1\n[[scenario]]\nfeature = \"x\"\n",
+        );
+        let broken = text(&render(&mut app, 160, 40));
+        assert!(
+            broken.contains("The chat's proposal does not read:")
+                && broken.contains("propose again"),
+            "{broken}"
+        );
+        assert!(
+            !broken.contains("Enter: Write your features file —"),
+            "{broken}"
+        );
+        assert_eq!(
+            app.proposal_hint(crate::app::features_edit::DraftKind::Features),
+            None
+        );
+        // Not UTF-8: the same, in the opening's words.
+        propose(&app, false, "\u{FFFD}");
+        let path = crate::app::features_edit::DraftKind::Features
+            .proposed_path(&app.config)
+            .unwrap();
+        std::fs::write(&path, [0xff, 0xfe, 0x00]).unwrap();
+        let screen = text(&render(&mut app, 160, 40));
+        assert!(screen.contains("not UTF-8 text"), "{screen}");
+    }
+
+    /// The same block on the Speed view, for a workloads proposal.
+    #[test]
+    fn the_speed_view_shows_the_chats_workloads_proposal() {
+        let mut app = crate::app::tests::app_of_without_features("targets/zopfli", "wl-proposed");
+        app.select(Selection::Speed);
+        propose(
+            &app,
+            true,
+            "# The chat's proposal for your workloads file.\n\nschema_version = 1\n\n\
+             # A long text, timed whole.\n[[workload]]\nid = \"big\"\n\
+             args = [\"-c\", \"{input}\"]\ninput = \"src/zopfli/deflate.c\"\n",
+        );
+        let screen = text(&render(&mut app, 160, 40));
+        for line in [
+            "The chat's proposal (1 workload) — migration/perf/workloads.proposed.toml",
+            "  big: A long text, timed whole.",
+            "Enter: Write your workloads file — opens it in your editor to change and save",
+        ] {
+            assert!(screen.contains(line), "{line}\n{screen}");
+        }
+        assert_eq!(
+            app.proposal_hint(crate::app::features_edit::DraftKind::Workloads)
+                .as_deref(),
+            Some(
+                "The chat proposed 1 workload; Write your workloads file opens them as your draft."
+            )
         );
     }
 
@@ -7402,8 +7814,8 @@ mod tests {
     /// opens the rest, ↑ at its top goes back.
     #[test]
     fn help_opens_on_a_short_first_page() {
-        let page = help_first_page(100, true);
-        assert!(page.len() < 14, "{} lines", page.len());
+        let page = help_first_page(100, true, "theme: dark (from --theme)");
+        assert!(page.len() < 15, "{} lines", page.len());
         let words: Vec<String> = page
             .iter()
             .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
@@ -7422,6 +7834,7 @@ mod tests {
                 "✓       done: in Rust, and the judge's checks pass",
                 "⚠       needs attention: the View says why and what to do",
                 HELP_FILES_WIDTH,
+                "theme: dark (from --theme)",
                 "",
                 "↓ more: every key, the mouse, every mark, features, speed, the chat",
             ]

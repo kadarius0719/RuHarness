@@ -96,9 +96,11 @@ fn border_buttons(
             break;
         }
         x -= w;
+        let rect = Rect::new(x, y, w, 1);
+        let style = band_chip(frame, rect, *style);
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(label.clone(), *style))),
-            Rect::new(x, y, w, 1),
+            Paragraph::new(Line::from(Span::styled(label.clone(), style))),
+            rect,
         );
         app.hits.push((Rect::new(x, y, w, 1), Hit::Chat(key)));
         x -= 1;
@@ -206,6 +208,7 @@ pub fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect, column: bool, str
     let block = pane_block(title, focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    title_band(frame, area, focused);
     app.hits.push((area, Hit::Pane(Focus::Chat)));
     let end = if strip {
         tab_strip(frame, app, area, Focus::Chat)

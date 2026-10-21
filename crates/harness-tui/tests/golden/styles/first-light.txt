@@ -1,194 +1,190 @@
-┌ Files ───────────────┐┌ harness-tui-theme-first-0000000000 · 0 of 13 C files ┐
-  @0-0 fg 25 BOLD "┌"
-  @1-7 fg 25 BOLD | REVERSED "Files"
-  @8-23 fg 25 BOLD "───────────────┐"
-  @24-24 fg 244 NONE "┌"
-  @25-78 fg 25 BOLD "harness-tui-theme-first-0000000000 · 0 of 13 C files"
-  @79-79 fg 244 NONE "┐"
-│▾ harn…000 ✓0/13 (+1 …││Step 6 of 8: Test program 1/4                         │
+  Files                    harness-tui-theme-first-0000000000 · 0 of 13 C files
+  @0-23 fg 25 BOLD | REVERSED "Files"
+  @26-78 fg 25 bg 254 BOLD "harness-tui-theme-first-0000000000 · 0 of 13 C files"
+│▾ harn…000 ✓0/13 (+1 …│ │Step 6 of 8: Test program 1/4                        │
   @0-0 fg 25 BOLD "│"
   @1-2 fg 238 BOLD | REVERSED "▾"
-  @3-10 fg 25 BOLD | REVERSED "harn…000"
+  @3-11 fg - BOLD | REVERSED "harn…000"
   @12-22 fg 240 BOLD | REVERSED "✓0/13 (+1 …"
   @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
-  @25-37 fg 238 NONE "Step 6 of 8:"
-  @38-53 fg 23 BOLD "Test program 1/4"
+  @25-25 fg 244 NONE "│"
+  @39-54 fg - BOLD "Test program 1/4"
   @79-79 fg 244 NONE "│"
-│  ▾ Units (11)        ││Next: 3 of the 11 can move to Rust now — open u-cache:│
+│  ▾ Units (11)        │ │Next: 3 of the 11 can move to Rust now — open        │
   @0-0 fg 25 BOLD "│"
   @1-4 fg 238 NONE "▾"
   @5-14 fg 25 BOLD "Units (11)"
   @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
-  @25-29 fg 23 BOLD "Next:"
-  @30-78 fg - BOLD "3 of the 11 can move to Rust now — open u-cache:"
+  @25-25 fg 244 NONE "│"
+  @26-30 fg 23 BOLD "Next:"
+  @31-70 fg - BOLD "3 of the 11 can move to Rust now — open"
   @79-79 fg 244 NONE "│"
-│    ▸ ✓ u001…inen done││Enter                                                 │
+│    ▸ ✓ u001…inen done│ │u-cache: Enter                                       │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 238 NONE "▸"
   @7-8 fg 22 NONE "✓"
   @19-22 fg 240 NONE "done"
   @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
-  @25-29 fg - BOLD "Enter"
+  @25-25 fg 244 NONE "│"
+  @26-39 fg - BOLD "u-cache: Enter"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-c…he no test││                                                      │
+│    ▸ ◇ u-c…he no test│ │                                                     │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 238 NONE "▸"
   @7-8 fg 240 NONE "◇"
   @16-22 fg 240 NONE "no test"
   @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
+  @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-hash no test││26 files scanned                                      │
+│    ▸ ◇ u-hash no test│ │26 files scanned                                     │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 238 NONE "▸"
   @7-8 fg 240 NONE "◇"
   @16-22 fg 240 NONE "no test"
   @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
+  @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ · u-lz77 stays C││Units (11): 1 ✓ done · 3 ◇ no test program · 7 · stays│
+│    ▸ · u-lz77 stays C│ │Units (11): 1 ✓ done · 3 ◇ no test program · 7 ·     │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 238 NONE "▸"
   @7-8 fg 240 NONE "·"
   @16-22 fg 240 NONE "stays C"
   @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
-  @25-35 fg 25 BOLD "Units (11):"
+  @25-25 fg 244 NONE "│"
+  @26-36 fg - BOLD "Units (11):"
   @79-79 fg 244 NONE "│"
-│    ▸ · u-tree stays C││C                                                     │
+│    ▸ · u-tree stays C│ │stays C                                              │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 238 NONE "▸"
   @7-8 fg 240 NONE "·"
   @16-22 fg 240 NONE "stays C"
   @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
+  @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ · u-b…ze stays C││                                                      │
+│    ▸ · u-b…ze stays C│ │                                                     │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 238 NONE "▸"
   @7-8 fg 240 NONE "·"
   @16-22 fg 240 NONE "stays C"
   @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
+  @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ · u-g…er stays C││Features: 7 — 5 hold so far, 2 still all C            │
+│    ▸ · u-g…er stays C│ │Features: 7 — 5 hold so far, 2 still all C           │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 238 NONE "▸"
   @7-8 fg 240 NONE "·"
   @16-22 fg 240 NONE "stays C"
   @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
-  @25-33 fg 25 BOLD "Features:"
+  @25-25 fg 244 NONE "│"
+  @26-34 fg - BOLD "Features:"
   @79-79 fg 244 NONE "│"
-│    ▸ ◇ u-util no test││                                                      │
+│    ▸ ◇ u-util no test│ │                                                     │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 238 NONE "▸"
   @7-8 fg 240 NONE "◇"
   @16-22 fg 240 NONE "no test"
   @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
+  @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ · u-z…er stays C││                                                      │
+│    ▸ · u-z…er stays C│ │                                                     │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 238 NONE "▸"
   @7-8 fg 240 NONE "·"
   @16-22 fg 240 NONE "stays C"
   @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
+  @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ · u-z…ib stays C││                                                      │
+│    ▸ · u-z…ib stays C│ │                                                     │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 238 NONE "▸"
   @7-8 fg 240 NONE "·"
   @16-22 fg 240 NONE "stays C"
   @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
+  @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    ▸ · u-z…in stays C││                                                      │
+│    ▸ · u-z…in stays C│ │                                                     │
   @0-0 fg 25 BOLD "│"
   @1-6 fg 238 NONE "▸"
   @7-8 fg 240 NONE "·"
   @16-22 fg 240 NONE "stays C"
   @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
+  @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│  ▾ Features (7)      ││                                                      │
+│  ▾ Features (7)      │ │                                                     │
   @0-0 fg 25 BOLD "│"
   @1-4 fg 238 NONE "▾"
   @5-16 fg 25 BOLD "Features (7)"
   @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
+  @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      ◉ Compres…o gzip││                                                      │
+│      ◉ Compres…o gzip│ │                                                     │
   @0-0 fg 25 BOLD "│"
   @7-8 fg 22 NONE "◉"
   @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
+  @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      ◉ Compres…o zlib││                                                      │
+│      ◉ Compres…o zlib│ │                                                     │
   @0-0 fg 25 BOLD "│"
   @7-8 fg 22 NONE "◉"
   @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
+  @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      ◉ Compres…eflate││                                                      │
+│      ◉ Compres…eflate│ │                                                     │
   @0-0 fg 25 BOLD "│"
   @7-8 fg 22 NONE "◉"
   @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
+  @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      ◉ Say wha…t does││                                                      │
+│      ◉ Say wha…t does│ │                                                     │
   @0-0 fg 25 BOLD "│"
   @7-8 fg 22 NONE "◉"
   @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
+  @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      ◉ Compres…uickly││                                                      │
+│      ◉ Compres…uickly│ │                                                     │
   @0-0 fg 25 BOLD "│"
   @7-8 fg 22 NONE "◉"
   @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
+  @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      ◌ Show the help ││                                                      │
+│      ◌ Show the help │ │                                                     │
   @0-0 fg 25 BOLD "│"
   @7-8 fg 240 NONE "◌"
   @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
+  @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      ◌ Report …g file││                                                      │
+│      ◌ Report …g file│ │                                                     │
   @0-0 fg 25 BOLD "│"
   @7-8 fg 240 NONE "◌"
   @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
+  @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│    Speed — not set up││                                                      │
+│    Speed — not set up│ │                                                     │
   @0-0 fg 25 BOLD "│"
-  @5-23 fg 25 BOLD "Speed — not set up│"
-  @24-24 fg 244 NONE "│"
+  @10-22 fg 238 NONE "— not set up"
+  @23-23 fg 25 BOLD "│"
+  @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│  ▸ src/ ✓0/13 (+1 ✓?)││                                                      │
+│  ▸ src/ ✓0/13 (+1 ✓?)│ │                                                     │
   @0-0 fg 25 BOLD "│"
   @1-4 fg 238 NONE "▸"
   @10-22 fg 240 NONE "✓0/13 (+1 ✓?)"
   @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
+  @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│                      ││                                                      │
+│                      │ │                                                     │
   @0-0 fg 25 BOLD "│"
   @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
+  @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│                      ││                                                      │
+│                      │ │                                                     │
   @0-0 fg 25 BOLD "│"
   @23-23 fg 25 BOLD "│"
-  @24-24 fg 244 NONE "│"
+  @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-└──────────────────────┘└──────────────────────────────────────────────────────┘
+└──────────────────────┘ └─────────────────────────────────────────────────────┘
   @0-23 fg 25 BOLD "└──────────────────────┘"
-  @24-79 fg 244 NONE "└──────────────────────────────────────────────────────┘"
+  @25-79 fg 244 NONE "└─────────────────────────────────────────────────────┘"
  Ready — ↑↓ to choose a row, Enter for what you can do
   @0-53 fg 240 NONE "Ready — ↑↓ to choose a row, Enter for what you can do"
 

@@ -73,12 +73,13 @@ The review cockpit over a target's migration ledger. Every write is a spawned
   --no-mouse            start with the mouse off (m in Help turns it on): for
                         a terminal whose clicks print odd characters, or to
                         select text with the mouse as usual
-  --theme NAME          the colours: terminal (the default: your terminal's own
-                        blue for sections, cyan for the next step, magenta for
-                        notices, green, red and yellow for states, nothing
-                        dim); dark or light
-                        (designed for a dark or a white background: try one when
-                        text is faint or blends in); mono (no colour: bold,
+  --theme NAME          the colours: dark or light (designed for a dark or a
+                        white background; the default is the one that fits
+                        your terminal's background, which the cockpit asks
+                        for, else COLORFGBG says); terminal (your terminal's
+                        own blue, cyan, magenta, green, red and yellow: the
+                        earlier look, and the default when the background is
+                        unknown); mono (no colour: bold,
                         underline and reverse carry everything). Also
                         RUHARNESS_THEME=NAME; NO_COLOR picks mono. It beats the
                         settings file, ~/Library/Application Support/
@@ -154,7 +155,7 @@ fn parse_args() -> Result<Args, String> {
             "--theme" => {
                 let name = value("--theme")?.to_string_lossy().into_owned();
                 // Checked here, so a bad name is refused before anything starts.
-                harness_tui::theme::Theme::choose(Some(&name), None, |_| None)?;
+                harness_tui::theme::Theme::choose(Some(&name), None, |_| None, || None)?;
                 args.theme = Some(name);
             }
             "--no-chat" => args.chat = false,
@@ -1046,9 +1047,12 @@ fn main() -> ExitCode {
         }
     };
     // The colours: --theme, else RUHARNESS_THEME, else cockpit.toml's
-    // theme, else mono under NO_COLOR, else the terminal's own; then the
-    // file's per-role colours. What the file gets wrong is said, by name,
-    // and the default used.
+    // theme, else mono under NO_COLOR, else dark or light from the
+    // terminal's answer to the background query (asked only then: raw mode
+    // on for 150 ms, before the event reader exists; §9.7), else
+    // COLORFGBG's background, else the terminal's own; then the file's
+    // per-role colours. What the file gets wrong is said, by name, and the
+    // default used.
     let env = |k: &str| std::env::var(k).ok();
     let settings = harness_tui::theme::config_path(env)
         .map(|p| harness_tui::theme::read_settings(&p))
@@ -1056,14 +1060,17 @@ fn main() -> ExitCode {
     for why in &settings.refused {
         eprintln!("harness-tui: {why}");
     }
-    let palette =
-        match harness_tui::theme::Theme::choose(args.theme.as_deref(), settings.theme, env) {
-            Ok(theme) => settings.apply(theme),
+    let chosen =
+        match harness_tui::theme::Theme::choose(args.theme.as_deref(), settings.theme, env, || {
+            harness_tui::background::query(harness_tui::background::TIMEOUT)
+        }) {
+            Ok(chosen) => chosen,
             Err(why) => {
                 eprintln!("harness-tui: {why}");
                 return ExitCode::from(2);
             }
         };
+    let palette = settings.apply(chosen.theme);
     // Every hint the cockpit shows carries `--target` when the person
     // started it on another folder.
     harness_core::runtime_view::set_hint_target(&args.target);
@@ -1162,6 +1169,7 @@ fn main() -> ExitCode {
     }
     app.mouse = args.mouse;
     app.palette = palette;
+    app.theme_chosen = chosen;
     app.files_width = settings.files_width;
     for why in &settings.refused {
         app.say(why);

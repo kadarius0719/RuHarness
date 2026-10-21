@@ -5,7 +5,7 @@
   @31-55 fg LightBlue BOLD "liblzg · not mapped yet"
 │Map the project             ││Map ○ · Configure · Accept program · then: scan, plan, and each piece                   │
   @0-0 fg LightBlue BOLD "│"
-  @1-15 fg LightBlue BOLD | REVERSED "Map the project"
+  @1-15 fg - BOLD | REVERSED "Map the project"
   @29-29 fg LightBlue BOLD "│"
   @31-35 fg Cyan BOLD "Map ○"
 │                            ││Next: Map the project — Enter                                                           │

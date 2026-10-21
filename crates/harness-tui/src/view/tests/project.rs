@@ -876,7 +876,12 @@ fn the_focused_pane_has_the_section_coloured_frame() {
         app.palette = crate::theme::Palette::of(theme);
         let palette = app.palette;
         let buffer = render(&mut app, 120, 30);
-        let x = crate::view::files_width(&app, 120);
+        // The designed themes keep one blank column between the panes (§9.7).
+        let gap = u16::from(matches!(
+            theme,
+            crate::theme::Theme::Dark | crate::theme::Theme::Light
+        ));
+        let x = crate::view::files_width(&app, 120) + gap;
         let (left, right) = (&buffer[(0, 1)], &buffer[(x, 1)]);
         assert_eq!(left.symbol(), "│");
         assert_eq!(right.symbol(), "│");
@@ -932,7 +937,7 @@ fn the_help_says_what_the_states_mean() {
         assert!(screen.contains(words), "{words}\n{screen}");
     }
     // Not on a tool's screen.
-    let help: String = super::super::help_first_page(1000, true)
+    let help: String = super::super::help_first_page(1000, true, "")
         .iter()
         .map(|l| l.to_string() + "\n")
         .collect();

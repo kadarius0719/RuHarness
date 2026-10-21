@@ -180,14 +180,15 @@ impl Journey {
         spans
     }
 
-    /// The folded line, styled: `Step 6 of 8: Test program`, or every stage
-    /// shown done.
+    /// The folded line, styled: `Step 6 of 8: Test program` (plain, the
+    /// stage's name bold: docs/COCKPIT-WRAPPER-DESIGN.md §9.7), or every
+    /// stage shown done.
     pub fn short_spans(&self) -> Vec<Span<'static>> {
         let label = theme::style(Role::Label);
         match self.current() {
             Some((n, step)) => vec![
-                Span::styled(format!("Step {n} of {}: ", STAGES.len()), label),
-                Span::styled(Self::name_of(step), theme::style(Role::Accent)),
+                Span::raw(format!("Step {n} of {}: ", STAGES.len())),
+                Span::styled(Self::name_of(step), theme::style(Role::Heading)),
             ],
             None if self.tail == Some(PROJECT_THEN) => vec![
                 Span::raw("Map, Configure and Accept program "),
@@ -457,6 +458,10 @@ mod tests {
         let j = Journey::of(&[true, true, false], [None; 8], None, Some(PROJECT_THEN));
         let words = |s: Vec<Span>| s.iter().map(|s| s.content.to_string()).collect::<String>();
         assert_eq!(words(j.spans(200, 99)), "Step 3 of 8: Accept program");
+        // Folded: plain, the stage's name bold, no colour (§9.7).
+        let short = j.short_spans();
+        assert_eq!(short[0].style, ratatui::style::Style::default());
+        assert_eq!(short[1].style, theme::style(Role::Heading));
         assert_eq!(words(j.spans(20, 200)), "Step 3 of 8: Accept program");
         assert_eq!(
             words(j.spans(200, 100)),
