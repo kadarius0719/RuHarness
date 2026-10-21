@@ -860,6 +860,8 @@ about the harness. **One line.** The Next step is one short line: a verb phrase 
 
 ### 9.2 Colours and themes (2026-10-19)
 
+*Status (2026-10-20): the default is no longer the terminal theme; §9.7 chooses dark or light from the terminal's background, and keeps `terminal` as a choice.*
+
 The person found text hard to read: some of it blended into the terminal. The cockpit had drawn
 in the terminal's named colours (yellow in 41 places, decoratively as often as for a state), dark
 grey and dim text. It now draws through one palette of named roles
@@ -1200,6 +1202,60 @@ proposal as the draft with the dialog's words; the proposal removed after a save
 with a proposal; the brief's syntax sections present. Docs: the cockpit and features topics, the
 models topic (the chat can propose features and workloads), SCHEMAS (the two proposal files),
 CHAT-PANE-DESIGN's brief summary, the guide where Part 8/9 quote the Features menu.
+
+### 9.7 A readable default: the theme chosen from the terminal's background; panes that look like places; fewer blue things (2026-10-20)
+
+The person, two days into the colour work, with the terminal theme on a green-on-black profile:
+"I still think the blue is hard to read … maybe we need to default to a different theme out of
+the box? One that is easier to read, with contrasting text, and also makes the logical separation
+of each area." The terminal theme (§9.2, their own idea the day before) hands the choice to the
+terminal's sixteen colours, and on most profiles ANSI blue — plain or bright — is the one colour
+with poor contrast on black. The designed palettes were contrast-checked for exactly this; they
+were not the default because the cockpit did not know whether the page was dark or light. It can
+ask.
+
+- **The default theme is chosen from the terminal's background.** The precedence stays:
+  `--theme`, `RUHARNESS_THEME`, `cockpit.toml`, `NO_COLOR` (mono). With none of them, the cockpit
+  asks the terminal for its background colour before the first frame — the standard query
+  `ESC ] 11 ; ? BEL` written to the tty once raw mode is on, answered within 150 ms as
+  `ESC ] 11 ; rgb:RRRR/GGGG/BBBB` followed by `BEL` or `ESC \` (macOS Terminal, iTerm2, kitty,
+  Alacritty, WezTerm, VS Code and most others answer; a terminal that does not simply stays
+  silent). The answer's relative luminance under 0.5 → `dark`; else → `light`. No answer, or no
+  tty: `COLORFGBG` when set (`<fg>;<bg>`, a background of 0–6 or 8 → dark, else light), else
+  `terminal`, as today. The reply is read as raw bytes from the tty with a timeout, before the
+  event reader starts, and a partial reply is drained so no byte reaches the keys. `--theme
+  terminal` keeps today's behaviour for anyone whose terminal theme they prefer. The help's first
+  page says which theme is on and why: "theme: dark (from your terminal's background — `--theme`
+  or cockpit.toml to choose)".
+- **The designed dark palette is now what most people see.** Its roles stand (§9.2, §9.4) and
+  the contrast test stands; section 75 (a light blue, 7:1 on #1e1e1e) is what replaces the ANSI
+  blue the person found hard. Nothing else in the palettes changes in this pass.
+- **Panes that look like places.** In the designed themes each pane's top border row is a title
+  band: the title's row filled across the pane's width with the panel colour (dark 237, light
+  254), the title bold on it; the focused pane's band is the section colour with the title
+  reversed (the tab-like look the chat's `View ─ Chat` strip already has). Unfocused borders stay
+  the border role; the focused border the section colour, as §9.3. One blank column separates
+  the panes. The terminal and mono themes keep today's titles (reverse for the focused one).
+  The dialog and the menu are unchanged (§9.4's panel and backdrop).
+- **Fewer blue things.** The section role is for pane titles and group headings only: `Files`,
+  the View's title, `Units (n)`, `Features (n)`, `Speed`, `Programs (n)`, `Libraries (n)`,
+  `Checks`, the chat's title. Everything else that borrows it today goes back to plain text:
+  the journey line's stage names (plain; the current stage in the accent, done ones in good, as
+  §9.4), `Step 6 of 8: Test program` (plain, the stage name bold), `◂ Back to the project view`
+  (plain), `▸ C source (…)` (plain), the `Features (none yet)` and `Speed — not set up` rows
+  (rows, not headings: plain, the state word in the label role), the chat's `About:` line (label
+  role). The colour-rules test gains the list of where the section role may appear, by screen,
+  and fails on any other use.
+
+**Tests.** The reply parser (`rgb:1e1e/1e1e/1e1e`, `rgb:ffff/ffff/ffff`, `rgb:1e/1e/1e`,
+`#1e1e1e`, a truncated reply, garbage) and the luminance rule; the precedence with the query
+mocked (flag, env, file, NO_COLOR, answer dark, answer light, no answer with and without
+COLORFGBG); the live query behind a test that skips without a tty; the title bands' styles per
+theme (goldens: the style goldens gain the focused and unfocused bands); the section-role
+allow-list. Docs: the cockpit topic (the default is chosen from your terminal; `--theme
+terminal` for the old look; what the bands mean), README's flag line, TUTORIAL's colours
+paragraph, SCHEMAS's mirror; §9.2's "terminal is the default" sentence gets a status line
+pointing here.
 
 ## 10. The chat pane
 
