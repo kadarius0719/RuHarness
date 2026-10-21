@@ -1226,6 +1226,25 @@ wrong type, a duplicate or unknown id is refused with its key path — so **ever
 `schema_version`** (an exception to the pass-over-unknown-fields rule). A file that cannot be
 used is a value on every read path (the snapshot's `Invalid`), never an error.
 
+## `migration/features/features.proposed.toml` and `migration/perf/workloads.proposed.toml` (the chat's proposals)
+
+Written only by harness-mcp's cockpit-mode tools `harness_features_propose {model, text}` and
+`harness_workloads_propose {model, text}` (docs/COCKPIT-WRAPPER-DESIGN.md §9.6), beside the
+person's file in the same ledger folder (a tool's under `migration/tools/<id>/`). The text is
+checked first by the person's file's own loader (`features::parse`, `workloads::parse`: the
+check `features save` / `perf save` runs) and refused with its message when it does not
+validate; the file is then a header comment — "The chat's proposal for your features file,
+written by <model> on <YYYY-MM-DD>", and what the person does with it — followed by the chat's
+text as sent, so it is itself a valid file of its kind. At most the file's own cap (64 KiB),
+header included; written atomically; never through a link (each folder on the way is checked,
+made when missing, and an existing proposal must be a regular file); refused when the ledger was
+made elsewhere, on the Project view (no tool open), and — by the cockpit's permission check —
+while a draft of the person's of that file is kept, or under a model other than the chat's.
+Nothing reads a proposal but the cockpit: **Write your features file** (with no file) or **Edit
+from the chat's proposal…** (with one) opens it as the person's draft, read with the starter's
+safety (a regular file, the cap, UTF-8), and after a successful save the cockpit removes it while
+it is still the text the draft started from. The CLI neither reads nor writes these files.
+
 ## `migration/features/map.json` (`ruharness-features-map` v1, written by `features map`)
 
 `{schema, schema_version, inputs {facts, features, program, platform, probe?}, unwatched [[file,

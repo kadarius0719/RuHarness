@@ -33,6 +33,10 @@ On liblzg it shows: compressing a file runs `checksum.c`; only `lzg -V` runs `ve
 
 A verdict (the judge's recorded result) made before your features existed did not run them. The status line then says `features=behind(not-yet)`: still GREEN, but not yet checked against your features. It is a reminder, not an error. Run `harness verify` on that unit again: the feature lines are added after the other checks, and the status turns to `features=current`. Commit `migration/features/` with your work.
 
+## A first file from the chat
+
+If you have never written a features file, the cockpit's chat can propose one. On the Features row, choose **Propose features — ask in chat** and send the question it types. The chat reads the program's `main` and its options, writes three to six scenarios — what the program is for, its options, and one wrong input — into `migration/features/features.proposed.toml` beside your file, with a one-line comment above each saying why, and tells you the same in the chat. Nothing is checked against your units yet and your own file is untouched: **Write your features file** opens the proposal in your editor as your draft, and you change what you like and save it as any edit (the proposal file goes once saved). The command line gets nothing new: there you write the file yourself. The same works for speed on the Speed row: **Propose a workload — ask in chat**.
+
 ## Try it
 
 These boxes assume the guided liblzg run, with the three scenarios `compress/text`, `version/flag` and `no-file/missing` saved. Run them from `~/code/RuHarness`.
