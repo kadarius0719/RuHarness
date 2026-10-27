@@ -438,6 +438,27 @@ impl CFrontend {
                 includes: file.includes.into_iter().collect(),
             });
         }
+        // Several definitions of one name in one file can only sit in
+        // exclusive `#if` branches (C forbids two in one translation unit;
+        // the scan does not preprocess): one symbol, the first definition's
+        // record, with the calls of every branch — the lz4 run of 2026-10-27,
+        // where timefn.c defines TIME_getTime once per platform and the plan
+        // listed five functions.
+        let defs = {
+            let mut seen: BTreeMap<(String, String), usize> = BTreeMap::new();
+            let mut merged: Vec<FnDef> = Vec::with_capacity(defs.len());
+            for d in defs {
+                let key = (d.file.clone(), d.canonical_id());
+                match seen.get(&key) {
+                    Some(&i) => merged[i].calls.extend(d.calls),
+                    None => {
+                        seen.insert(key, merged.len());
+                        merged.push(d);
+                    }
+                }
+            }
+            merged
+        };
 
         // Resolution maps: statics keyed by (file, name); publics by name.
         let mut statics: BTreeSet<(String, String)> = BTreeSet::new();
@@ -3158,6 +3179,51 @@ mod tests {
             .join()
             .expect("no overflow");
         assert_eq!(scanned.expect("scanned"), 2);
+    }
+
+    /// One name defined several times in one file sits in exclusive `#if`
+    /// branches (lz4's timefn.c, once per platform): one symbol, the first
+    /// span, the calls of every branch; a static of the same name in another
+    /// file is still its own symbol.
+    #[test]
+    fn one_name_defined_under_several_if_branches_is_one_symbol() {
+        let t = TempTarget::new("ifdup", "[]");
+        t.write(
+            "src/t.c",
+            "int helper_a(void) { return 1; }\nint helper_b(void) { return 2; }\n\
+             #if defined(_WIN32)\nint now(void) { return helper_a(); }\n\
+             #elif defined(__APPLE__)\nint now(void) { return helper_b(); }\n\
+             #else\nint now(void) { return 0; }\n#endif\n\
+             static int twice(void) { return 1; }\n",
+        );
+        t.write("src/u.c", "static int twice(void) { return 2; }\n");
+        let target = TargetContext::load(&t.0).expect("target loads");
+        let (facts, _) = CFrontend.scan_reporting(&target).expect("scan");
+        let names: Vec<&str> = facts.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "helper_a",
+                "helper_b",
+                "now",
+                "src/t.c::twice",
+                "src/u.c::twice"
+            ],
+            "{names:?}"
+        );
+        let now = facts.symbols.iter().find(|s| s.name == "now").expect("now");
+        assert_eq!(now.span.0, 4, "the first definition's span");
+        let callees: BTreeSet<&str> = facts
+            .refs
+            .iter()
+            .filter(|r| r.from == "now")
+            .map(|r| r.to.as_str())
+            .collect();
+        assert_eq!(
+            callees,
+            ["helper_a", "helper_b"].into_iter().collect(),
+            "the calls of every branch"
+        );
     }
 
     /// The readers review, finding 11: with `source_dir` itself a link, a

@@ -4317,5 +4317,9 @@ mutation line will show other numbers (its text says numbers may differ; `PASS` 
 
 **Also seen on the same run.** `timefn.c` defines `TIME_getTime` five times under `#if` blocks,
 one per platform; the scanner, which does not preprocess, lists five functions and the try view
-pairs each with the same Rust. The judge is not fooled (it reads the compiled object). Open: the
-facts should keep one symbol per name when the definitions sit in exclusive `#if` branches.
+pairs each with the same Rust. The judge is not fooled (it reads the compiled object). Fixed the
+same day: several definitions of one name in one file can only sit in exclusive `#if` branches
+(C forbids two in one translation unit), so the scan keeps one symbol — the first definition's
+record — with the calls of every branch; a static of the same name in another file stays its
+own symbol. The facts of a project with such a file change (fewer symbols); the plan's function
+counts and the try view follow.
