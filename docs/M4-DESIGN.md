@@ -348,7 +348,7 @@ Result: `DriverValidation` record (below). Green iff all pass.
 - Mutant generation is a pure function in harness-scan (tree-sitter): sites inside
   function bodies of the unit's `.c` files only; operators: arithmetic `+ - * / %`
   swaps, relational `< <= > >= == !=` swaps, logical `&& ||` swap, bitwise `& | ^`
-  swaps, shift `<< >>` swap, integer-literal `n → n+1` (decimal, non-zero), unary `!`
+  swaps, shift `<< >>` swap, integer-literal `n → n+1` and, since 2026-10-27, `n → 0` for a nonzero literal (a flag passed as `1` is only flipped by zero), unary `!`
   deletion. Each mutant = (file, byte range, replacement, operator, line, enclosing
   function). Ordered by blake3(file ‖ start ‖ operator ‖ replacement); the first
   `max_mutants` (default 24, clamp ≤ 64) are sampled — deterministic, no RNG.

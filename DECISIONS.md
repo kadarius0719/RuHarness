@@ -97,6 +97,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-10-21 — **Beyond the leaves, proven on a fresh copy; four gaps for pass B** — three pieces moved in order, the program with three Rust pieces the same as the C; a stale callee not reported on the caller, the features' program digest, the status line's words.
 - 2026-10-21 — **The cockpit after the whole-journey check: eighteen snags** — the plan's summary yields to the hint; one count about moving; a waiting test program; the Project view's order; dialogs of three lines; piece and try on every screen; greyed reasons never cut.
 - 2026-10-21 — **Beyond the leaves, pass B: the cockpit, the command line and the docs** — only the piece holding main stays C; callers move in the plan's order; which callee changed and which is out of date itself; the program line; the features' digest folds in the other pieces' Rust; the guide's Part 7 on a side branch.
+- 2026-10-27 — **The lz4 run's first wall: a planted bug nothing could notice** — the `literal-zero` mutant so a constant flag flips; `TIME_getTime` listed five times from `#if` branches, open.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -4297,3 +4298,24 @@ program line, the program digest's fold, the two-piece fixture through the judge
 Goldens regenerated and read. The guide's gate: ALL GATES PASS 0.
 
 **Open.** The end-state design: the piece holding `main`, and one combined crate per program.
+
+## 2026-10-27 — The lz4 run's first wall: a planted bug nothing could notice
+
+**Seen.** The person's scale run on lz4 (docs/SCALE-RUN-LZ4.md), the first piece, `u-lorem`: the
+chat's test program killed 17 of 20 planted bugs, but the only two planted in `LOREM_genBuffer`
+changed a constant `1` into `2`, and that function passes those constants on as yes-or-no flags
+— any nonzero value means yes. No test program could notice them; the per-function rule (a
+function with two or more counted mutants and no kill fails the check) blamed the test program;
+the chat stopped after two repairs, rightly, and said the harness needed a change. Three turns,
+seven minutes, $3.37 of plan usage for a failure that was the judge's.
+
+**Decided.** The scanner's `literal` operator (`n` → `n+1`) gains a sibling, `literal-zero`
+(`n` → `0` for every nonzero integer literal, prefix and suffix kept), so a flag passed as `1`
+has a mutant that flips it. The per-function rule stands: it is right once the mutants are fair.
+Site counts rise (the judge's fixture: 22 → 27 sites, 24 sampled as before); the guide's quoted
+mutation line will show other numbers (its text says numbers may differ; `PASS` is what matters).
+
+**Also seen on the same run.** `timefn.c` defines `TIME_getTime` five times under `#if` blocks,
+one per platform; the scanner, which does not preprocess, lists five functions and the try view
+pairs each with the same Rust. The judge is not fooled (it reads the compiled object). Open: the
+facts should keep one symbol per name when the definitions sit in exclusive `#if` branches.

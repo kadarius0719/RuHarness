@@ -15,6 +15,7 @@
 //! | `bitwise` | binary `& \| ^` | `&`→`\|`, `\|`→`&`, `^`→`&` |
 //! | `shift` | binary `<< >>` | `<<`↔`>>` |
 //! | `literal` | decimal / hex integer literal | `n`→`n+1`, suffix and format kept |
+//! | `literal-zero` | the same literal, when `n` ≠ 0 | `n`→`0`, suffix and prefix kept (a flag passed as `1` flips; `n+1` alone cannot kill it — the lz4 run of 2026-10-27) |
 //! | `not-delete` | unary `!x` | `x` |
 //! | `cast-delete` | `(T)x` | `x` |
 //! | `signedness` | `unsigned`/`signed` keyword of a body declaration; plain `char` there | `unsigned`↔`signed`; `char`→`unsigned char` |
@@ -196,6 +197,15 @@ impl Sites<'_> {
                         node.end_byte(),
                         &bumped,
                         "literal",
+                        function,
+                    );
+                }
+                if let Some(zeroed) = zero_int_literal(self.text(node)) {
+                    self.push(
+                        node.start_byte(),
+                        node.end_byte(),
+                        &zeroed,
+                        "literal-zero",
                         function,
                     );
                 }
@@ -388,6 +398,25 @@ pub(crate) fn bump_int_literal(text: &str) -> Option<String> {
     Some(format!("{sign}{prefix}{rendered}{suffix}"))
 }
 
+/// The `literal-zero` replacement of an integer literal: `0` with the
+/// literal's prefix and suffix kept (`7u` → `0u`, `0x1F` → `0x0`); `None`
+/// for a literal `bump_int_literal` would not take, and for a literal that
+/// is already zero (its `literal` mutant, `1`, is the flip).
+pub(crate) fn zero_int_literal(text: &str) -> Option<String> {
+    bump_int_literal(text)?;
+    let rest = text.strip_prefix('-').map(str::trim_start).unwrap_or(text);
+    let digits_end = rest.trim_end_matches(['u', 'U', 'l', 'L']).len();
+    let (body, suffix) = rest.split_at(digits_end);
+    let (prefix, digits) = match body.strip_prefix("0x").or_else(|| body.strip_prefix("0X")) {
+        Some(h) => (&body[..2], h),
+        None => ("", body),
+    };
+    if digits.chars().all(|c| c == '0') {
+        return None;
+    }
+    Some(format!("{prefix}0{suffix}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -474,6 +503,31 @@ mod tests {
         assert_eq!(bump_int_literal("-3"), Some("-4".into()));
         assert_eq!(bump_int_literal("1e3"), None);
         assert_eq!(bump_int_literal("1'000"), None);
+        // The zero mutant: every nonzero literal, format kept; a zero has
+        // none (its +1 is the flip); what bump refuses, zero refuses.
+        assert_eq!(
+            ops(src, "literal-zero"),
+            pairs(&[
+                ("7u", "0u"),
+                ("0x1F", "0x0"),
+                ("0xffUL", "0x0UL"),
+                ("10LL", "0LL")
+            ])
+        );
+        assert_eq!(zero_int_literal("-3"), Some("0".into()));
+        assert_eq!(zero_int_literal("0"), None);
+        assert_eq!(zero_int_literal("0x0"), None);
+        assert_eq!(zero_int_literal("1e3"), None);
+        assert_eq!(zero_int_literal("1'000"), None);
+    }
+
+    /// A flag passed as a constant `1`: `n+1` is behaviour-preserving, the
+    /// zero mutant flips it — the lz4 wall of 2026-10-27 (LOREM_genBuffer).
+    #[test]
+    fn a_constant_flag_gets_a_mutant_that_flips_it() {
+        let src = "int g(int first); int f(void) { return g(1); }\n";
+        assert_eq!(ops(src, "literal"), pairs(&[("1", "2")]));
+        assert_eq!(ops(src, "literal-zero"), pairs(&[("1", "0")]));
     }
 
     #[test]
@@ -561,6 +615,13 @@ mod tests {
                     "2".to_string()
                 ),
                 (
+                    "literal-zero".to_string(),
+                    7,
+                    "helper".to_string(),
+                    "1".to_string(),
+                    "0".to_string()
+                ),
+                (
                     "arith".to_string(),
                     13,
                     "api".to_string(),
@@ -573,6 +634,13 @@ mod tests {
                     "api".to_string(),
                     "2".to_string(),
                     "3".to_string()
+                ),
+                (
+                    "literal-zero".to_string(),
+                    13,
+                    "api".to_string(),
+                    "2".to_string(),
+                    "0".to_string()
                 ),
             ]
         );

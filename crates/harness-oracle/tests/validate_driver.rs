@@ -116,8 +116,10 @@ fn a_good_driver_is_green_with_mutation_stats() {
         ]
     );
     let stats = v.mutation.as_ref().expect("mutation stats recorded");
-    assert_eq!(stats.sites, 22, "{stats:?}");
-    assert_eq!(stats.sampled, 22, "{stats:?}");
+    // 22 sites until 2026-10-27; the zero mutant of every nonzero literal
+    // (five here) made it 27, of which the policy samples 24.
+    assert_eq!(stats.sites, 27, "{stats:?}");
+    assert_eq!(stats.sampled, 24, "{stats:?}");
     assert!(stats.compiled >= 20, "{stats:?}");
     assert!(
         u64::from(stats.killed) * 1000 >= 600 * u64::from(stats.compiled),
