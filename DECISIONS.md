@@ -98,6 +98,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-10-21 — **The cockpit after the whole-journey check: eighteen snags** — the plan's summary yields to the hint; one count about moving; a waiting test program; the Project view's order; dialogs of three lines; piece and try on every screen; greyed reasons never cut.
 - 2026-10-21 — **Beyond the leaves, pass B: the cockpit, the command line and the docs** — only the piece holding main stays C; callers move in the plan's order; which callee changed and which is out of date itself; the program line; the features' digest folds in the other pieces' Rust; the guide's Part 7 on a side branch.
 - 2026-10-27 — **The lz4 run's first wall: a planted bug nothing could notice** — the `literal-zero` mutant so a constant flag flips; `TIME_getTime` listed five times from `#if` branches, open.
+- 2026-10-30 — **The lz4 run's second day: a sign-in the chat could not see, and a retry the cockpit must pass** — sign in from a plain terminal, not the app's; Make the test program carries `--retry` once a try exists; the walls list.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -4323,3 +4324,49 @@ same day: several definitions of one name in one file can only sit in exclusive 
 record — with the calls of every branch; a static of the same name in another file stays its
 own symbol. The facts of a project with such a file change (fewer symbols); the plan's function
 counts and the try view follow.
+
+## 2026-10-30 — The lz4 run's second day: a sign-in the chat could not see, and a retry the cockpit must pass
+
+**Seen, sign-in.** After the two fixes of 2026-10-27 landed, the chat failed every turn in half
+a second: "OAuth session expired and could not be refreshed". The person had signed in to
+Claude Code in a terminal several times, successfully. The keychain entry the chat's Claude
+Code reads was empty (its refresh token expired the day before; its tokens blanked by the
+failed refreshes) and `claude auth status` said not signed in. The person's sign-ins happened
+in the terminal inside the Claude desktop app, where Claude Code borrows the app's own sign-in
+and never writes the keychain; the cockpit strips that plumbing from the chat on purpose, so
+the chat's Claude Code saw only the keychain. The dialog's steps were right in substance and
+wrong in one word: "a new Terminal window".
+
+**Decided.** The walk-through says a plain Terminal window, not the one inside the Claude app;
+`claude auth login`, then `claude auth status` to confirm `loggedIn: true` before Check again.
+The cockpit keeps stripping the app's plumbing (docs/CHAT-PANE-DESIGN.md §1.1): a chat that
+silently rode the desktop app's sign-in would stop working the moment the cockpit runs
+anywhere else.
+
+**Seen, the retry.** With the sign-in back, Make the test program on `u-lorem` was refused by
+the harness: the old try (three turns, blocked on the mutation check) is evidence, the run
+re-verifies it first, and under the new `literal-zero` mutant its recorded replies now judge
+green at turn 1 — "does not reproduce from its traces — pass --retry". The chat tried the
+retry and was refused too (the chat's retry is for steered Rust tries only). Nothing in the
+cockpit could pass the flag; the chat told the person to use the terminal, which the guided
+workflow forbids (the person cannot answer a hand-off from a terminal).
+
+**Decided.** The chat's Make the test program carries `--retry` whenever the piece has a
+finished try at its test program. The flag's meaning (docs/REPLAY-DESIGN.md §4–5) makes this
+safe: a try that still reproduces is returned as it is, zero tokens; one that no longer
+reproduces is superseded (`superseded.jsonl`, reason `judge-changed`) and a new sample
+recorded. This will recur: every change to the judge turns earlier red tries into tries that
+no longer reproduce, and the cockpit must take the way out itself.
+
+**The walls list, for the kickoff.** (1) `util.c` shows "not part of this tool" while `util.h`
+is the piece `u-util`: lz4 defines real functions in the header; the row is true and reads
+as a skip — look at what `util.c` holds and say it in words. (2) The scanner's one-symbol
+rule keeps the first `#if` branch's definition, which for `timefn.c` is the Windows one, not
+the branch this Mac compiles: the honest record is the compiler's view (preprocess with the
+build's flags), the verdict should name the platform it checked, and the Rust should keep
+every branch — a design of its own (the person asked on 2026-10-30; it does not block the
+run). (3) A failed try at a test program is invisible once the chat moves on: the tree lists
+Rust tries under a piece, not test-program tries, and the card's "Tries" counts Rust tries
+only; the person had no `i` card to read. (4) The chat ran on `fable-5-1` for the retry turn
+(the person's pick in the chat's header, or the model line's default): the chat's model is the
+person's choice, but the kickoff should say what the cockpit defaults to.

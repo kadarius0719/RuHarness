@@ -171,11 +171,14 @@ impl Problem {
                 ];
             }
         };
+        // A plain terminal: inside the Claude app's own terminal, `claude`
+        // borrows the app's sign-in and never writes the keychain the chat
+        // reads (the lz4 run, 2026-10-30).
         vec![
             lead.to_string(),
-            "1. Open a new Terminal window.".into(),
-            "2. Type claude and press Return.".into(),
-            "3. Follow the sign-in it shows.".into(),
+            "1. Open a plain Terminal window (not the terminal inside the Claude app).".into(),
+            "2. Type claude auth login and press Return; follow the sign-in it shows.".into(),
+            "3. Type claude auth status and press Return: it should say loggedIn: true.".into(),
             "4. Come back here and choose Check again.".into(),
             format!("What the cockpit saw: {}", self.seen),
         ]

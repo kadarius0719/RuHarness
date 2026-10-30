@@ -766,7 +766,10 @@ impl App {
 
     /// The chat's Make the test program (§9.4): `gen-driver <unit>
     /// --provider=<p> --model=<m> --requester=chat` (`--promote` when the
-    /// unit's generated driver is out of date) — `<p>` and `<m>` as for
+    /// unit's generated driver is out of date; `--retry` when the unit has a
+    /// finished try at its test program: the latest is re-verified first,
+    /// returned when it reproduces, superseded by a new sample when the
+    /// judge changed — docs/REPLAY-DESIGN.md §4) — `<p>` and `<m>` as for
     /// Migrate. Only a unit before its Rust whose test program is missing or
     /// out of date.
     fn chat_gen_driver_argv(&self, unit: &str, model: &str) -> Result<Pending, String> {
@@ -820,6 +823,13 @@ impl App {
         ];
         if u.driver == crate::model::DriverState::Stale {
             rest.insert(3, os("--promote"));
+        }
+        // A finished try (whatever its outcome) is evidence: without
+        // `--retry` the run re-verifies it and refuses when the judge has
+        // changed since ("does not reproduce from its traces"); with it the
+        // old try is superseded and a new sample recorded.
+        if u.driver_attempts.iter().any(|a| a.outcome != "in-progress") {
+            rest.push(os("--retry"));
         }
         Ok(Pending {
             stdin: None,

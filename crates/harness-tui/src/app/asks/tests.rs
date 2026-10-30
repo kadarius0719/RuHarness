@@ -2031,6 +2031,66 @@ fn make_the_test_program_maps_onto_gen_driver() {
     );
 }
 
+/// A piece with a finished try at its test program (the lz4 run,
+/// 2026-10-30): Make the test program carries `--retry`, so a try the judge
+/// no longer reproduces (the judge changed since) is superseded by a new
+/// sample instead of refusing the run; a piece with none does not (one with
+/// a try in progress is waiting for the chat's answer, and refused).
+#[test]
+fn a_finished_test_program_try_makes_the_run_a_retry() {
+    let tmp = TmpDir::new("asks-gen-driver-retry");
+    let (mut a, log) = chat_app(Some("targets/zopfli"), "asks-gen-driver-retry", &tmp);
+    let argv_of = |a: &mut App, tag: &str| {
+        ask(a, tag, "harness_gen_driver", json!({"unit": "u-hash"}));
+        let r = a
+            .asks
+            .shown()
+            .unwrap_or_else(|| panic!("{tag} refused: {}", wait_denial(&log, tag)))
+            .clone();
+        assert_eq!(r.pending.act, Act::GenDriver);
+        a.asks.requests.pop_front();
+        strs(&r.pending.argv)
+    };
+    assert!(!argv_of(&mut a, "r1").contains(&"--retry".to_string()));
+    let ledger = Ledger::new(&a.config.target);
+    let id = "d-00000000beef";
+    let rec = AttemptRecord {
+        schema: "ruharness-attempt".into(),
+        schema_version: 2,
+        id: id.into(),
+        unit: "u-hash".into(),
+        stage: Some(attempts::DRIVER_STAGE.into()),
+        provider: "external".into(),
+        provider_kind: "external".into(),
+        model: MODEL.into(),
+        prompt_digest: "blake3:0".into(),
+        unit_source: "blake3:0".into(),
+        driver: String::new(),
+        toolchain: vec![],
+        outcome: "blocked".into(),
+        turns: vec![],
+        candidate_digest: String::new(),
+        promoted: false,
+        seeded_from: None,
+        steer_note: None,
+        seed_verdict: None,
+        note: None,
+        requester: Some(attempts::REQUESTER_CHAT.into()),
+        features: String::new(),
+        program: String::new(),
+    };
+    let dir = attempts::driver_attempt_dir(&ledger, "u-hash", id);
+    std::fs::create_dir_all(&dir).unwrap();
+    rec.store(&dir).unwrap();
+    assert!(a.reload(true));
+    let argv = argv_of(&mut a, "r2");
+    assert_eq!(
+        &argv[argv.len() - 2..],
+        ["--requester=chat", "--retry"],
+        "{argv:?}"
+    );
+}
+
 /// The chat's answer to a driver attempt's hand-off (`d-…`) resumes it in
 /// its own run shape: `gen-driver <unit> … --requester=chat --answer=-`,
 /// its response looked for under `driver-traces/chat/`.

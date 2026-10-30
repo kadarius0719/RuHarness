@@ -1009,7 +1009,12 @@ verified.
   chat answers the hand-off through `harness_request` / `harness_answer`; `gen-driver` gains the
   same `--requester` / `--answer` / `--answer-key` flags as `migrate` (its parameters already
   hold them). The outcome line: "u-checksum's test program is ready — next, its Rust" or the
-  validation's failure in words.
+  validation's failure in words. When the unit already has a finished try at its test program
+  the argv carries `--retry` (2026-10-30, the lz4 run): the harness re-verifies that try first
+  and returns it when it reproduces; when the judge has changed since (a new mutation operator,
+  say) the old try no longer reproduces, and without the flag the run refuses with "does not
+  reproduce from its traces — pass --retry", a way out the cockpit must take itself
+  (docs/REPLAY-DESIGN.md §4: the old try is superseded, a new sample recorded).
 - **Migrate is greyed** on a unit with no test program: "it has no test program yet — Make the
   test program first". The Next step there is `Next: Make the test program — Enter, then ask in
   chat`. The chat's `harness_unit` reports `driver` (none / validated / stale), and the brief's

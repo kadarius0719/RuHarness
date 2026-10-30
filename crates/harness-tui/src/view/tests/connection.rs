@@ -64,9 +64,9 @@ fn dialog(app: &App) -> (String, Vec<String>) {
 }
 
 const STEPS: [&str; 4] = [
-    "1. Open a new Terminal window.",
-    "2. Type claude and press Return.",
-    "3. Follow the sign-in it shows.",
+    "1. Open a plain Terminal window (not the terminal inside the Claude app).",
+    "2. Type claude auth login and press Return; follow the sign-in it shows.",
+    "3. Type claude auth status and press Return: it should say loggedIn: true.",
     "4. Come back here and choose Check again.",
 ];
 
@@ -110,7 +110,7 @@ fn the_walk_through_says_what_failed_and_the_steps() {
     let screen = text(&render(&mut app, 120, 40));
     for words in [
         "Claude Code is not installed",
-        "1. Open a new Terminal window.",
+        "1. Open a plain Terminal window",
         "4. Come back here and choose Check again.",
         "Check again",
         "Cancel",
