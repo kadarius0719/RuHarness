@@ -426,6 +426,15 @@ impl CFrontend {
         };
         files.sort_by(|a, b| a.rel.cmp(&b.rel));
 
+        // A specifier macro the project defines as `static …` (lz4's
+        // `UTIL_STATIC`, the run of 2026-10-30): a function whose head
+        // starts with it is static, whatever else the macro spells
+        // (docs/HEADER-FUNCTIONS-DESIGN.md §2).
+        let static_macros: BTreeSet<String> = files
+            .iter()
+            .filter_map(|f| f.parse.as_ref().map(|(_, src)| src.as_slice()))
+            .flat_map(static_macros_in)
+            .collect();
         let mut defs: Vec<FnDef> = Vec::new();
         let mut file_records: Vec<FileRecord> = Vec::with_capacity(files.len());
         for file in files {
@@ -437,6 +446,16 @@ impl CFrontend {
                 hash: file.hash,
                 includes: file.includes.into_iter().collect(),
             });
+        }
+        for d in &mut defs {
+            if !d.is_static
+                && d.signature
+                    .split_whitespace()
+                    .next()
+                    .is_some_and(|t| static_macros.contains(t))
+            {
+                d.is_static = true;
+            }
         }
         // Several definitions of one name in one file can only sit in
         // exclusive `#if` branches (C forbids two in one translation unit;
@@ -483,13 +502,54 @@ impl CFrontend {
             })
             .collect();
 
+        // Each file's include closure (itself excluded), nearest include
+        // first: a helper written `static` in a header is a private copy in
+        // every file that includes it, and a call to one from such a file
+        // resolves to the header's symbol (docs/HEADER-FUNCTIONS-DESIGN.md
+        // §2) — after the file's own statics, before the public names.
+        let includes_of: BTreeMap<&str, &[String]> = file_records
+            .iter()
+            .map(|f| (f.path.as_str(), f.includes.as_slice()))
+            .collect();
+        let closure_of = |file: &str| -> Vec<String> {
+            let mut seen: BTreeSet<String> = BTreeSet::new();
+            let mut order: Vec<String> = Vec::new();
+            let mut queue: std::collections::VecDeque<String> = includes_of
+                .get(file)
+                .map(|i| i.to_vec())
+                .unwrap_or_default()
+                .into();
+            seen.insert(file.to_string());
+            while let Some(p) = queue.pop_front() {
+                if !seen.insert(p.clone()) {
+                    continue;
+                }
+                if let Some(more) = includes_of.get(p.as_str()) {
+                    queue.extend(more.iter().cloned());
+                }
+                order.push(p);
+            }
+            order
+        };
+        let mut closures: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
         // Two-pass call resolution; dedup identical (from, file, to, refkind).
         let mut edges: BTreeSet<(String, String, String, bool)> = BTreeSet::new();
         for d in &defs {
             let from = d.canonical_id();
+            let closure = closures
+                .entry(d.file.clone())
+                .or_insert_with(|| closure_of(&d.file));
             for callee in &d.calls {
+                let in_header = || {
+                    closure
+                        .iter()
+                        .find(|h| statics.contains(&((*h).clone(), callee.clone())))
+                };
                 let (to, resolved) = if statics.contains(&(d.file.clone(), callee.clone())) {
                     (format!("{}::{}", d.file, callee), true)
+                } else if let Some(h) = in_header() {
+                    (format!("{h}::{callee}"), true)
                 } else if publics.contains(callee) {
                     (callee.clone(), true)
                 } else {
@@ -519,6 +579,44 @@ impl CFrontend {
             notes,
         ))
     }
+}
+
+/// The names of the object-like macros `src` defines as `static …`
+/// (`#define UTIL_STATIC static inline`): one per matching line, as
+/// written. A line reader: a `#define` inside a comment is a false hit the
+/// parse of a function head then has to confirm (the head must start with
+/// the name), and a macro defined under one `#if` branch counts for every
+/// branch — the scan does not preprocess.
+fn static_macros_in(src: &[u8]) -> Vec<String> {
+    let ident = |b: &u8| b.is_ascii_alphanumeric() || *b == b'_';
+    let mut names = Vec::new();
+    for line in src.split(|&b| b == b'\n') {
+        let rest = line.trim_ascii_start();
+        let Some(rest) = rest.strip_prefix(b"#") else {
+            continue;
+        };
+        let Some(rest) = rest.trim_ascii_start().strip_prefix(b"define") else {
+            continue;
+        };
+        if !rest.first().is_some_and(u8::is_ascii_whitespace) {
+            continue;
+        }
+        let rest = rest.trim_ascii_start();
+        let name_len = rest.iter().take_while(|b| ident(b)).count();
+        if name_len == 0 || rest.get(name_len) == Some(&b'(') {
+            continue;
+        }
+        let body = rest[name_len..].trim_ascii_start();
+        let is_static = body
+            .strip_prefix(b"static")
+            .is_some_and(|after| after.first().is_none_or(|b| !ident(b)));
+        if is_static {
+            if let Ok(name) = std::str::from_utf8(&rest[..name_len]) {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names
 }
 
 /// Render `path` relative to `root` with forward slashes.
@@ -3224,6 +3322,86 @@ mod tests {
             ["helper_a", "helper_b"].into_iter().collect(),
             "the calls of every branch"
         );
+    }
+
+    /// docs/HEADER-FUNCTIONS-DESIGN.md §2 (the lz4 run of 2026-10-30): a
+    /// function whose head starts with a macro the project defines as
+    /// `static …` is static (`UTIL_STATIC`), so a header full of such helpers
+    /// defines no public symbol; a call to one from a file that includes the
+    /// header resolves to the header's copy, after the file's own statics and
+    /// before the public names; a helper calling a helper of its own header
+    /// resolves within the header.
+    #[test]
+    fn a_macro_the_project_defines_as_static_makes_a_header_helper_static() {
+        let t = TempTarget::new("hdr-helpers", "[]");
+        t.write(
+            "src/util.h",
+            "#ifndef UTIL_H\n#define UTIL_H\n#if defined(__GNUC__)\n\
+             #  define UTIL_STATIC static __attribute__((unused))\n#else\n\
+             #  define UTIL_STATIC static inline\n#endif\n\
+             #define UTIL_MAX(a,b) ((a)>(b)?(a):(b))\n\
+             UTIL_STATIC int helper_a(int x) { return x + 1; }\n\
+             UTIL_STATIC int helper_b(int x) { return helper_a(x) * 2; }\n\
+             int real_public(void) { return 3; }\n#endif\n",
+        );
+        t.write(
+            "src/io.c",
+            "#include \"util.h\"\nstatic int helper_a(int x) { return x; }\n\
+             int io_run(int x) { return helper_a(x) + helper_b(x) + real_public(); }\n",
+        );
+        t.write(
+            "src/other.c",
+            "#include \"util.h\"\nint other_run(int x) { return helper_b(x); }\n",
+        );
+        t.write("src/alone.c", "int alone(int x) { return helper_b(x); }\n");
+        let target = TargetContext::load(&t.0).expect("target loads");
+        let (facts, _) = CFrontend.scan_reporting(&target).expect("scan");
+        let by_name = |n: &str| {
+            facts
+                .symbols
+                .iter()
+                .find(|s| s.name == n)
+                .unwrap_or_else(|| panic!("{n}: {:?}", facts.symbols))
+        };
+        assert_eq!(by_name("src/util.h::helper_a").visibility, "internal");
+        assert_eq!(by_name("src/util.h::helper_b").visibility, "internal");
+        assert_eq!(by_name("real_public").visibility, "public");
+        let callees = |from: &str| -> Vec<(String, bool)> {
+            facts
+                .refs
+                .iter()
+                .filter(|r| r.from == from)
+                .map(|r| (r.to.clone(), r.resolved))
+                .collect()
+        };
+        // io.c's own static first, then the header's copy, then the public.
+        assert_eq!(
+            callees("io_run"),
+            [
+                ("real_public".to_string(), true),
+                ("src/io.c::helper_a".to_string(), true),
+                ("src/util.h::helper_b".to_string(), true),
+            ]
+        );
+        assert_eq!(
+            callees("other_run"),
+            [("src/util.h::helper_b".to_string(), true)]
+        );
+        assert_eq!(
+            callees("src/util.h::helper_b"),
+            [("src/util.h::helper_a".to_string(), true)],
+            "a helper calling a helper of its own header"
+        );
+        // No include, no copy: an unresolved name.
+        assert_eq!(callees("alone"), [("helper_b".to_string(), false)]);
+    }
+
+    /// The macro reader: object-like `#define NAME static…` lines only.
+    #[test]
+    fn the_static_macro_reader() {
+        let src = b"#define A static\n  #  define  B\tstatic inline\n#define C(x) static x\n\
+            #define D staticky\n#define E\n#define F static_assert(1, \"\")\n#undef A\n";
+        assert_eq!(static_macros_in(src), ["A", "B"]);
     }
 
     /// The readers review, finding 11: with `source_dir` itself a link, a

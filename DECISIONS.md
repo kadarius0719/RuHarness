@@ -99,6 +99,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-10-21 — **Beyond the leaves, pass B: the cockpit, the command line and the docs** — only the piece holding main stays C; callers move in the plan's order; which callee changed and which is out of date itself; the program line; the features' digest folds in the other pieces' Rust; the guide's Part 7 on a side branch.
 - 2026-10-27 — **The lz4 run's first wall: a planted bug nothing could notice** — the `literal-zero` mutant so a constant flag flips; `TIME_getTime` listed five times from `#if` branches, open.
 - 2026-10-30 — **The lz4 run's second day: a sign-in the chat could not see, and a retry the cockpit must pass** — sign in from a plain terminal, not the app's; Make the test program carries `--retry` once a try exists; the walls list.
+- 2026-10-30 — **Functions written in headers: a header is never a piece, its helpers move with the files that include it** — the scanner reads `#define X static`, resolves helper calls through includes; the plan skips headers; the prompt's helpers section; zopfli's facts corrected.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -4370,3 +4371,35 @@ Rust tries under a piece, not test-program tries, and the card's "Tries" counts 
 only; the person had no `i` card to read. (4) The chat ran on `fable-5-1` for the retry turn
 (the person's pick in the chat's header, or the model line's default): the chat's model is the
 person's choice, but the kickoff should say what the cockpit defaults to.
+
+## 2026-10-30 — Functions written in headers: a header is never a piece, its helpers move with the files that include it
+
+**Seen.** The lz4 run's fourth wall, the same day: `programs/util.h` writes fourteen helpers in
+full, each marked `UTIL_STATIC` (a macro for `static inline`). The scanner reads the macro's
+name, not its meaning, so the helpers counted as public; the plan cut a piece, `u-util`, from the
+header alone; the chat wrote a test program for it and the judge refused: nothing to link it
+against, a header compiles into nothing on its own. Three files include it (`lz4io.c`,
+`bench.c`, `lz4cli.c`), and each has its own private copy of every helper it uses. zopfli's
+`symbols.h` has the same shape; its helper calls had been recorded as unresolved names since
+the first scan, and nobody noticed because zopfli's deflate piece was never migrated.
+
+**Decided.** docs/HEADER-FUNCTIONS-DESIGN.md. The scanner learns `#define NAME static…` (a
+line reader, object-like macros only) and marks a function static when its head starts with
+such a name; a call resolves to the file's own static, then to the nearest included file's
+static, then to a public name. The planner never seeds a piece from a header. The migrate
+prompt gains `[HELPERS WRITTEN IN HEADERS]`, only for a unit whose C reaches such helpers
+(`Facts::header_helpers`, transitive), with the rule: translate the ones you use as private
+Rust functions, export nothing, declare nothing extern. The judge is unchanged: its export
+baseline is the compiled C object, which never held the helpers. The piece card names the
+helpers. The committed zopfli facts change (refs only).
+
+**Rejected.** Making the header a piece of its own with a synthetic `.c` to test it: the helpers
+are not one function but one copy per includer, under each includer's macros and includes;
+testing a copy nobody links proves nothing about the copies that matter. Giving each includer
+the header in its `files`: a file belongs to one piece. Expanding the preprocessor's view
+instead of reading the macro by hand: right, and the per-platform design's job (DECISIONS
+2026-10-30, first entry, wall 2), not this one's.
+
+**Revisit when.** A header with a non-static function written in it appears (§7 of the design:
+refuse the map in a sentence); when the per-platform design brings the preprocessor's view,
+the macro reader goes.

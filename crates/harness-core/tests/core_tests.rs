@@ -161,6 +161,68 @@ fn planner_orders_dependencies_first() {
     assert_ne!(units[0].source_hash, units[1].source_hash);
 }
 
+/// docs/HEADER-FUNCTIONS-DESIGN.md §3–§4 (the lz4 run of 2026-10-30): a
+/// header never seeds a piece, even with a public function written in it;
+/// the helpers a piece's C calls in headers are listed per header,
+/// transitively (a helper calling a helper), own statics excluded.
+#[test]
+fn planner_never_cuts_a_piece_from_a_header_and_lists_its_helpers() {
+    let mut facts = sample_facts();
+    facts.files.push(FileRecord {
+        path: "src/util.h".into(),
+        hash: "blake3:u".into(),
+        includes: vec![],
+    });
+    for (name, visibility) in [
+        ("src/util.h::is_dir", "internal"),
+        ("src/util.h::stat_of", "internal"),
+        ("src/util.h::unused", "internal"),
+        ("odd_public_in_header", "public"),
+    ] {
+        facts.symbols.push(SymbolRecord {
+            name: name.into(),
+            kind: "function".into(),
+            file: "src/util.h".into(),
+            visibility: visibility.into(),
+            signature: format!("int {}(void)", name.rsplit("::").next().unwrap()),
+            span: (1, 1),
+        });
+    }
+    for (from, file, to) in [
+        ("alpha", "src/a.c", "src/util.h::is_dir"),
+        ("alpha", "src/a.c", "odd_public_in_header"),
+        ("src/util.h::is_dir", "src/util.h", "src/util.h::stat_of"),
+        ("src/util.h::unused", "src/util.h", "src/util.h::stat_of"),
+    ] {
+        facts.refs.push(RefRecord {
+            from: from.into(),
+            file: file.into(),
+            to: to.into(),
+            refkind: "call".into(),
+            resolved: true,
+        });
+    }
+    let units = planner::compute_units(&facts).unwrap();
+    let ids: Vec<&str> = units.iter().map(|u| u.id.as_str()).collect();
+    assert_eq!(ids, vec!["u-b", "u-a"], "no u-util");
+    assert_eq!(units[1].depends_on, vec!["u-b".to_string()]);
+    assert_eq!(
+        facts.header_helpers(&["src/a.c".to_string()]),
+        vec![(
+            "src/util.h".to_string(),
+            vec![
+                "src/util.h::is_dir".to_string(),
+                "src/util.h::stat_of".to_string()
+            ]
+        )],
+        "the helpers a.c reaches, not `unused`, not a.c's own static"
+    );
+    assert!(facts.header_helpers(&["src/b.c".to_string()]).is_empty());
+    assert!(
+        planner::is_header("x/y.h") && planner::is_header("y.hpp") && !planner::is_header("y.c")
+    );
+}
+
 #[test]
 fn planner_merges_cycles() {
     let mut facts = sample_facts();

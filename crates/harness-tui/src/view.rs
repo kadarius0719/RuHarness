@@ -1613,6 +1613,25 @@ fn unit_summary(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> 
         width,
         Style::default(),
     ));
+    // Helpers written `static` in headers it includes: private copies the
+    // piece's Rust carries its own translation of
+    // (docs/HEADER-FUNCTIONS-DESIGN.md §5).
+    if let Some(facts) = app.snapshot.facts.as_ref() {
+        for (header, names) in facts.header_helpers(files) {
+            let n = names.len();
+            let shown: Vec<&str> = names.iter().map(|s| short_symbol(s)).collect();
+            lines.extend(wrapped(
+                &format!(
+                    "Uses {n} helper function{} written in {header}, translated as part of this \
+                     piece: {}",
+                    plural_s(n),
+                    shown.join(", ")
+                ),
+                width,
+                Style::default(),
+            ));
+        }
+    }
     lines.extend(unit_record(app, unit, width));
     lines.extend(headed(&attempts_line(unit), width));
     if app.shown_verdict().is_some() {

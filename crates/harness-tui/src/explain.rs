@@ -666,7 +666,10 @@ fn units(app: &App) -> Explained {
 /// A unit's state as a clause after "; ".
 fn unit_state_clause(s: &UnitState) -> String {
     match s {
-        UnitState::Blocked => "it is set aside: its files are gone from the C".into(),
+        UnitState::Blocked => "it is set aside: the plan no longer cuts a piece from its files \
+                               (they are gone from the C, or it was a header whose helpers move \
+                               with the files that include them)"
+            .into(),
         UnitState::Attention(cause) => format!("it needs attention: {}", cause_words(cause)),
         UnitState::Failing => "its Rust failed the judge's last check".into(),
         UnitState::Migrated(_) | UnitState::OriginUnknown => {

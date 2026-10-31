@@ -123,10 +123,13 @@ no spike edits. The live walk on a fresh copy moved u-checksum, u-encode and u-v
    item 2, or it stops at the leaves. Under way since 2026-10-27 (docs/SCALE-RUN-LZ4.md):
    `u-timefn` in Rust and green; three walls fixed (DECISIONS 2026-10-27 and 2026-10-30: the
    `literal-zero` mutant, one symbol per `#if`-branched name, `--retry` on Make the test
-   program); the walls still open are listed in DECISIONS 2026-10-30 — `util.c`'s row, the
-   per-platform `#if` design, test-program tries invisible on the card, the chat's default
-   model. Next on the run: `u-lorem` (the retry), `u-util`, `u-threadpool`, `u-xxhash` (expect
-   the `-D` rename at the symbol-set check), `u-lz4` last.
+   program) and a fourth designed and built the same day (docs/HEADER-FUNCTIONS-DESIGN.md:
+   helpers written in headers — `u-util` was never a piece); the walls still open are listed in
+   DECISIONS 2026-10-30 (first entry) — `util.c`'s row, the per-platform `#if` design,
+   test-program tries invisible on the card, the chat's default model. `u-lorem` is in Rust.
+   Next on the run, top to bottom: `u-lz4`, `u-lz4hc`, `u-threadpool`, `u-xxhash` (expect the
+   `-D` rename at the symbol-set check), `u-lz4frame`, then `u-bench` and `u-lz4io` — the first
+   pieces with header helpers, the proof of the fourth fix.
 6. **Then the briefing's next milestone (M5, the extension proof)**, or what the scale run shows,
    as the person decides.
 

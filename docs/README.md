@@ -20,6 +20,7 @@ built and where the truth lives now. A new document gets a row here, or it is no
 | [PERF-DESIGN.md](PERF-DESIGN.md) | current | Speed (`harness perf`); governs with SCHEMAS; its Linux text is a plan |
 | [PROJECT-MAP-DESIGN.md](PROJECT-MAP-DESIGN.md) | current | The project map; §8 holds what is open, the fuller C–Rust boundary among it |
 | [BEYOND-LEAVES-DESIGN.md](BEYOND-LEAVES-DESIGN.md) | current | A piece that calls other pieces moves: the callees linked as the program stands; from the 2026-10-21 spike |
+| [HEADER-FUNCTIONS-DESIGN.md](HEADER-FUNCTIONS-DESIGN.md) | current | Helpers written `static` in headers: seen by the scan, never a piece, translated as part of each piece that uses them (the lz4 run, 2026-10-30) |
 | [MCP-DESIGN.md](MCP-DESIGN.md) | current | harness-mcp's full tool contract |
 | [CHAT-PANE-DESIGN.md](CHAT-PANE-DESIGN.md) | current | The cockpit's chat: its command line, its acts, the requester label |
 | [COCKPIT-WRAPPER-DESIGN.md](COCKPIT-WRAPPER-DESIGN.md) | current | The cockpit's screen, menu and armed dialogs |

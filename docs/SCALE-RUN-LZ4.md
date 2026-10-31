@@ -106,6 +106,13 @@ its card says "It calls …: checked with … as the program stands".
 **It means.** Each piece is tested with the Rust of the pieces it calls, so the program really
 runs with that much Rust. A piece whose callee you accept later goes `out of date: a piece it
 calls changed` — re-check it, that is all.
+**Helpers written in headers (from 2026-10-30).** `util.h` writes its helpers in full; it is a
+header, not a piece, and after a Refresh of the plan it has no row under Pieces (an older
+`u-util` row reads "set aside"). `u-lz4io`, `u-bench` and `u-lz4cli` use those helpers: their
+card says `Uses N helper functions written in programs/util.h, translated as part of this
+piece`, and the chat is told to translate them as private Rust functions. If a try on one of
+them goes red at `symbol-set` naming a `UTIL_` function, or at the build with "undefined
+symbol UTIL_…", that is this fix failing: screenshot it.
 **Stop rule.** Stop after the third wall, or after `lz4.c` either way (green or not). Everything
 past that is the same lesson again.
 

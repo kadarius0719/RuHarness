@@ -63,11 +63,14 @@ fn compute_units_with(
         .map(|s| (s.name.as_str(), s.file.as_str()))
         .collect();
 
-    // Unit-seed files: those defining >= 1 public symbol.
+    // Unit-seed files: those defining >= 1 public symbol — never a header,
+    // which no compile builds on its own: a function written in one is a
+    // copy in every file that includes it (docs/HEADER-FUNCTIONS-DESIGN.md
+    // §3), and a piece cut from the header alone has nothing to test.
     let unit_files: BTreeSet<&str> = facts
         .symbols
         .iter()
-        .filter(|s| s.visibility == "public")
+        .filter(|s| s.visibility == "public" && !is_header(&s.file))
         .map(|s| s.file.as_str())
         .collect();
 
@@ -183,6 +186,15 @@ fn compute_units_with(
 
     // Advisory order: topological (deps first), unit-id tiebreak.
     topo_sort(units)
+}
+
+/// A header by its extension (`.h`, `.hh`, `.hpp`, `.hxx`): a file no
+/// compile builds on its own.
+pub fn is_header(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| matches!(e, "h" | "hh" | "hpp" | "hxx"))
 }
 
 /// Deterministic unit id from its file cluster: `u-<stem>` for a single

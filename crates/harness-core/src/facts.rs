@@ -195,6 +195,61 @@ impl Facts {
         Ok(facts)
     }
 
+    /// The helpers written in headers that the functions of `files` call
+    /// (docs/HEADER-FUNCTIONS-DESIGN.md §4): every `internal` symbol defined
+    /// outside `files` that a resolved call from `files` reaches, and every
+    /// one those reach in turn (a helper calling a helper), grouped by its
+    /// defining file, sorted. Each is a private copy in the including file:
+    /// a piece's Rust carries its own translation of the ones it uses.
+    pub fn header_helpers(&self, files: &[String]) -> Vec<(String, Vec<String>)> {
+        let outside_internal: std::collections::BTreeMap<&str, &str> = self
+            .symbols
+            .iter()
+            .filter(|s| s.visibility == "internal" && !files.contains(&s.file))
+            .map(|s| (s.name.as_str(), s.file.as_str()))
+            .collect();
+        let mut found: std::collections::BTreeMap<&str, &str> = std::collections::BTreeMap::new();
+        let mut from_files: BTreeSet<&str> = files.iter().map(String::as_str).collect();
+        let mut from_symbols: BTreeSet<&str> = BTreeSet::new();
+        loop {
+            let mut grew = false;
+            for r in &self.refs {
+                if !r.resolved || r.refkind != "call" {
+                    continue;
+                }
+                let from_here =
+                    from_files.contains(r.file.as_str()) || from_symbols.contains(r.from.as_str());
+                if !from_here {
+                    continue;
+                }
+                if let Some(&file) = outside_internal.get(r.to.as_str()) {
+                    if found.insert(r.to.as_str(), file).is_none() {
+                        from_symbols.insert(r.to.as_str());
+                        grew = true;
+                    }
+                }
+            }
+            if !grew {
+                break;
+            }
+            // A helper's own file never counts as a caller as a whole: only
+            // the helpers reached do (`from_symbols`).
+            from_files.retain(|f| files.iter().any(|x| x == f));
+        }
+        let mut grouped: std::collections::BTreeMap<&str, Vec<String>> =
+            std::collections::BTreeMap::new();
+        for (name, file) in found {
+            grouped.entry(file).or_default().push(name.to_string());
+        }
+        grouped
+            .into_iter()
+            .map(|(file, mut names)| {
+                names.sort();
+                (file.to_string(), names)
+            })
+            .collect()
+    }
+
     /// Transitive project-local include closure of `start` files (paths are
     /// repo-relative). The result includes the start files themselves, sorted.
     pub fn include_closure(&self, start: &[String]) -> Vec<String> {
