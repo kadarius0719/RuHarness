@@ -100,6 +100,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-10-27 — **The lz4 run's first wall: a planted bug nothing could notice** — the `literal-zero` mutant so a constant flag flips; `TIME_getTime` listed five times from `#if` branches, open.
 - 2026-10-30 — **The lz4 run's second day: a sign-in the chat could not see, and a retry the cockpit must pass** — sign in from a plain terminal, not the app's; Make the test program carries `--retry` once a try exists; the walls list.
 - 2026-10-30 — **Functions written in headers: a header is never a piece, its helpers move with the files that include it** — the scanner reads `#define X static`, resolves helper calls through includes; the plan skips headers; the prompt's helpers section; zopfli's facts corrected.
+- 2026-10-30 — **The lz4 run's fifth wall: the runtime's own words taken for a stranger's** — a reply cut at the output limit brings a `user` line Claude Code writes itself (`isSynthetic`); the cockpit knows those sentences and keeps the turn's permissions; the output ceiling raised to 128 000.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -4403,3 +4404,41 @@ instead of reading the macro by hand: right, and the per-platform design's job (
 **Revisit when.** A header with a non-static function written in it appears (§7 of the design:
 refuse the map in a sentence); when the per-platform design brings the preprocessor's view,
 the macro reader goes.
+
+## 2026-10-30 — The lz4 run's fifth wall: the runtime's own words taken for a stranger's
+
+**Seen.** `u-lz4` is seventy functions; its test program is long. The chat's reply writing it
+hit Claude Code's output-token limit (32 000 per reply by default). The runtime handles that
+itself: it adds a `user` message of its own — "Output token limit hit. Resume directly — no
+apology, no recap …" — and the model goes on from the cut, up to three times. The cockpit saw a
+user message it had not sent and did what CHAT-PANE-DESIGN §1.1 says of one: showed it as "a
+message the cockpit did not send", withdrew the turn's permission to continue, offered New
+chat. The chat went on writing, but every act after it would have asked the person again, and
+the words on screen read as an intrusion.
+
+**Found.** The line carries `isSynthetic: true` (recorded live with a Haiku call under
+`CLAUDE_CODE_MAX_OUTPUT_TOKENS=64`: three such lines, then the turn failed with "API Error:
+Claude's response exceeded the 64 output token maximum"). The runtime's program (2.1.304) holds
+every such sentence as a fixed string: the output-limit ones (four variants), "no visible
+output", "the tool call was malformed". The cockpit never read the flag.
+
+**Decided.** The stream reader keeps `isSynthetic`; `runtime_nudge` knows the fixed sentences;
+a synthetic line with one of them is said in the cockpit's voice ("Claude Code says: the reply
+hit the output limit; the chat goes on from where it was cut") and ends nothing. The flag
+alone is not trusted: the same words without it, or the flag with other words, stay a message
+the cockpit did not send — the inbox rule holds, since nothing says what a peer's message
+carries. The turn that fails after three cuts says so in words and names the two ways out
+(smaller pieces, a higher limit). The chat's environment sets
+`CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000` unless the person set it (the runtime clamps it to what
+the model allows), so a long test program fits in one reply more often; the name joins the
+inside-a-session allowlist so the person's own value passes.
+
+**Rejected.** Trusting `isSynthetic` for any text: a cheap flag on an inbox message would then
+end the cockpit's one defence. Dropping the foreign-message rule for the chat's acts: the
+threat it answers (§1.1) has not changed. Telling the brief to write every file in parts: the
+model does that when it must, and the ceiling makes it rare.
+
+**Revisit when.** Claude Code changes the sentences (the test holds the recorded one;
+`runtime_nudge` names the version); when a runtime version marks its own messages in a way the
+cockpit can check without the words.
+

@@ -103,13 +103,16 @@ pub enum In {
     /// A `user` line carrying tool results (the runtime's own).
     ToolResults(Vec<ToolResult>),
     /// A `user` line of text: an echo of the cockpit's message (`isReplay`
-    /// with its `uuid`), the runtime's interrupt marker, or a message the
-    /// cockpit did not send.
+    /// with its `uuid`), the runtime's interrupt marker, one of the
+    /// runtime's own nudges (`isSynthetic`, [`runtime_nudge`]), or a
+    /// message the cockpit did not send.
     UserText {
         /// The message's `uuid`.
         uuid: Option<String>,
         /// `isReplay: true`.
         replay: bool,
+        /// `isSynthetic: true`: the runtime wrote it itself.
+        synthetic: bool,
         /// Its text blocks, joined.
         text: String,
     },
@@ -320,6 +323,7 @@ pub fn parse(line: &str) -> In {
             In::UserText {
                 uuid: text(&v, "uuid"),
                 replay: v.get("isReplay").and_then(Value::as_bool) == Some(true),
+                synthetic: v.get("isSynthetic").and_then(Value::as_bool) == Some(true),
                 text: content_text(content),
             }
         }
@@ -454,6 +458,40 @@ pub fn interrupt(request_id: &str) -> String {
     json!({"type": "control_request", "request_id": request_id,
            "request": {"subtype": "interrupt"}})
     .to_string()
+}
+
+/// The runtime's own nudges to the model, in words: the `user` messages
+/// Claude Code 2.1.304 writes itself mid-turn (`isSynthetic: true`) when a
+/// reply hit the output-token limit (it goes on from where it was cut, up
+/// to three times), produced nothing visible, or made a tool call it could
+/// not read. Each is one fixed sentence of the runtime's (read from its
+/// program; the output-limit one recorded live, 2026-10-30). `None` for any
+/// other text: a synthetic line the cockpit does not know stays a message it
+/// did not send.
+pub fn runtime_nudge(text: &str) -> Option<&'static str> {
+    const CUT: &str = "the reply hit the output limit; the chat goes on from where it was cut";
+    const CUT_THINKING: &str = "the reply hit the output limit while the model was still thinking; the chat answers again, more briefly";
+    const CUT_NO_OUTPUT: &str =
+        "the reply hit the output limit before it said anything; the chat answers again";
+    const NO_OUTPUT: &str = "the reply said nothing visible; the chat answers again";
+    const BAD_CALL: &str = "a tool call could not be read; the chat makes it again";
+    Some(match text {
+        "Output token limit hit. Resume directly — no apology, no recap of what you were doing. Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces." => CUT,
+        t if t.starts_with("Output token limit hit while you were still reasoning") => {
+            CUT_THINKING
+        }
+        "[Your previous response reached the output limit with no visible output. Please continue and produce a brief user-visible response or tool call right away.]" => {
+            CUT_NO_OUTPUT
+        }
+        t if t.starts_with("Your response was cut off because it exceeded the output token limit.") => {
+            CUT
+        }
+        t if t.starts_with("Your response above was cut off mid-stream") => CUT,
+        "[Your previous response had no visible output. Please continue and produce a user-visible response.]" => NO_OUTPUT,
+        "The previous response failed to produce a valid tool call. Please retry the tool call now."
+        | "Your tool call was malformed and could not be parsed. Please retry." => BAD_CALL,
+        _ => return None,
+    })
 }
 
 /// The runtime's own marker after an interrupt ("[Request interrupted by
@@ -629,6 +667,52 @@ pub(crate) mod tests {
             m,
             In::UserText { text, .. } if text == "[Request interrupted by user]"
         )));
+    }
+
+    /// The runtime's own nudge after a reply hit the output limit, as
+    /// Claude Code 2.1.304 printed it (recorded live, 2026-10-30, a Haiku
+    /// call under CLAUDE_CODE_MAX_OUTPUT_TOKENS=64): `isSynthetic: true`,
+    /// no `isReplay`, a uuid of its own. Read as synthetic and known; the
+    /// same words without the flag, or other words with it, are not a
+    /// nudge.
+    #[test]
+    fn the_runtimes_own_nudge_is_read() {
+        let cut = "Output token limit hit. Resume directly — no apology, no recap of what you were doing. Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces.";
+        let line = format!(
+            r#"{{"type":"user","message":{{"role":"user","content":[{{"type":"text","text":"{cut}"}}]}},"parent_tool_use_id":null,"session_id":"eca40bc5-818b-4ea6-b8a3-f26ff7d1cf0a","uuid":"e31dbbdd-945c-442d-9949-d6ab8529b2bb","timestamp":"2026-10-31T03:15:43.734Z","isSynthetic":true}}"#
+        );
+        match parse(&line) {
+            In::UserText {
+                synthetic,
+                replay,
+                text,
+                uuid,
+            } => {
+                assert!(synthetic && !replay);
+                assert_eq!(
+                    uuid.as_deref(),
+                    Some("e31dbbdd-945c-442d-9949-d6ab8529b2bb")
+                );
+                assert_eq!(
+                    runtime_nudge(&text),
+                    Some("the reply hit the output limit; the chat goes on from where it was cut")
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            parse(r#"{"type":"user","message":{"role":"user","content":"hello"},"uuid":"x"}"#),
+            In::UserText {
+                synthetic: false,
+                ..
+            }
+        ));
+        assert_eq!(runtime_nudge("hello"), None);
+        assert_eq!(runtime_nudge("Output token limit hit."), None);
+        assert!(runtime_nudge(
+            "Your tool call was malformed and could not be parsed. Please retry."
+        )
+        .is_some());
     }
 
     /// Synthetic lines — shapes no recording shows (marked here: they come

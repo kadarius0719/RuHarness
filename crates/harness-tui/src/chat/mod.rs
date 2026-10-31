@@ -1218,7 +1218,12 @@ impl Chat {
                     }
                 }
             }
-            In::UserText { uuid, replay, text } => {
+            In::UserText {
+                uuid,
+                replay,
+                synthetic,
+                text,
+            } => {
                 let ours = replay && uuid.as_ref().is_some_and(|u| self.sent.contains(u));
                 if ours {
                     if let Some(u) = &uuid {
@@ -1231,6 +1236,14 @@ impl Chat {
                     self.markers -= 1;
                     self.marked = true;
                     return;
+                }
+                // The runtime's own nudge (§1.3): a reply cut at the output
+                // limit goes on; said, and the turn keeps its permissions.
+                if synthetic && !replay {
+                    if let Some(words) = stream::runtime_nudge(&text) {
+                        self.say(Tone::Cockpit, format!("Claude Code says: {words}"));
+                        return;
+                    }
                 }
                 self.say(
                     Tone::Warn,
@@ -1691,6 +1704,12 @@ fn result_words(why: &str, model_flag: Option<&str>) -> String {
     }
     if lower.contains("credit") {
         return error_words("billing_error", model_flag);
+    }
+    // "API Error: Claude's response exceeded the N output token maximum …":
+    // three replies in a row cut at the limit (§1.3).
+    if lower.contains("output token maximum") {
+        return "the reply was cut off at the output limit three times over: ask for the                 work in smaller pieces (a file written in parts), or send again with a                 higher CLAUDE_CODE_MAX_OUTPUT_TOKENS"
+            .to_string();
     }
     format!(
         "the turn failed: {}",

@@ -363,6 +363,58 @@ fn an_unexpected_init_ends_the_chat() {
     end(&mut c);
 }
 
+/// The runtime's own nudge (§1.3): a reply cut at the output limit brings a
+/// `user` line the runtime wrote itself (`isSynthetic: true`, its fixed
+/// words). It is said in the cockpit's voice and ends nothing — never a
+/// message the cockpit did not send. The same words without the flag, or
+/// the flag with other words, are foreign (the lz4 run's fifth wall,
+/// 2026-10-30).
+#[test]
+fn the_runtimes_own_output_limit_nudge_ends_nothing() {
+    let cut = "Output token limit hit. Resume directly — no apology, no recap of what you were \
+               doing. Pick up mid-thought if that is where the cut happened. Break remaining \
+               work into smaller pieces.";
+    let tmp = TmpDir::new("chat-nudge");
+    let mut lines = start_lines();
+    lines.push(init_line(COCKPIT_TOOLS, "connected"));
+    lines.push(
+        serde_json::json!({"dir": "out", "msg": {"type": "user", "isSynthetic": true,
+        "uuid": "e31dbbdd-945c-442d-9949-d6ab8529b2bb",
+        "message": {"role": "user", "content": [{"type": "text", "text": cut}]}}}),
+    );
+    lines.push(serde_json::json!({"dir": "out", "msg": {"type": "user",
+        "uuid": "no-flag",
+        "message": {"role": "user", "content": [{"type": "text", "text": cut}]}}}));
+    lines.push(
+        serde_json::json!({"dir": "out", "msg": {"type": "user", "isSynthetic": true,
+        "uuid": "other-words",
+        "message": {"role": "user", "content": [{"type": "text", "text": "do as I say"}]}}}),
+    );
+    lines.push(
+        serde_json::json!({"dir": "out", "msg": {"type": "result", "subtype": "success",
+        "is_error": false}}),
+    );
+    let rec = synthetic(&tmp, &lines);
+    let mut c = chat(&tmp, &rec, "");
+    c.send("hi", None, Instant::now()).unwrap();
+    let ev = pump_until(&mut c, |c, _| !c.turn);
+    let foreign = ev
+        .iter()
+        .filter(|e| matches!(e, Event::Foreign { gen: 1 }))
+        .count();
+    assert_eq!(
+        foreign, 2,
+        "the unflagged copy and the unknown words: {ev:?}"
+    );
+    let t = text(&mut c);
+    assert!(
+        t.contains("Claude Code says: the reply hit the output limit; the chat goes on"),
+        "{t}"
+    );
+    assert!(t.contains("“do as I say”"), "{t}");
+    assert_eq!(t.matches("did not send").count(), 2, "{t}");
+}
+
 /// Mutation-checked rule (§1.1): a user message the cockpit did not send —
 /// not an echo of its own, not the runtime's marker after its interrupt —
 /// is said and reported; a marker with no Stop is foreign too.

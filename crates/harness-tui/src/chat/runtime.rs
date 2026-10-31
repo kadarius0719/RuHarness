@@ -171,7 +171,24 @@ pub fn resolve(
 }
 
 /// The allowlist inside a Claude Code session (the spikes' own).
-const ALLOW: &[&str] = &["HOME", "PATH", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG"];
+const ALLOW: &[&str] = &[
+    "HOME",
+    "PATH",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "TMPDIR",
+    "LANG",
+    MAX_OUTPUT_TOKENS_VAR,
+];
+/// The runtime's output-token limit per reply. Its default (32 000 in
+/// 2.1.304) cuts a long reply — a test program for a piece of seventy
+/// functions — and the runtime resumes it up to three times, then fails the
+/// turn; the cockpit asks for the ceiling (128 000, clamped by the runtime
+/// to what the model allows) unless the person set the variable themselves.
+const MAX_OUTPUT_TOKENS_VAR: &str = "CLAUDE_CODE_MAX_OUTPUT_TOKENS";
+/// What the cockpit sets it to.
+const MAX_OUTPUT_TOKENS: &str = "128000";
 /// The person's own sign-in and provider variables (passed inside a Claude
 /// Code session, where everything else is the host's).
 const SIGN_IN: &[&str] = &[
@@ -260,6 +277,9 @@ pub fn environment(vars: &[(OsString, OsString)]) -> Vec<(OsString, OsString)> {
     };
     out.retain(|(k, _)| k != "TERM");
     out.push(("TERM".into(), "dumb".into()));
+    if !out.iter().any(|(k, _)| k == MAX_OUTPUT_TOKENS_VAR) {
+        out.push((MAX_OUTPUT_TOKENS_VAR.into(), MAX_OUTPUT_TOKENS.into()));
+    }
     out
 }
 
@@ -1001,6 +1021,7 @@ mod tests {
             names(&env),
             [
                 "AWS_PROFILE",
+                "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
                 "CLAUDE_CONFIG_DIR",
                 "HOME",
                 "LANG",
@@ -1010,6 +1031,18 @@ mod tests {
             ]
         );
         assert!(env.contains(&("TERM".into(), "dumb".into())));
+        // The output-token ceiling is the cockpit's unless the person set it.
+        assert!(env.contains(&("CLAUDE_CODE_MAX_OUTPUT_TOKENS".into(), "128000".into())));
+        let mut own = host.clone();
+        own.push(("CLAUDE_CODE_MAX_OUTPUT_TOKENS".into(), "40000".into()));
+        let env = environment(&own);
+        assert!(env.contains(&("CLAUDE_CODE_MAX_OUTPUT_TOKENS".into(), "40000".into())));
+        assert_eq!(
+            env.iter()
+                .filter(|(k, _)| k == "CLAUDE_CODE_MAX_OUTPUT_TOKENS")
+                .count(),
+            1
+        );
         assert_eq!(sign_in_words(&env), "your Claude subscription");
         // The endpoint with its credential: both pass, and are named.
         let mut with_key = host.clone();

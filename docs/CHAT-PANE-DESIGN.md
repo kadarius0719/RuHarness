@@ -110,6 +110,11 @@ neither the model nor the model setting.
   the target's code outside the repo). The conversation lives as long as the chat.
 - `--model`: from `--chat-model <name>` (the model-name rule of `valid_model`, §8); absent, the
   runtime's own default.
+- `CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000` in the runtime's environment unless the person set it
+  (it passes the allowlist inside a Claude Code session): the runtime's default of 32 000 per
+  reply cuts a long one — a test program for a piece of seventy functions — and the runtime
+  resumes it at most three times before it fails the turn (2026-10-30, the lz4 run); the
+  runtime clamps the value to what the model allows.
 - Not `--bare`: it refuses the subscription login (DECISIONS). The cockpit never reads, stores
   or passes a credential it chose; the person's installed, unmodified `claude` signs in its own
   way.
@@ -203,6 +208,8 @@ block**, several messages per turn, sharing a message id (spike logs: 49 of 49).
 | `assistant` | its one block replaces that block of its message's cell (text), or adds a tool line (tool_use); `thinking` is not shown; an `error` value (`authentication_failed`, `model_not_found`, …) becomes a translated cockpit line; a `<synthetic>` message is the runtime's own, shown as such |
 | `user` with `tool_result` | a read's line says "done" or "failed"; an act's outcome is already known |
 | `user` text "[Request interrupted by user…]" | the runtime's own marker after a Stop — accepted only between the cockpit's own `interrupt` and that turn's `result`: shown as "stopped"; any other is a foreign message |
+| `user` with `isSynthetic: true` and one of the runtime's own nudges | the runtime wrote it to the model itself: a reply cut at the output limit ("Output token limit hit. Resume directly …", recorded live 2026-10-30), nothing visible produced, a tool call it could not read — the fixed sentences `runtime_nudge` knows from 2.1.304. Said in the cockpit's voice ("Claude Code says: the reply hit the output limit; the chat goes on from where it was cut"); the turn keeps its permissions. The same words without the flag, or the flag with other words, are a foreign message |
+| `result` with `is_error` "… exceeded the N output token maximum …" | three replies in a row cut at the limit: "the reply was cut off at the output limit three times over: ask for the work in smaller pieces (a file written in parts), or send again with a higher CLAUDE_CODE_MAX_OUTPUT_TOKENS" |
 | any other `user` message the cockpit did not send | §1.1's inbox rule |
 | `control_request` `can_use_tool` | §2 |
 | `control_request` of any other subtype | answered at once with an error `control_response` (its `request_id`), and noted; a known one (a model-consent prompt) in words: "this model needs consent — give it in a normal `claude` session, or choose another with --chat-model" |

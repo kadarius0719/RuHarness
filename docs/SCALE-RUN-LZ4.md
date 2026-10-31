@@ -113,6 +113,13 @@ card says `Uses N helper functions written in programs/util.h, translated as par
 piece`, and the chat is told to translate them as private Rust functions. If a try on one of
 them goes red at `symbol-set` naming a `UTIL_` function, or at the build with "undefined
 symbol UTIL_…", that is this fix failing: screenshot it.
+**A long reply (from 2026-10-30).** A test program for a big piece (`u-lz4`, seventy functions)
+can be longer than one reply. The chat pane then says `Claude Code says: the reply hit the
+output limit; the chat goes on from where it was cut`, and the chat keeps writing: wait. If
+instead it says `the reply was cut off at the output limit three times over`, the turn failed:
+Ctrl-N for a new chat, and ask it to make the test program in parts (a file written in several
+steps). Before this fix the same moment read `a message the cockpit did not send reached the
+chat` — that wording on an output-limit line is the old build.
 **Stop rule.** Stop after the third wall, or after `lz4.c` either way (green or not). Everything
 past that is the same lesson again.
 
