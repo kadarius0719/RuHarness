@@ -120,6 +120,13 @@ instead it says `the reply was cut off at the output limit three times over`, th
 Ctrl-N for a new chat, and ask it to make the test program in parts (a file written in several
 steps). Before this fix the same moment read `a message the cockpit did not send reached the
 chat` — that wording on an output-limit line is the old build.
+**After a macOS or Xcode update (from 2026-11-07).** If Map says `programs: 0` and lists every
+file as its own library (`l-main`, `l-step`, …), or Accept says `the map has no program or
+library t-…`, the compiler is the cause, not the project: clang 21 (Xcode's SDK of
+2026-11-05) lists the SDK's own `SDKSettings.json` as a file every compile read, and the map
+took that for a read outside the project and withheld every symbol. A build from 2026-11-07
+or later counts the SDK's and the toolchain's own folders as the toolchain's; rebuild and Map
+again. The log (`L`) shows the map's own lines if you want to see what it read.
 **Stop rule.** Stop after the third wall, or after `lz4.c` either way (green or not). Everything
 past that is the same lesson again.
 

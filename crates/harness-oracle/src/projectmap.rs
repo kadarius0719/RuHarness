@@ -24,8 +24,11 @@
 //! What a compile read is known from the compiler's own dependency list
 //! (`-MD -MF`): a file inside the root the walk did not record is an
 //! `included_other`; anything outside the root and the toolchain's own
-//! folders makes the file `outside_includes`, and its symbol names are then
-//! counted, never kept (a readable file's bytes can become a symbol name).
+//! folders — its `#include <...>` search folders, and the SDK and toolchain
+//! roots they sit in (clang 21 lists the SDK's `SDKSettings.json` as a
+//! dependency of every compile) — makes the file `outside_includes`, and its
+//! symbol names are then counted, never kept (a readable file's bytes can
+//! become a symbol name).
 //! Every object and dependency list is deleted as soon as it is read; the
 //! fresh folder they live in goes with the run.
 //!
@@ -615,6 +618,7 @@ pub(crate) fn map_in(
         .iter()
         .map(|d| d.canonicalize().unwrap_or_else(|_| d.clone()))
         .collect();
+    let toolchain_roots = toolchain_roots(&sys_dirs);
 
     // Step 3: include folders, per file.
     let resolver = Resolver::new(&root, &paths, &scanned, &sys_dirs);
@@ -669,6 +673,7 @@ pub(crate) fn map_in(
         fresh: &fresh.0,
         runner: &runner,
         sys_dirs: &sys_dirs,
+        toolchain_roots: &toolchain_roots,
         walked: &walked_set,
         scrubber: &scrubber,
         system_headers: &configuration.system_headers,
@@ -1179,6 +1184,10 @@ pub(crate) struct CompileCtx<'a> {
     pub(crate) fresh: &'a Path,
     pub(crate) runner: &'a Runner,
     pub(crate) sys_dirs: &'a [PathBuf],
+    /// The SDK and toolchain roots the system folders sit in
+    /// ([`toolchain_roots`]): what the compiler reads there is the
+    /// toolchain's own.
+    pub(crate) toolchain_roots: &'a [PathBuf],
     pub(crate) walked: &'a BTreeSet<&'a str>,
     pub(crate) scrubber: &'a Scrubber,
     /// The configuration's `system_headers`: a folder holding one is passed
@@ -1460,7 +1469,12 @@ fn read_dependencies(ctx: &CompileCtx<'_>, facts: &mut FileFacts, listed: &str) 
             if rel != facts.path && !ctx.walked.contains(rel.as_str()) {
                 other.insert(rel);
             }
-        } else if !ctx.sys_dirs.iter().any(|d| path.starts_with(d)) {
+        } else if !ctx
+            .sys_dirs
+            .iter()
+            .chain(ctx.toolchain_roots.iter())
+            .any(|d| path.starts_with(d))
+        {
             facts.outside_includes = true;
         }
     }
@@ -1488,6 +1502,27 @@ fn read_dependencies(ctx: &CompileCtx<'_>, facts: &mut FileFacts, listed: &str) 
 /// The prerequisites of a make rule as `-MD` writes it: everything after the
 /// first `: `, split on unescaped blanks, with `\ ` a space, `\#` a `#`,
 /// `$$` a `$` and a backslash-newline a blank.
+/// The SDK (`*.sdk`) and toolchain (`*.xctoolchain`) roots the system
+/// include folders sit in, each once: a compile reads the toolchain's own
+/// files outside its header folders (clang 21 lists the SDK's
+/// `SDKSettings.json` in every dependency list), and those reads are the
+/// toolchain's, never the project's. Folders without such a root (Linux's
+/// `/usr/include`) add nothing: `/usr` would cover too much.
+fn toolchain_roots(sys_dirs: &[PathBuf]) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for dir in sys_dirs {
+        for a in dir.ancestors() {
+            let name = a.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if (name.ends_with(".sdk") || name.ends_with(".xctoolchain"))
+                && !roots.iter().any(|r| r == a)
+            {
+                roots.push(a.to_path_buf());
+            }
+        }
+    }
+    roots
+}
+
 fn dependency_paths(rule: &str) -> Vec<String> {
     let Some((_, rest)) = rule.split_once(": ") else {
         return Vec::new();
@@ -1611,3 +1646,50 @@ mod tests;
 
 #[cfg(test)]
 mod build_tests;
+
+#[cfg(test)]
+mod toolchain_tests {
+    use super::*;
+
+    /// The SDK's own files (its `SDKSettings.json`) and the toolchain's are
+    /// the toolchain's reads; a Linux layout adds no root.
+    #[test]
+    fn the_sdk_and_toolchain_roots_come_from_the_system_folders() {
+        let xcode = "/Applications/Xcode.app/Contents/Developer";
+        let sys = [
+            PathBuf::from(format!(
+                "{xcode}/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/include"
+            )),
+            PathBuf::from(format!(
+                "{xcode}/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include"
+            )),
+            PathBuf::from(format!(
+                "{xcode}/Toolchains/XcodeDefault.xctoolchain/usr/include"
+            )),
+        ];
+        let roots = toolchain_roots(&sys);
+        assert_eq!(
+            roots,
+            [
+                PathBuf::from(format!("{xcode}/Toolchains/XcodeDefault.xctoolchain")),
+                PathBuf::from(format!(
+                    "{xcode}/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+                )),
+            ]
+        );
+        let settings = PathBuf::from(format!(
+            "{xcode}/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/SDKSettings.json"
+        ));
+        assert!(!sys.iter().any(|d| settings.starts_with(d)));
+        assert!(roots.iter().any(|d| settings.starts_with(d)));
+        assert!(!roots
+            .iter()
+            .any(|d| Path::new("/Users/me/project/x.h").starts_with(d)));
+        let linux = [
+            PathBuf::from("/usr/lib/gcc/x86_64-linux-gnu/13/include"),
+            PathBuf::from("/usr/local/include"),
+            PathBuf::from("/usr/include"),
+        ];
+        assert!(toolchain_roots(&linux).is_empty());
+    }
+}
