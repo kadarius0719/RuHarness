@@ -93,6 +93,12 @@ When you confirm a migration the chat asked for, the dialog says the chat will a
 
 **When a scenario cannot run, the chat's fix.** On a feature whose scenario cannot run (`⚑ a scenario cannot run`: the C's output differs between runs, it crashed or timed out, its input file is not there, …), the row's menu offers, under the model line, **Fix the features file — ask in chat**; with the chat usable the Next step recommends it, before **Edit the features file**. It types one line per scenario that cannot run into the chat — `Scenario bench/default cannot be a check: the C program's output differs between runs. Change or remove it, and propose the corrected features file` — and you press `Enter` to send it. The chat reads your file as it is (the harness tool `harness_features_file`), changes only those scenarios, and writes a corrected proposal beside your file. The Next step then reads `Read the chat's fix — Enter, then Edit from the chat's proposal`, and **Edit from the chat's proposal…** opens it as your draft; nothing is saved until you save. Greyed with the reason while the chat cannot be used or a draft is in the way, as **Propose** is. On the Speed row, **Fix the workloads file — ask in chat** does the same for a workload whose input cannot be used or whose C perf cannot measure (the chat reads that file with `harness_workloads_file`).
 
+## When something looks stuck
+
+Press `L` (in the chat, `Ctrl-L`) for the **log**: everything the cockpit did this session, oldest at the top, newest at the bottom — every dialog you answered, every command it started and each line the command printed, every line the chat pane showed, what the cockpit told the chat after a run, when the chat was allowed to continue on its own and when that ended, every notice. Each row has the time, the piece it is about and the words; `r` shows the raw line under each row (the exact command, the exact output, the chat's tool call), `↑↓` and `PgUp`/`PgDn` scroll, `End` follows the newest row again, `Esc` closes. The same events go to a file, `migration/build/cockpit.log` in your project (the log's last row names it): one JSON line each, so `tail -f` on it follows the evening from another window, and it is the file to copy when reporting a problem. The log is kept in a folder git ignores and the cockpit never reads it back.
+
+Two more places tell you the chat is alive while a command waits for it. The chat's title says how long the reply has been thinking (`Chat — thinking 4 min 12 s`), and the status row under the panes says the chat's clocks first — `Chat thinking 4 min 12 s · heard 3 s ago — answering turn 1 for u-lz4` — then, if the reply ended without the command being asked again, `Chat quiet 40 s — its reply ended; the command has not been asked again`, or, if the chat ended, `Chat ended — turn 1 waits; Ctrl-N for a new chat`. A command's Details (`c`) for a run that paused for an answer begins with `This pause is normal: the harness wrote its question to a file and waits for the chat's answer.`; the `error: awaiting` and `result: exit 1` lines under it are the harness's own, and that first row is what they mean.
+
 ## Try it
 
 These boxes assume the guided liblzg run, with `u-checksum` verified. Make the window wide, and press one key at a time.
@@ -108,6 +114,12 @@ Look for: Files on the left with `lzg` as its first row and a summary such as `�
 ```
 
 Look for: a first page of seven keys (`↑ ↓`, `Enter`, `Tab`, `Esc`, `i`, `?`, `q`) and three marks (`◇` no test program yet — `◈` once it is ready —, `✓` done, `⚠` needs attention); `↓` shows every key and every symbol, each with its meaning; any other key closes it.
+
+```text
+L
+```
+
+Look for: the log over the panes, `Log — this session` as its title, one row per thing the cockpit did (the time, the piece, the words), the newest at the bottom, and its last row `migration/build/cockpit.log — copy this file when reporting a problem`; `r` adds the raw line under each row that has one; `Esc` closes it.
 
 ```text
 v      (with u-checksum, under Pieces (5), selected)

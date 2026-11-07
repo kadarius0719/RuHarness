@@ -55,6 +55,8 @@ pub mod next;
 #[cfg(feature = "tui")]
 pub mod project;
 #[cfg(feature = "tui")]
+pub mod runlog;
+#[cfg(feature = "tui")]
 pub mod termguard;
 #[cfg(feature = "tui")]
 pub mod theme;

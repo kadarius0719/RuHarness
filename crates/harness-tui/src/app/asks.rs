@@ -250,6 +250,12 @@ pub struct Asks {
     /// the chat answers turn 1", updated in place through its turns until
     /// its outcome.
     pub act_line: Option<u64>,
+    /// Rows for the run log (a permission granted or ended, with the
+    /// attempt it names), drained each loop pass (docs/RUN-LOG-DESIGN.md §2).
+    pub pending_log: Vec<(Option<String>, String)>,
+    /// The piece of the chat act last run: the log's piece for the chat's
+    /// rows (the selection moves freely while the chat works).
+    pub last_piece: Option<String>,
 }
 
 impl Asks {
@@ -307,10 +313,15 @@ impl Asks {
     /// SAF-1).
     pub fn end_permits(&mut self, gen: u64, why: &'static str) {
         let ended = &mut self.ended;
+        let log = &mut self.pending_log;
         self.permits.retain(|a, p| {
             let keep = p.gen != gen;
             if !keep {
                 ended.insert(a.clone(), why);
+                log.push((
+                    Some(a.clone()),
+                    format!("the chat's permission to continue {a} ended: {why}"),
+                ));
             }
             keep
         });
@@ -324,6 +335,10 @@ impl Asks {
     pub fn end_permit(&mut self, attempt: &str, why: &'static str) {
         if self.permits.remove(attempt).is_some() {
             self.ended.insert(attempt.to_string(), why);
+            self.pending_log.push((
+                Some(attempt.to_string()),
+                format!("the chat's permission to continue {attempt} ended: {why}"),
+            ));
         }
     }
 }
@@ -1323,6 +1338,7 @@ impl App {
         let Some(tag) = &p.chat else {
             return;
         };
+        self.asks.last_piece = p.unit.clone();
         // One line for the act, updated in place (§9.5).
         let text = if tag.permitted {
             self.asks.waiting = None;
@@ -1403,6 +1419,13 @@ impl App {
         };
         if let Some(t) = tag.filter(|t| t.grant && !self.config.allow_unsandboxed && live(t)) {
             self.asks.ended.remove(&attempt);
+            self.asks.pending_log.push((
+                Some(attempt.clone()),
+                format!(
+                    "the chat may continue {} without asking ({attempt})",
+                    self.asks.table.get(&attempt).map_or("", |h| h.act.as_str())
+                ),
+            ));
             self.asks.permits.insert(
                 attempt,
                 Permit {
@@ -1461,6 +1484,11 @@ impl App {
 
     fn chat_owed(&mut self, owed: Owed, failed: Option<&str>) {
         let (text, line, tone) = outcome_message(&owed, failed);
+        // What the model is told differs from the pane's line: the log
+        // keeps it (docs/RUN-LOG-DESIGN.md §2).
+        self.chat
+            .transcript
+            .log_raw(T::Dim, format!("told the chat: {text}"), None);
         // The act's line ends in its outcome — or, paused for the chat's
         // answer, says which turn it answers (§9.5).
         let paused = outcome_word(&owed) == "awaiting";
@@ -1734,6 +1762,7 @@ impl App {
                 }
             }
             KeyCode::Char('n') if ctrl => self.chat_ask_new(),
+            KeyCode::Char('l') if ctrl => self.open_log(),
             KeyCode::Char('j') if ctrl => {
                 self.chat.input.insert("\n");
                 typed(self);
@@ -1845,6 +1874,8 @@ impl App {
     /// New chat (confirmed): the old one ends; its requests and
     /// permissions with it.
     pub(super) fn chat_new_chat(&mut self) {
+        // The pause the old chat was answering is over for the status row.
+        self.chat_pause = None;
         let now = self.now;
         if let Some(ChatEvent::Ended { gen }) = self.chat.new_chat(now) {
             self.chat_gen_ended(gen, now);
@@ -2091,6 +2122,10 @@ impl App {
             }
             "Ctrl-N" => {
                 self.chat_ask_new();
+                Command::None
+            }
+            "Ctrl-L" => {
+                self.open_log();
                 Command::None
             }
             "Enter" => self.chat_key(KeyEvent::from(KeyCode::Enter), now),

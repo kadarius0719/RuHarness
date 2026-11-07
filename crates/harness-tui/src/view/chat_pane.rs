@@ -201,10 +201,15 @@ pub fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect, column: bool, str
     });
     let buttons_w: u16 = chosen.iter().map(|(_, l, _)| width_of(l) as u16 + 1).sum();
     let title_room = (right.saturating_sub(area.x + 2 + strip_w + buttons_w)) as usize;
-    let title = ellipsis(
-        &format!(" Chat — {}{model} ", state_word(app)),
-        title_room.max(4),
-    );
+    // While a reply runs, how long it has been thinking (the heartbeat,
+    // docs/RUN-LOG-DESIGN.md §4).
+    let state = match app.chat.thinking_for(std::time::Instant::now()) {
+        Some(d) if state_word(app) == "thinking…" => {
+            format!("thinking {}", crate::narrate::elapsed_words(d))
+        }
+        _ => state_word(app).to_string(),
+    };
+    let title = ellipsis(&format!(" Chat — {state}{model} "), title_room.max(4));
     let block = pane_block(title, focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -435,6 +440,7 @@ pub fn chat_hints(app: &App) -> Vec<(&'static str, &'static str)> {
         h.push(("↑↓", "scroll"));
     }
     h.push(("Tab", "pane"));
+    h.push(("Ctrl-L", "log"));
     h
 }
 
@@ -868,5 +874,89 @@ mod tests {
             "follows the newest line: {screen}"
         );
         golden("chat-waiting-120.txt", &a, &b);
+    }
+
+    /// The heartbeat (docs/RUN-LOG-DESIGN.md §4): the chat's header says
+    /// how long the reply has been thinking; the status row, while the last
+    /// command paused for the chat, says the chat's clocks first and, after
+    /// the reply or the chat ended, what that means and the way out.
+    #[test]
+    fn the_heartbeat_shows_the_chats_clocks() {
+        let tmp = TmpDir::new("chat-heartbeat");
+        let mut a = chat_app("chat-heartbeat", &tmp);
+        a.chat.turn = true;
+        a.chat.reply_started = Some(Instant::now() - Duration::from_secs(252));
+        a.chat_pause = Some(crate::app::ChatPause {
+            since: Instant::now(),
+            turn: Some(1),
+            piece: Some("u-lib".into()),
+        });
+        a.focus = Focus::Chat;
+        a.chat_column = true;
+        let screen = text(&render(&mut a, 200, 30));
+        assert!(screen.contains("Chat — thinking 4 min 12 s"), "{screen}");
+        let status = screen
+            .lines()
+            .find(|l| l.starts_with(" Chat "))
+            .unwrap_or_else(|| panic!("{screen}"));
+        assert!(
+            status.starts_with(
+                " Chat thinking 4 min 12 s · heard 0 s ago — answering turn 1 for u-lib"
+            ),
+            "{status}"
+        );
+        // A request of the chat's held by the cockpit: the model waits, not thinks.
+        a.chat.held.insert("r9".into());
+        let screen = text(&render(&mut a, 200, 30));
+        assert!(
+            screen.contains(" Chat is told the outcome, then answers turn 1 for u-lib"),
+            "{screen}"
+        );
+        assert!(!screen.contains("thinking 4 min"), "{screen}");
+        a.chat.held.clear();
+        // The reply ended and the command was not asked again: a stall, visible.
+        a.chat.turn = false;
+        a.chat.reply_started = None;
+        let screen = text(&render(&mut a, 200, 30));
+        assert!(
+            screen.contains(
+                " Chat quiet 0 s — its reply ended; the command has not been asked again"
+            ),
+            "{screen}"
+        );
+        // The chat ended: the way out.
+        a.chat
+            .end(Instant::now(), Duration::ZERO, Duration::from_millis(100));
+        let screen = text(&render(&mut a, 200, 30));
+        assert!(
+            screen.contains(" Chat ended — turn 1 waits; Ctrl-N for a new chat"),
+            "{screen}"
+        );
+        // The chat's next command starts: the pause is over.
+        let p = a.act_argv(Act::Verify, Some("u-lib"), None, None).unwrap();
+        a.on_spawned(&p);
+        assert!(a.chat_pause.is_none());
+    }
+
+    /// docs/RUN-LOG-DESIGN.md §3: a request of the chat's that arrives while
+    /// the Log is open is one line in the notice row, "Esc to see".
+    #[test]
+    fn the_chat_asks_under_the_log() {
+        let tmp = TmpDir::new("chat-under-log");
+        let mut a = chat_app("chat-under-log", &tmp);
+        a.focus = Focus::Chat;
+        a.open_log();
+        request(&mut a, true);
+        let screen = text(&render(&mut a, 120, 30));
+        assert!(
+            screen.contains(
+                " The chat asks: Migrate u-lib — a model call, answered here in chat — Esc to see"
+            ),
+            "{screen}"
+        );
+        assert!(
+            !screen.contains("[Review"),
+            "the overlay never answers a request: {screen}"
+        );
     }
 }

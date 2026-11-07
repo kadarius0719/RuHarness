@@ -1,6 +1,7 @@
 # The run log: a file that keeps the evening, and a view that shows it
 
-Status: design, 2026-11-07, revised the same day after the review in §R. Builds on
+Status: built 2026-11-07 (what the build changed from the text below is in §B), after the
+review in §R the same day. Builds on
 COCKPIT-WRAPPER-DESIGN (§6 the activity panel, §9.3 one list, one card, one line) and
 CHAT-PANE-DESIGN (§1.3 the stream, §5 the screen). Governs the log file, the Log view, the
 chat's heartbeat and the Details panel's plain pause once built; SCHEMAS.md gets the file's row.
@@ -340,6 +341,45 @@ part opening the Log after a run.
   someone works from the CLI and the view.
 - **The model's replies in the log.** Left out on purpose (§0); if the person wants the chat's
   words kept after the chat ends, a `reply` kind, cut at a limit, behind an opt-in.
+
+## B. As built (2026-11-07)
+
+The build followed §9's order; the code is `crates/harness-tui/src/runlog.rs`, the hooks in
+`app.rs`, `app/asks.rs`, `app/adopt_offer.rs`, `chat/mod.rs`, `chat/transcript.rs`, the view in
+`view.rs` and `view/chat_pane.rs`. Where it departs from the text above:
+
+- **The local clock.** Every crate forbids unsafe code, and `localtime_r` needs it. The view
+  asks the system once, `date +%z`, for the zone's offset (no new crate), and the title says
+  "· times in UTC" when that fails. The file's `t` is UTC either way.
+- **An adoption and the file before it.** Adopting deletes `migration/build/`, and the log
+  written before it goes with the folder (the harness's rule, not the cockpit's). The file is
+  closed before and opened again after with a new header; the adoption dialog's own row is
+  logged after the reopen, so the file that remains begins with it.
+- **The adoption check knows the file.** A `migration/` holding only hand-written files is
+  "no results" to `adopt::check`, and the cockpit's `build/cockpit.log` would have made it
+  look like results made elsewhere (the cockpit's own re-read then refused the folder:
+  `tool_reread` caught it). `holds_no_results` now takes a `build/` holding the log alone as
+  the diary it is; a `build/` with anything else stays a result.
+- **A closed log holds its lines.** Between `close` and `reopen` (and after `q`) nothing
+  opens the file: lines pushed meanwhile wait and are written after the reopen's header.
+- **The exit row** reads `<exit as Details shows it> (<took>)` — `exit 0 (41 s)`, `paused:
+  … (41 s)` — with the raw `exit N` / `signal <name>` beside it.
+- **The reply's end** is one log row, `the chat's reply ended — 382.7 s · $1.159 of plan
+  usage`, in place of the pane's `— …` line (the pane keeps its line; the log has the
+  sentence). A reply's start is logged at the send, at the runtime's `init`, and at every
+  `released()`.
+- **The footer** when the file is not written reads `not written: <why> — this view shows
+  this session only` (short enough for 120 columns with the reason).
+- **The narrow terminal's row** wraps to two when even "make the window wider … Esc closes"
+  does not fit on one.
+- **The status row while the chat is told an outcome** (its request still held by the
+  cockpit, the model waiting rather than thinking) says `Chat is told the outcome, then
+  answers turn 1 for u-lz4` — a fourth state §4 did not list.
+- **The chat pane's keys** list `Ctrl-L log`; the panes' key row lists `L log`, dropped first
+  when the row is too narrow. The goldens changed by those entries alone.
+- Tests as §8 lists them, 17 new: eight on `runlog`, the hooks, the adoption, the chat's
+  funnel, the permissions and "told the chat", three goldens of the view and its keys, the
+  heartbeat's four states, the notice row under the log, the Details pause row.
 
 ## R. Design review — nine findings, resolved (2026-11-07)
 

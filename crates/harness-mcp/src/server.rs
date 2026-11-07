@@ -878,7 +878,7 @@ impl<W: Write> Server<W> {
         };
         for msg in f.running.drain() {
             match msg {
-                ChildMsg::Event(ev) => {
+                ChildMsg::Event { event: ev, .. } => {
                     if let (Some(token), Some(message)) = (&f.token, progress_message(&ev)) {
                         if !f.cancelled {
                             f.progress += 1;

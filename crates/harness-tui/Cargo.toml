@@ -26,6 +26,7 @@ tui = [
     "dep:signal-hook",
     "dep:harness-oracle",
     "dep:toml",
+    "dep:libc",
 ]
 
 [dependencies]
@@ -39,6 +40,12 @@ tree-sitter-highlight = { workspace = true, optional = true }
 tree-sitter-c = { workspace = true, optional = true }
 signal-hook = { workspace = true, optional = true }
 serde_json.workspace = true
+# Already in the tree (harness-core): the run log's lines are structs
+# serialised in field order (docs/RUN-LOG-DESIGN.md §1).
+serde.workspace = true
+# Already in the tree (harness-core's open flags): the run log's file is
+# opened with O_NOFOLLOW, never through a link (docs/RUN-LOG-DESIGN.md §1).
+libc = { workspace = true, optional = true }
 # Already in the tree (harness-core reads its TOML with it): the cockpit's own
 # settings file, cockpit.toml (its theme and colours).
 toml = { workspace = true, optional = true }

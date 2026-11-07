@@ -77,7 +77,7 @@ fn write_line(line: &str) {
 /// shown as `?` (review T2) — target files (a features.toml key, a plan's
 /// parse error) reach human lines, and an escape sequence in them must not
 /// drive the person's terminal. The JSON mode escapes the same characters
-/// as `\uXXXX` ([`json_safe`]).
+/// as `\uXXXX` (`harness_core::text::json_safe`).
 pub fn terminal_safe(text: &str) -> String {
     text.chars()
         .map(|c| {
@@ -114,31 +114,10 @@ pub fn event(ev: &impl Serialize) {
     }
 }
 
-/// One event as its line of JSON, escaped by [`json_safe`].
+/// One event as its line of JSON, escaped by `harness_core::text::json_safe`
+/// (the cockpit's log is escaped the same way).
 fn event_json(ev: &impl Serialize) -> serde_json::Result<String> {
-    serde_json::to_string(ev).map(|json| json_safe(&json))
-}
-
-/// `json` with every character `harness_core::text::unsafe_to_show` names
-/// written as a `\uXXXX` escape (a pair of them past U+FFFF). serde_json
-/// escapes only U+0000–U+001F, `"` and `\`; DEL, the C1 controls, the bidi
-/// characters and the invisible format characters would otherwise reach a
-/// terminal that shows the stream raw. Outside strings JSON holds only
-/// ASCII punctuation, digits and letters, so every such character is inside
-/// a string, where the escape means the same character.
-fn json_safe(json: &str) -> String {
-    let mut out = String::with_capacity(json.len());
-    for c in json.chars() {
-        if harness_core::text::unsafe_to_show(c) {
-            let mut units = [0u16; 2];
-            for unit in c.encode_utf16(&mut units) {
-                out.push_str(&format!("\\u{unit:04x}"));
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
+    serde_json::to_string(ev).map(|json| harness_core::text::json_safe(&json))
 }
 
 #[derive(Serialize)]

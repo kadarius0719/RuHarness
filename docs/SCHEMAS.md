@@ -1100,6 +1100,27 @@ staleness. Wall-clock is allowed: the file is outside every hashed set and non-c
 The harness never truncates through a link: a symlink or hard-linked `.lock`, or a
 symlinked `migration/`, is refused.
 
+## The cockpit log: `migration/build/cockpit.log` (gitignored)
+
+The cockpit's diary (docs/RUN-LOG-DESIGN.md): the one file the cockpit writes inside the
+ledger, in the scratch folder every ledger's `.gitignore` names, append-only, never read back
+by the cockpit or by any harness command — nothing in it can steer anything. One JSON object
+per line, escaped like the events stream (`harness_core::text::json_safe`: DEL, the C1
+controls, the bidi and invisible format characters as `\uXXXX`). Each cockpit session opens
+with `{"k":"header","schema":"ruharness-cockpit-log","schema_version":1,"t":"<RFC 3339 UTC,
+milliseconds>","pid":N,"harness":"<version>","target":"<root>"}`; every other line is
+`{"k":<kind>,"t":…,"pid":N,"piece":"<unit id>" (when it has one),"words":"<the plain
+sentence>","raw":"<the command line, the output line as printed, the event record, the tool
+call>" (when it has one; cut at 4 000 bytes with ` … (N more bytes)`)}`. `k` is an open set:
+`cockpit`, `command`, `chat`, `dialog`, `notice`. Wall-clock is allowed: the file is outside
+every hashed set and non-canonical. Two cockpits on one target interleave; the pid tells them
+apart. It is never written through a link: a symlinked `migration/`, `build/` or
+`cockpit.log`, or a hard-linked file, is refused and the cockpit's Log view says why; the
+folder is made 0700 and the file 0600. Adopting a ledger deletes `migration/build/`, and the
+log with it: the cockpit closes the file before and opens it again after, with a new header.
+Tool results, the model's own text and the chat's environment never reach it. To the
+adoption check a `build/` holding this file alone is bookkeeping, not a result.
+
 ## The events stream: `ruharness-events` (v1, `--json`)
 
 Newline-delimited JSON on stdout, one compact object per line, no timestamps. First line
@@ -1605,6 +1626,7 @@ project with it renamed". Finder's `.DS_Store` is ignored wherever it appears.
 | `map/` | the project map (`project map`) |
 | `tools/` | mapped tools' ledgers (`project accept`) |
 | `build/` | scratch (gitignored) |
+| `build/cockpit.log` | the cockpit's run log (gitignored; the cockpit's one write into the ledger — below) |
 | `.lock` | the writer lock (gitignored) |
 | `.gitignore` | the ledger's own ignore rules |
 | `.ruharness-adopted` | the adoption token (gitignored, never committed: each checkout writes its own) |

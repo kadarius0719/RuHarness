@@ -30,12 +30,28 @@ const MAX_STDERR_LINE_BYTES: usize = 64 * 1024;
 /// What the reader threads report.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChildMsg {
-    /// A line of stdout, as an event.
-    Event(Event),
+    /// A line of stdout, as an event — and as it was printed (the run log
+    /// keeps it, docs/RUN-LOG-DESIGN.md §2; empty when a test made it).
+    Event {
+        /// The parsed line.
+        event: Event,
+        /// The line as printed.
+        line: String,
+    },
     /// A line of stderr (lossy UTF-8).
     Stderr(String),
     /// A pipe hit EOF (or failed to read).
     Eof(Pipe),
+}
+
+impl ChildMsg {
+    /// An event without its printed line (tests).
+    pub fn event(event: Event) -> ChildMsg {
+        ChildMsg::Event {
+            event,
+            line: String::new(),
+        }
+    }
 }
 
 /// Which pipe.
@@ -122,7 +138,8 @@ impl Running {
                 while let Ok(Some(line)) =
                     events::read_line_bounded(&mut reader, events::MAX_EVENT_LINE_BYTES)
                 {
-                    if tx.send(ChildMsg::Event(events::parse_line(&line))).is_err() {
+                    let event = events::parse_line(&line);
+                    if tx.send(ChildMsg::Event { event, line }).is_err() {
                         return;
                     }
                 }
@@ -341,10 +358,15 @@ mod tests {
         .unwrap();
         let (msgs, status) = run_to_end(&mut running);
         assert_eq!(status.code(), Some(3));
-        assert!(msgs.contains(&ChildMsg::Event(Event::Message { text: "hi".into() })));
-        assert!(msgs.contains(&ChildMsg::Event(Event::NotJson {
-            line: "plain".into()
-        })));
+        assert!(msgs.iter().any(|m| matches!(
+            m,
+            ChildMsg::Event { event: Event::Message { text }, line }
+                if text == "hi" && line == r#"{"k":"message","text":"hi"}"#
+        )));
+        assert!(msgs.iter().any(|m| matches!(
+            m,
+            ChildMsg::Event { event: Event::NotJson { line: l }, line } if l == "plain" && line == "plain"
+        )));
         assert!(msgs.contains(&ChildMsg::Stderr("oops".into())));
         assert!(lock(&slot).is_none(), "the reaped child left the slot");
         assert!(!running.interrupt().unwrap(), "nothing left to signal");
@@ -391,7 +413,13 @@ mod tests {
         let mut saw_result_at = None;
         loop {
             for msg in running.drain() {
-                if matches!(msg, ChildMsg::Event(Event::Result { .. })) {
+                if matches!(
+                    msg,
+                    ChildMsg::Event {
+                        event: Event::Result { .. },
+                        ..
+                    }
+                ) {
                     saw_result_at = Some(start.elapsed());
                 }
             }

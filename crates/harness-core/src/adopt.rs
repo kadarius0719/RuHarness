@@ -305,9 +305,10 @@ pub fn holds_results(root: &Path) -> bool {
 /// Does `dir` (a `migration/` folder) hold no results? It does when it is a
 /// real folder holding only what a person writes by hand —
 /// `tools/<id>/harness.toml` files and `map/config.toml` — and the
-/// harness's bookkeeping (`.gitignore`, the writer locks, the token;
-/// `.DS_Store` ignored): no facts, plan, units, map file or verdicts. Such
-/// a folder is the project's own ledger, made here; an empty one too.
+/// harness's bookkeeping (`.gitignore`, the writer locks, the token, the
+/// cockpit's run log alone in `build/`; `.DS_Store` ignored): no facts,
+/// plan, units, map file or verdicts. Such a folder is the project's own
+/// ledger, made here; an empty one too.
 pub fn holds_no_results(dir: &Path) -> bool {
     let only_files = |dir: &Path, allowed: &[&str]| {
         is_real_dir(dir)
@@ -326,6 +327,9 @@ pub fn holds_no_results(dir: &Path) -> bool {
     names.iter().all(|(name, path)| match name.as_str() {
         ".gitignore" | ".lock" | TOKEN_FILE => is_real_file(path),
         "map" => only_files(path, &["config.toml", ".lock"]),
+        // The cockpit's diary (docs/RUN-LOG-DESIGN.md §1) is the one thing
+        // the cockpit writes here, and no result; anything else built is.
+        "build" => only_files(path, &[crate::ledger::COCKPIT_LOG_FILE]),
         "tools" => {
             is_real_dir(path)
                 && names_in(path).is_some_and(|tools| {
@@ -1347,6 +1351,20 @@ mod tests {
         let empty = tmp("empty-ledger");
         std::fs::create_dir_all(empty.join("migration")).unwrap();
         check(&empty).unwrap();
+        // The cockpit's run log alone in build/ is a diary, no result
+        // (docs/RUN-LOG-DESIGN.md §1); a build/ holding anything else is.
+        std::fs::create_dir_all(m.join("build")).unwrap();
+        std::fs::write(
+            m.join("build").join(crate::ledger::COCKPIT_LOG_FILE),
+            "{}\n",
+        )
+        .unwrap();
+        assert!(holds_no_results(&m) && !holds_results(&root));
+        check(&root).unwrap();
+        std::fs::write(m.join("build/u-a.o"), "").unwrap();
+        assert!(holds_results(&root));
+        assert!(matches!(check(&root), Err(Error::NotAdopted { .. })));
+        std::fs::remove_dir_all(m.join("build")).unwrap();
         // A tool's plan, the map file, or facts are results.
         for (path, body) in [
             ("tools/t-a/plan.toml", "schema_version = 1\n"),

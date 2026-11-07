@@ -101,6 +101,8 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-10-30 — **The lz4 run's second day: a sign-in the chat could not see, and a retry the cockpit must pass** — sign in from a plain terminal, not the app's; Make the test program carries `--retry` once a try exists; the walls list.
 - 2026-10-30 — **Functions written in headers: a header is never a piece, its helpers move with the files that include it** — the scanner reads `#define X static`, resolves helper calls through includes; the plan skips headers; the prompt's helpers section; zopfli's facts corrected.
 - 2026-10-30 — **The lz4 run's fifth wall: the runtime's own words taken for a stranger's** — a reply cut at the output limit brings a `user` line Claude Code writes itself (`isSynthetic`); the cockpit knows those sentences and keeps the turn's permissions; the output ceiling raised to 128 000.
+- 2026-11-07 — **The run log: the cockpit's one write into the ledger, a Log view, the chat's heartbeat** — `migration/build/cockpit.log` (append-only, link-safe, never read back) as the exception to "the cockpit never writes the ledger"; the Log view on `L`; the status row and the chat's title say how long the reply has been thinking; Details says a pause is normal.
+- 2026-11-07 — **The lz4 run's sixth wall: the SDK's own settings file taken for a read outside the project** — clang 21 lists `SDKSettings.json` in every dependency list; the map withheld every symbol and found no program; the SDK and toolchain roots now count as the toolchain's.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -4442,3 +4444,90 @@ model does that when it must, and the ceiling makes it rare.
 `runtime_nudge` names the version); when a runtime version marks its own messages in a way the
 cockpit can check without the words.
 
+## 2026-11-07 — The run log: the cockpit's one write into the ledger, a Log view, the chat's heartbeat
+
+**Seen.** On 2026-10-30 the person watched the chat think for ten minutes with `(0 s)` on the
+status row and a Details panel reading `error: awaiting response` / `result: exit 1` for a
+pause that was normal, and asked for *another interface where a user can intentionally get a
+running log of tasks and processes*, more verbose than Details, for debugging. Nothing reached a
+file: a run's lines lived in memory under the one current command and were gone when the next
+ran; the chat's transcript died with the chat.
+
+**Decided** (docs/RUN-LOG-DESIGN.md, reviewed by an Opus checker before the build, its nine
+findings in §R; built the same day, §B). Three things:
+
+- **A log file**, `<target>/migration/build/cockpit.log`: one JSON line per event, escaped like
+  the CLI's events stream (`json_safe`, moved to harness-core so both use it), a header per
+  cockpit session with the pid. Every dialog answered (the title and the button), every command
+  started with its command line and who allowed it (the person, or the chat's continuation
+  permission), each line it printed with the line as printed, its exit with the duration; every
+  line the chat pane showed, through the transcript as the one funnel (a read's call with its
+  tool input and separately its result — the folded line is the screen's), what the cockpit told
+  the model after a run, a permission granted or ended with its reason, Claude Code's stderr, the
+  reply's start and end; the notice row's text when it changes. Never: tool results, the model's
+  own text, the chat's environment (the sign-in words are scrubbed of a URL's credentials). A
+  writer thread owns the file; the screen never waits on a disk; a failed write is said once.
+  **This is the one exception to "the cockpit never writes the ledger"** (COCKPIT-WRAPPER-DESIGN
+  §0): a diary in the gitignored scratch folder, append-only, never read back by the cockpit or
+  by any harness command, so nothing in it can steer anything. It is never written through a
+  link (`O_NOFOLLOW`, owner-only, hard links refused, the same rule as `.lock`). Adopting a ledger
+  deletes `migration/build/`: the file is closed before and opened again after with a new header
+  (the adoption dialog's own row is logged after it, so it survives). A target with no ledger yet
+  holds its events until the first map makes the folder. The adoption check takes a `build/`
+  holding the log alone as bookkeeping, not as results made elsewhere (the cockpit's own
+  re-read refused a fresh project otherwise).
+- **A Log view** on `L` (`Ctrl-L` in the chat), over the whole panes area, the status rows
+  underneath: the session's events, the time, the piece and the words per row, following the
+  newest until the person scrolls up; `r` shows the raw lines; it keeps its own keys and passes
+  through only cancel and quit; a request of the chat's that arrives while it is open is one line
+  in the notice row, "Esc to see". The footer names the file to copy when reporting a problem.
+- **A heartbeat.** The chat records when the current reply began (`reply_started`: the send, or
+  the moment an outcome is handed back — not `turn_started`, which counts the dialog's wait and
+  the command's run) and when Claude Code was last heard from (`last_out`). The chat's title says
+  `thinking 4 min 12 s`; while the last command paused for the chat, the status row says `Chat
+  thinking 4 min 12 s · heard 3 s ago — answering turn 1 for u-lz4`, then `Chat quiet 40 s — its
+  reply ended; the command has not been asked again` when the reply ended and nothing was asked,
+  or `Chat ended — turn 1 waits; Ctrl-N for a new chat`. Details begins a paused run with `This
+  pause is normal: …`.
+
+**Rejected.** Logging the model's replies (the chat pane has them while the chat lives, the
+traces have their substance; a `reply` kind behind an opt-in if wanted). A `harness log`
+command, size rotation, earlier sessions in the view (`tail` reads the file; §10 keeps them).
+Local time through `localtime_r`: every crate forbids unsafe code, so the view asks `date +%z`
+once for the zone's offset and says "times in UTC" when it cannot.
+
+**Revisit when.** A busy evening's file grows past tens of megabytes (the size rule in §10); the
+person wants one piece's rows alone (the `p` filter, §10); another client wants the file read
+back (a separate, read-only parser).
+
+## 2026-11-07 — The lz4 run's sixth wall: the SDK's own settings file taken for a read outside the project
+
+**Seen.** The workspace's tests after the run log's build: the thirteen `project accept` tests
+failed alike — `the map has no program or library t-main (its ids are l-main)` — and a map of a
+three-file project by hand found `programs: 0`, each file its own library, every file "read
+files outside the project, so its symbol names are withheld". The same at HEAD and at the
+commit before the header-helpers change: the machine, not the code. Xcode's SDK was updated on
+2026-11-05 (clang 21, macOS 27.2 SDK), after the person's last map.
+
+**Found.** The map learns what a compile read from the compiler's own dependency list
+(`-MD -MF`) and counts as the toolchain's only what lies under its `#include <...>` search
+folders (`MacOSX.sdk/usr/include`, the toolchain's `lib/clang/21/include`, …). clang 21 adds
+`MacOSX.sdk/SDKSettings.json` to every list — a file under the SDK root, outside every search
+folder. The rule did what it says: anything else is a read outside the project, and a file
+that read outside has its symbol names withheld (a readable file's bytes can become a name).
+With every name withheld no file defines `main`, so no program; no file needs another, so one
+library per file.
+
+**Decided.** The SDK (`*.sdk`) and toolchain (`*.xctoolchain`) roots the search folders sit in
+are the toolchain's too (`toolchain_roots` in `projectmap.rs`, a unit test; the thirteen tests
+pass again). A Linux layout (`/usr/include`) adds no root: `/usr` would cover too much, and the
+rule's reason — a project's `-include /etc/hosts` must still withhold — stands.
+SCALE-RUN-LZ4 §5 tells the person what the old build's symptom looks like after an update.
+
+**Rejected.** Ignoring non-header dependencies by name (`.json`): the next toolchain may read a
+`.yaml`. Trusting any path outside the project that the compiler itself chose to read: the
+list is the compiler's, but the flags are the project's (`-include` reaches anywhere).
+
+**Revisit when.** A toolchain whose own files live outside both an `.sdk` and an
+`.xctoolchain` root (a Linux cross SDK) hits the same wall: the rule would then take the
+compiler's resource dir (`cc -print-resource-dir`) and sysroot as roots.

@@ -434,6 +434,10 @@ pub struct Chat {
     cur_block: Option<u64>,
     cost: f64,
     turn_started: Option<Instant>,
+    /// When the model began its current reply: the person's send, or the
+    /// moment the cockpit handed an outcome back ([`Chat::released`]);
+    /// cleared at the reply's end (docs/RUN-LOG-DESIGN.md §4).
+    pub reply_started: Option<Instant>,
     unparsed_said: bool,
     serial: u64,
     last_error: Option<String>,
@@ -588,6 +592,7 @@ impl Chat {
             cur_block: None,
             cost: 0.0,
             turn_started: None,
+            reply_started: None,
             unparsed_said: false,
             serial: 0,
             last_error: None,
@@ -713,6 +718,33 @@ impl Chat {
         self.transcript.line(tone, text)
     }
 
+    /// [`Chat::say`] without its log row (the folded reads log their own).
+    fn say_quiet(&mut self, tone: Tone, text: impl Into<String>) -> u64 {
+        self.unseen = true;
+        self.transcript.line_quiet(tone, text)
+    }
+
+    /// The model began a reply: the heartbeat's clock and the log's row.
+    fn reply_begins(&mut self, now: Instant) {
+        self.reply_started = Some(now);
+        self.transcript
+            .log_raw(Tone::Dim, "the chat's reply started", None);
+    }
+
+    /// How long the current reply has been thinking: since the person's
+    /// send, or since the cockpit handed an outcome back — none between
+    /// replies, or while a request of the chat's waits on the cockpit.
+    pub fn thinking_for(&self, now: Instant) -> Option<Duration> {
+        self.reply_started
+            .filter(|_| self.turn && self.held.is_empty())
+            .map(|s| now.saturating_duration_since(s))
+    }
+
+    /// How long since Claude Code last printed anything (its liveness).
+    pub fn heard_ago(&self, now: Instant) -> Duration {
+        now.saturating_duration_since(self.last_out)
+    }
+
     /// Start a new process (the first message, or the first after an end).
     fn start(&mut self, now: Instant) -> Result<(), String> {
         let bins = self.bins.clone()?;
@@ -808,6 +840,7 @@ impl Chat {
         if !self.turn {
             self.turn = true;
             self.turn_started = Some(now);
+            self.reply_begins(now);
         }
         self.stopped_last = false;
         self.last_out = now;
@@ -833,8 +866,12 @@ impl Chat {
     /// before the act (review PRO-1).
     fn released(&mut self) {
         if self.held.is_empty() {
-            self.last_out = Instant::now();
+            let now = Instant::now();
+            self.last_out = now;
             self.quiet_warned = false;
+            if self.turn {
+                self.reply_begins(now);
+            }
         }
     }
 
@@ -873,6 +910,7 @@ impl Chat {
         }
         self.ending.push(Ending::new(rt, now, term, kill));
         self.turn = false;
+        self.reply_started = None;
         self.stopping = false;
         self.held.clear();
         Some(Event::Ended { gen: self.gen })
@@ -944,7 +982,14 @@ impl Chat {
                         ),
                     );
                 }
-                Out::Stderr(_) | Out::Eof(_) => {}
+                // Claude Code's own error output: the log keeps it
+                // (docs/RUN-LOG-DESIGN.md §2); the screen shows its last
+                // line only when the chat ends.
+                Out::Stderr(line) => {
+                    self.transcript
+                        .log_raw(Tone::Dim, format!("stderr: {line}"), None);
+                }
+                Out::Eof(_) => {}
             }
         }
         if eof {
@@ -1099,6 +1144,7 @@ impl Chat {
                 if !self.turn {
                     self.turn = true;
                     self.turn_started = Some(now);
+                    self.reply_begins(now);
                 }
                 if let Err(p) = self.check_init(permission_mode.as_deref(), &tools, &servers) {
                     return self.fail(p, now, events);
@@ -1189,20 +1235,25 @@ impl Chat {
                             events.push(Event::ProposalWritten { workloads });
                         }
                     }
+                    let (tone, word) = if r.is_error {
+                        (Tone::Bad, "failed")
+                    } else {
+                        (Tone::Dim, "done")
+                    };
                     match (call.part, self.read_group.as_mut()) {
                         (Some(i), Some(g)) if g.line == call.line => {
                             if let Some(p) = g.parts.get_mut(i) {
                                 p.1 = Some(!r.is_error);
                             }
-                            let (tone, text) = g.line();
-                            self.transcript.update_line(call.line, tone, text);
+                            let (fold_tone, text) = g.line();
+                            // The fold is the screen's: the log has the
+                            // read's own result (docs/RUN-LOG-DESIGN.md §2).
+                            self.transcript
+                                .update_line_quiet(call.line, fold_tone, text);
+                            self.transcript
+                                .log_raw(tone, format!("{} — {word}", call.words), None);
                         }
                         _ => {
-                            let (tone, word) = if r.is_error {
-                                (Tone::Bad, "failed")
-                            } else {
-                                (Tone::Dim, "done")
-                            };
                             self.transcript.update_line(
                                 call.line,
                                 tone,
@@ -1352,6 +1403,7 @@ impl Chat {
                     self.transcript.prune_empty(&m);
                 }
                 self.turn = false;
+                self.reply_started = None;
                 self.stopped_last = stopped;
                 let spent = r.total_cost_usd.map(|c| {
                     let d = (c - self.cost).max(0.0);
@@ -1403,7 +1455,13 @@ impl Chat {
                         self.say(Tone::Bad, words);
                     }
                 }
-                self.say(Tone::Dim, format!("— {}", words.join(" · ")));
+                let ended = words.join(" · ");
+                self.say_quiet(Tone::Dim, format!("— {ended}"));
+                self.transcript.log_raw(
+                    Tone::Dim,
+                    format!("the chat's reply ended — {ended}"),
+                    None,
+                );
             }
             In::RateLimit {
                 status,
@@ -1567,20 +1625,24 @@ impl Chat {
                 (Some(what), Some(g)) if Some(g.line) == last => {
                     g.parts.push((what, None));
                     let (tone, text) = g.line();
-                    self.transcript.update_line(g.line, tone, text);
+                    self.transcript.update_line_quiet(g.line, tone, text);
                     self.unseen = true;
                     (g.line, Some(g.parts.len() - 1))
                 }
                 (Some(what), _) => {
-                    let line = self.say(Tone::Dim, words.clone());
+                    let line = self.say_quiet(Tone::Dim, words.clone());
                     self.read_group = Some(ReadGroup {
                         line,
                         parts: vec![(what, None)],
                     });
                     (line, Some(0))
                 }
-                (None, _) => (self.say(Tone::Dim, words.clone()), None),
+                (None, _) => (self.say_quiet(Tone::Dim, words.clone()), None),
             };
+            // The call's own row, with the tool's name and input (the
+            // request the chat made of the harness; never its result).
+            self.transcript
+                .log_raw(Tone::Dim, words.clone(), Some(format!("{short} {input}")));
             if let Some(call) = tool_use_id {
                 let request = (short == "harness_request")
                     .then(|| (arg(&input, "attempt"), arg(&input, "request_key")));

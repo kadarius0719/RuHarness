@@ -21,4 +21,4 @@
 └──────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────┘
  The C project moving to Rust; its one piece that can move is in Rust.
 
- Esc hold   Ctrl-J new line   ↑↓ scroll   Tab pane   F1 help   Ctrl-C quit
+ Esc hold   Ctrl-J new line   ↑↓ scroll   Tab pane   Ctrl-L log   F1 help   Ctrl-C quit

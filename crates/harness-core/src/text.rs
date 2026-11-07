@@ -17,6 +17,29 @@ pub fn safe_line(s: &str) -> String {
         .collect()
 }
 
+/// `json` with every character [`unsafe_to_show`] names written as a
+/// `\uXXXX` escape (a pair of them past U+FFFF). serde_json escapes only
+/// U+0000–U+001F, `"` and `\`; DEL, the C1 controls, the bidi characters
+/// and the invisible format characters would otherwise reach a terminal
+/// that shows the stream raw (`tail -f`, a `--json` consumer's log).
+/// Outside strings JSON holds only ASCII punctuation, digits and letters,
+/// so every such character is inside a string, where the escape means the
+/// same character.
+pub fn json_safe(json: &str) -> String {
+    let mut out = String::with_capacity(json.len());
+    for c in json.chars() {
+        if unsafe_to_show(c) {
+            let mut units = [0u16; 2];
+            for unit in c.encode_utf16(&mut units) {
+                out.push_str(&format!("\\u{unit:04x}"));
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Bidirectional formatting characters.
 fn is_bidi_control(c: char) -> bool {
     matches!(
@@ -68,5 +91,17 @@ mod tests {
         for c in ['a', 'é', '日', ' ', '\u{a0}', '€'] {
             assert!(!unsafe_to_show(c), "{c:?}");
         }
+    }
+
+    #[test]
+    fn json_is_escaped_past_what_serde_does() {
+        let json = serde_json::to_string(&"a\u{7f}b\u{9b}c\u{202E}d\u{E0001}e é").unwrap();
+        let safe = json_safe(&json);
+        assert_eq!(safe, r#""a\u007fb\u009bc\u202ed\udb40\udc01e é""#);
+        assert_eq!(
+            serde_json::from_str::<String>(&safe).unwrap(),
+            "a\u{7f}b\u{9b}c\u{202E}d\u{E0001}e é"
+        );
+        assert_eq!(json_safe(r#"{"k":"plain"}"#), r#"{"k":"plain"}"#);
     }
 }

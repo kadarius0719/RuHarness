@@ -36,6 +36,7 @@ use crate::menu::{self, Action, Item};
 use crate::model::{AttemptView, AuthorshipView, ProvenanceView, Snapshot, UnitView};
 use crate::narrate::{Ending, Narrator};
 use crate::pairs::{CSide, FunctionPair, RustNote, SourceSpan};
+use crate::runlog::{self, RunLog};
 use crate::spawn::ChildMsg;
 use crate::tree::{self, Expansion, Row, Selection};
 use harness_core::attempts::{AttemptRecord, HUMAN_KIND};
@@ -564,6 +565,16 @@ pub enum Mode {
         /// First row shown.
         scroll: usize,
     },
+    /// `L` (`Ctrl-L` in the chat): the run log over the whole panes area
+    /// (docs/RUN-LOG-DESIGN.md §3).
+    Log {
+        /// First row shown (the draw keeps it in range).
+        scroll: usize,
+        /// Following the newest row.
+        follow: bool,
+        /// The raw lines shown under the rows.
+        raw: bool,
+    },
     /// Accept under a run name of the person's: typing it.
     RunName {
         /// The name so far.
@@ -810,6 +821,19 @@ pub struct SourceView {
     pub note: Option<String>,
 }
 
+/// The last command paused for the chat's answer (docs/RUN-LOG-DESIGN.md
+/// §4): the status row shows the chat's clocks until the chat's next
+/// command starts or a new chat begins.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatPause {
+    /// When the command paused.
+    pub since: Instant,
+    /// The turn the chat answers.
+    pub turn: Option<u64>,
+    /// The piece it is about.
+    pub piece: Option<String>,
+}
+
 /// The cockpit.
 #[derive(Debug)]
 pub struct App {
@@ -974,6 +998,14 @@ pub struct App {
     /// tools, and whether the Project view is shown (docs/PROJECT-MAP-
     /// DESIGN.md §3.7). `None` for a folder-form target.
     pub project: Option<ProjectState>,
+    /// The run log: the file and this session's events
+    /// (docs/RUN-LOG-DESIGN.md).
+    pub runlog: RunLog,
+    /// The last command paused for the chat's answer (§4 of the log's
+    /// design): the status row's heartbeat.
+    pub chat_pause: Option<ChatPause>,
+    /// The notice row's text as last logged (a change is a `notice` row).
+    last_logged_notice: Option<String>,
     last_load_error: Option<String>,
     pairs_key: Option<String>,
     pending_bracket: Option<char>,
@@ -1085,6 +1117,31 @@ pub fn retry_refusal(r: &AttemptRecord, providers: &[String]) -> Option<String> 
     None
 }
 
+/// A run panel line's tone, for the log.
+fn log_tone(t: Tone) -> runlog::Tone {
+    match t {
+        Tone::Plain => runlog::Tone::Plain,
+        Tone::Good => runlog::Tone::Good,
+        Tone::Bad => runlog::Tone::Bad,
+        Tone::Warn => runlog::Tone::Warn,
+        Tone::Dim => runlog::Tone::Dim,
+    }
+}
+
+/// A chat pane line's tone, for the log.
+fn chat_tone(t: chat::transcript::Tone) -> runlog::Tone {
+    use chat::transcript::Tone as T;
+    match t {
+        T::You => runlog::Tone::You,
+        T::Claude => runlog::Tone::Plain,
+        T::Dim => runlog::Tone::Dim,
+        T::Warn => runlog::Tone::Warn,
+        T::Good => runlog::Tone::Good,
+        T::Bad => runlog::Tone::Bad,
+        T::Cockpit => runlog::Tone::Cockpit,
+    }
+}
+
 fn notice(text: impl Into<String>) -> Option<Notice> {
     Some(Notice {
         text: text.into(),
@@ -1107,6 +1164,7 @@ impl App {
         let features = featmap::build(&read.snapshot, &files, &read.map, read.map_now.as_ref());
         let speed = crate::speed::build(&read.snapshot);
         let target = config.target.clone();
+        let runlog = RunLog::open(&config.target, std::process::id());
         let holder = read.holder;
         let migrate_model = read.migrate_model;
         let migrate_turns = read.migrate_turns;
@@ -1185,6 +1243,9 @@ impl App {
             asks: asks::Asks::default(),
             input_pending: false,
             project: None,
+            runlog,
+            chat_pause: None,
+            last_logged_notice: None,
             last_load_error: None,
             pairs_key: None,
             pending_bracket: None,
@@ -1694,7 +1755,24 @@ impl App {
         let Some(run) = self.run.as_mut() else {
             return;
         };
-        let push = |run: &mut RunPanel, tone: Tone, text: String| {
+        let piece = run.pending.unit.clone();
+        // The line as printed rides with the first row this message puts
+        // in the log (docs/RUN-LOG-DESIGN.md §2).
+        let mut raw: Option<String> = match &msg {
+            ChildMsg::Event { line, .. } | ChildMsg::Stderr(line) => {
+                Some(line.clone()).filter(|l| !l.is_empty())
+            }
+            ChildMsg::Eof(_) => None,
+        };
+        let log = &mut self.runlog;
+        let mut push = |run: &mut RunPanel, tone: Tone, text: String| {
+            log.push(
+                runlog::Kind::Command,
+                piece.as_deref(),
+                text.clone(),
+                raw.take().as_deref(),
+                log_tone(tone),
+            );
             run.lines.push(RunLine { tone, text });
             if run.lines.len() > MAX_RUN_LINES {
                 run.lines.drain(..run.lines.len() - MAX_RUN_LINES);
@@ -1708,14 +1786,18 @@ impl App {
             ChildMsg::Eof(_) => return,
             // A `harness project …` command prints the command line's own
             // words: each line as it is, its last one the step.
-            ChildMsg::Event(Event::NotJson { line }) if run.act.project().is_some() => {
+            ChildMsg::Event {
+                event: Event::NotJson { line },
+                ..
+            } if run.act.project().is_some() => {
                 run.narrator
                     .on_event(&Event::NotJson { line: line.clone() });
                 push(run, Tone::Plain, line);
                 return;
             }
-            ChildMsg::Event(ev) => ev,
+            ChildMsg::Event { event, .. } => event,
         };
+        let step_before = run.narrator.step().to_string();
         run.narrator.on_event(&ev);
         run.collect.on_event(&ev);
         match ev {
@@ -1929,6 +2011,20 @@ impl App {
             Event::Other { k, line } => push(run, Tone::Dim, format!("[{k}] {line}")),
             Event::NotJson { line } => push(run, Tone::Warn, format!("? {line}")),
         }
+        // An event that put no line on the screen but moved the narration
+        // (a header the cockpit knows is silent): its step is its row.
+        if let Some(raw) = raw.take() {
+            let step = run.narrator.step();
+            if step != step_before {
+                self.runlog.push(
+                    runlog::Kind::Command,
+                    piece.as_deref(),
+                    step.to_string(),
+                    Some(&raw),
+                    runlog::Tone::Dim,
+                );
+            }
+        }
     }
 
     /// A confirmed act was spawned.
@@ -1953,6 +2049,21 @@ impl App {
             collect: asks::Collected::default(),
         });
         self.notice = None;
+        // Who allowed it (docs/RUN-LOG-DESIGN.md §2): a dialog's button, or
+        // the chat's continuation permission.
+        let allowed = if pending.chat.as_ref().is_some_and(|t| t.permitted) {
+            "allowed by the chat's continuation permission"
+        } else {
+            "allowed by you"
+        };
+        self.runlog.push(
+            runlog::Kind::Command,
+            pending.unit.as_deref(),
+            format!("{} — started ({allowed})", pending.label),
+            Some(&shell_line(&pending.argv)),
+            runlog::Tone::Plain,
+        );
+        self.chat_pause = None;
         self.chat_spawned(pending);
     }
 
@@ -2024,6 +2135,17 @@ impl App {
         // swallowed, and a waiting Continue waits its quiet second first
         // (fix check N5).
         if matches!(&self.mode, Mode::Dialog(c) if c.purpose == Purpose::Cancel) {
+            if let Mode::Dialog(c) = &self.mode {
+                let title = c.title.clone();
+                let piece = self.run.as_ref().and_then(|r| r.pending.unit.clone());
+                self.runlog.push(
+                    runlog::Kind::Dialog,
+                    piece.as_deref(),
+                    format!("{title} — the command ended"),
+                    None,
+                    runlog::Tone::Label,
+                );
+            }
             let kind = self.mode_kind();
             self.mode = Mode::Normal;
             let now = Instant::now();
@@ -2103,6 +2225,35 @@ impl App {
             failed = waiting.is_none()
                 && paused.is_none()
                 && (status.code() != Some(0) || problem.is_some());
+            // The log's row: the exit as Details shows it, with the
+            // duration; the raw exit beside it (docs/RUN-LOG-DESIGN.md §2).
+            let took = crate::narrate::elapsed_words(run.started.elapsed());
+            let exit_raw = match (&signal, status.code()) {
+                (Some(sig), _) => format!("signal {sig}"),
+                (None, Some(code)) => format!("exit {code}"),
+                (None, None) => "ended".to_string(),
+            };
+            let exit_tone = if paused.is_some() {
+                runlog::Tone::Notice
+            } else if text == "exit 0" {
+                runlog::Tone::Good
+            } else {
+                runlog::Tone::Warn
+            };
+            self.runlog.push(
+                runlog::Kind::Command,
+                run.pending.unit.as_deref(),
+                format!("{text} ({took})"),
+                Some(&exit_raw),
+                exit_tone,
+            );
+            if paused.is_some() && run.pending.chat.is_some() {
+                self.chat_pause = Some(ChatPause {
+                    since: Instant::now(),
+                    turn: run.collect.turn,
+                    piece: run.pending.unit.clone(),
+                });
+            }
             run.exit = Some(text);
             self.last = Some(run.narrator.last(
                 status.code(),
@@ -3497,6 +3648,14 @@ impl App {
     }
 
     fn close_dialog(&mut self, confirm: Confirm, choice: Choice) -> Command {
+        if confirm.purpose == Purpose::Adopt {
+            // Its row after the adoption: adopting deletes the log's
+            // folder, and the log opens again after it (the log's design §1).
+            self.close_adopt_dialog(choice);
+            self.log_dialog(&confirm, choice);
+            return Command::None;
+        }
+        self.log_dialog(&confirm, choice);
         if matches!(
             confirm.purpose,
             Purpose::OpenEditor | Purpose::EditAgain | Purpose::FeaturesChanged
@@ -3507,10 +3666,6 @@ impl App {
             if p.chat.is_some() {
                 return self.close_chat_dialog(confirm, choice);
             }
-        }
-        if confirm.purpose == Purpose::Adopt {
-            self.close_adopt_dialog(choice);
-            return Command::None;
         }
         match (confirm.purpose, choice) {
             (Purpose::Act(p), Choice::Run | Choice::Record) => match self.confirm_gate(&p) {
@@ -3622,6 +3777,99 @@ impl App {
                 _,
             ) => Command::None,
         }
+    }
+
+    // ----- the run log -------------------------------------------------------
+
+    /// A dialog answered (docs/RUN-LOG-DESIGN.md §2): its title and the
+    /// button's label.
+    fn log_dialog(&mut self, confirm: &Confirm, choice: Choice) {
+        let label = confirm
+            .dialog
+            .buttons
+            .iter()
+            .find(|b| b.choice == choice)
+            .map_or_else(|| "closed".to_string(), |b| b.label.to_string());
+        let piece = match &confirm.purpose {
+            Purpose::Act(p) => p.unit.clone(),
+            _ => None,
+        };
+        self.runlog.push(
+            runlog::Kind::Dialog,
+            piece.as_deref(),
+            format!("{} — {label}", confirm.title),
+            None,
+            runlog::Tone::Label,
+        );
+    }
+
+    /// Each loop pass (docs/RUN-LOG-DESIGN.md §2, §7): the chat pane's new
+    /// lines with the chat's piece, the permissions' rows, the notice row's
+    /// text when it changed, and a write of the file that failed (said
+    /// once).
+    pub fn log_pass(&mut self) {
+        let piece = self.asks.last_piece.clone();
+        for l in std::mem::take(&mut self.chat.transcript.log) {
+            self.runlog.push(
+                runlog::Kind::Chat,
+                piece.as_deref(),
+                l.words,
+                l.raw.as_deref(),
+                chat_tone(l.tone),
+            );
+        }
+        for (attempt, words) in std::mem::take(&mut self.asks.pending_log) {
+            let of = attempt
+                .as_deref()
+                .and_then(|a| self.asks.table.get(a).map(|h| h.unit.clone()))
+                .or_else(|| piece.clone());
+            self.runlog.push(
+                runlog::Kind::Chat,
+                of.as_deref(),
+                words,
+                None,
+                runlog::Tone::Dim,
+            );
+        }
+        if let Some(words) = self.runlog.poll() {
+            self.notice = notice(words);
+        }
+        let now_text = self.notice.as_ref().map(|n| n.text.clone());
+        if let Some(text) = now_text
+            .as_ref()
+            .filter(|t| Some(*t) != self.last_logged_notice.as_ref())
+        {
+            self.runlog.push(
+                runlog::Kind::Notice,
+                piece.as_deref(),
+                text.clone(),
+                None,
+                runlog::Tone::Notice,
+            );
+        }
+        self.last_logged_notice = now_text;
+    }
+
+    /// `L` / `Ctrl-L`: the Log view, following the newest row.
+    pub fn open_log(&mut self) {
+        self.mode = Mode::Log {
+            scroll: 0,
+            follow: true,
+            raw: false,
+        };
+    }
+
+    /// The cockpit ends by `q`: said in the log, and the file closed.
+    pub fn log_end(&mut self) {
+        self.log_pass();
+        self.runlog.push(
+            runlog::Kind::Cockpit,
+            None,
+            "cockpit ended",
+            None,
+            runlog::Tone::Dim,
+        );
+        self.runlog.close();
     }
 
     // ----- the menu ----------------------------------------------------------
@@ -4663,6 +4911,14 @@ impl App {
                 Some((rect, hit @ Hit::Hint(_))) => hold(self, rect, hit, true),
                 _ => Command::None,
             },
+            // The log covers the panes: only the status rows' keys answer
+            // (docs/RUN-LOG-DESIGN.md §3).
+            Mode::Log { .. } => match found {
+                Some((rect, hit @ (Hit::Hint(_) | Hit::Activity(_)))) => {
+                    hold(self, rect, hit, true)
+                }
+                _ => Command::None,
+            },
             // The details sit over the panes' lower half: the panes above
             // answer as they do without them.
             Mode::Details { .. } if matches!(found, Some((_, Hit::Overlay))) => Command::None,
@@ -4839,7 +5095,11 @@ impl App {
     /// opens the selection in the tree; `↑↓` says what does move.
     fn press_hint(&mut self, k: &str, now: Instant) -> Command {
         let keys: &[KeyCode] = match k {
-            "q" if matches!(self.mode, Mode::Normal | Mode::Details { .. }) => {
+            "q" if matches!(
+                self.mode,
+                Mode::Normal | Mode::Details { .. } | Mode::Log { .. }
+            ) =>
+            {
                 self.open_dialog(Purpose::Quit);
                 return Command::None;
             }
@@ -4924,6 +5184,7 @@ impl App {
             | Mode::Help { .. }
             | Mode::Diff { .. }
             | Mode::Details { .. }
+            | Mode::Log { .. }
             | Mode::Explain { .. } => 3,
         };
         let mut command = Command::None;
@@ -5071,6 +5332,69 @@ impl App {
                     _ => {}
                 }
                 self.mode = Mode::Menu(m);
+                return Command::None;
+            }
+            // The log keeps its own keys and passes through only what must
+            // keep working while it is open: cancel and quit
+            // (docs/RUN-LOG-DESIGN.md §3). Every other key is swallowed with
+            // a word — `r` is raw here, never Retry.
+            Mode::Log {
+                scroll,
+                follow,
+                raw,
+            } => {
+                let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+                let page = usize::from(self.layout.frame.height.saturating_sub(5)).max(1);
+                let keep = Mode::Log {
+                    scroll,
+                    follow,
+                    raw,
+                };
+                let (scroll, follow) = match key.code {
+                    KeyCode::Up => (scroll.saturating_sub(1), false),
+                    KeyCode::Down => (scroll.saturating_add(1), follow),
+                    KeyCode::PageUp => (scroll.saturating_sub(page), false),
+                    KeyCode::PageDown => (scroll.saturating_add(page), follow),
+                    KeyCode::Home => (0, false),
+                    KeyCode::End => (usize::MAX / 2, true),
+                    KeyCode::Esc => return Command::None,
+                    KeyCode::Char('L') if plain => return Command::None,
+                    KeyCode::Char('r') if plain => {
+                        self.mode = Mode::Log {
+                            scroll,
+                            follow,
+                            raw: !raw,
+                        };
+                        return Command::None;
+                    }
+                    KeyCode::Char('x') if plain || ctrl => {
+                        self.mode = keep;
+                        if self.running {
+                            self.open_dialog(Purpose::Cancel);
+                        } else {
+                            self.notice = notice("nothing is running");
+                        }
+                        return Command::None;
+                    }
+                    KeyCode::Char('q') if plain => {
+                        self.mode = keep;
+                        return self.quit();
+                    }
+                    _ if ctrl_c => {
+                        self.mode = keep;
+                        return self.quit();
+                    }
+                    _ => {
+                        self.notice = notice("the log is open — Esc closes it");
+                        self.mode = keep;
+                        return Command::None;
+                    }
+                };
+                self.mode = Mode::Log {
+                    scroll,
+                    follow,
+                    raw,
+                };
                 return Command::None;
             }
             // Opened from the chat, the details keep the chat's rule —
@@ -5412,6 +5736,7 @@ impl App {
                     scroll: usize::MAX / 2,
                 }
             }
+            KeyCode::Char('L') => self.open_log(),
             KeyCode::Char('g') => return Command::Reload,
             KeyCode::Char('t') => match self.try_again.clone() {
                 Some(p) if !self.running => self.ask(p),
@@ -7012,7 +7337,7 @@ pub(crate) mod tests {
         .map(OsString::from)
         .to_vec();
         app.on_spawned(&pending(argv.clone(), Act::Modify));
-        app.on_child_msg(ChildMsg::Event(Event::Awaiting {
+        app.on_child_msg(ChildMsg::event(Event::Awaiting {
             attempt: Some(awaited.into()),
             path: response.display().to_string(),
             resume: "harness migrate u-lib …".into(),
@@ -7088,7 +7413,7 @@ pub(crate) mod tests {
         assert_eq!(p.expect_attempt.as_deref(), Some(awaited));
         // The resumed run fails without a new hand-off: Resume stays.
         app.on_spawned(&p);
-        app.on_child_msg(ChildMsg::Event(Event::TurnStart {
+        app.on_child_msg(ChildMsg::event(Event::TurnStart {
             unit: "u-lib".into(),
             attempt: "a-ffffffffffff".into(),
             index: 1,
@@ -7126,7 +7451,7 @@ pub(crate) mod tests {
         let p = pending(vec![OsString::from(HARNESS)], Act::Retry);
         app.on_spawned(&p);
         in_progress_attempt(&app, late);
-        app.on_child_msg(ChildMsg::Event(Event::Result {
+        app.on_child_msg(ChildMsg::event(Event::Result {
             exit: 130,
             signal: Some("SIGINT".into()),
         }));
@@ -7204,7 +7529,7 @@ pub(crate) mod tests {
         let mut app = app("tryagain");
         let p = app.act_argv(Act::Scan, None, None, None).unwrap();
         app.on_spawned(&p);
-        app.on_child_msg(ChildMsg::Event(Event::Error {
+        app.on_child_msg(ChildMsg::event(Event::Error {
             kind: "locked".into(),
             message: "ledger is locked".into(),
             holder: Some(crate::events::Holder {
@@ -7564,7 +7889,7 @@ pub(crate) mod tests {
         };
         let argv = p.argv.clone();
         app.on_spawned(&p);
-        app.on_child_msg(ChildMsg::Event(Event::Error {
+        app.on_child_msg(ChildMsg::event(Event::Error {
             kind: "locked".into(),
             message: "ledger is locked".into(),
             holder: None,
@@ -7585,7 +7910,7 @@ pub(crate) mod tests {
         app.on_spawn_failed(p.clone(), "no such file");
         assert_eq!(app.kept_edits.len(), 1);
         app.on_spawned(&p);
-        app.on_child_msg(ChildMsg::Event(Event::Attempt {
+        app.on_child_msg(ChildMsg::event(Event::Attempt {
             unit: "u-lib".into(),
             id: "a-000000000abc".into(),
             outcome: "red".into(),
@@ -7646,7 +7971,7 @@ pub(crate) mod tests {
                 ],
                 Act::Modify,
             ));
-            app.on_child_msg(ChildMsg::Event(Event::Awaiting {
+            app.on_child_msg(ChildMsg::event(Event::Awaiting {
                 attempt: Some(id.into()),
                 path: path.display().to_string(),
                 resume: String::new(),
@@ -7677,7 +8002,7 @@ pub(crate) mod tests {
             "plan: execution order: u-lib",
             "plan: next, write the first unit's differential driver: `harness gen-driver u-lib`",
         ] {
-            app.on_child_msg(ChildMsg::Event(Event::Message { text: text.into() }));
+            app.on_child_msg(ChildMsg::event(Event::Message { text: text.into() }));
         }
         app.on_child_exit(ExitStatus::from_raw(0));
         app.load_now();
@@ -7690,7 +8015,7 @@ pub(crate) mod tests {
         std::fs::create_dir_all(app.config.target.join(".git")).unwrap();
         let p = app.act_argv(Act::Plan, None, None, None).unwrap();
         app.on_spawned(&p);
-        app.on_child_msg(ChildMsg::Event(Event::Message {
+        app.on_child_msg(ChildMsg::event(Event::Message {
             text: "plan: u-lib: re-approved".into(),
         }));
         app.on_child_exit(ExitStatus::from_raw(0));
@@ -7712,7 +8037,7 @@ pub(crate) mod tests {
         let plan_once = |app: &mut App| {
             let p = app.act_argv(Act::Plan, None, None, None).unwrap();
             app.on_spawned(&p);
-            app.on_child_msg(ChildMsg::Event(Event::Message {
+            app.on_child_msg(ChildMsg::event(Event::Message {
                 text: "plan: u-lib: re-approved".into(),
             }));
             app.on_child_exit(ExitStatus::from_raw(0));
@@ -7824,7 +8149,7 @@ pub(crate) mod tests {
 
     pub(crate) fn locked(app: &mut App, p: &Pending) {
         app.on_spawned(p);
-        app.on_child_msg(ChildMsg::Event(Event::Error {
+        app.on_child_msg(ChildMsg::event(Event::Error {
             kind: "locked".into(),
             message: "ledger is locked".into(),
             holder: Some(crate::events::Holder {
@@ -7901,7 +8226,7 @@ pub(crate) mod tests {
         let blind = vec![OsString::from(HARNESS), OsString::from("migrate")];
         let awaiting = |app: &mut App, argv: Vec<OsString>| {
             app.on_spawned(&pending(argv, Act::Retry));
-            app.on_child_msg(ChildMsg::Event(Event::Awaiting {
+            app.on_child_msg(ChildMsg::event(Event::Awaiting {
                 attempt: Some(awaited.into()),
                 path: response.display().to_string(),
                 resume: String::new(),
@@ -8436,6 +8761,174 @@ pub(crate) mod tests {
         assert_eq!(
             shell_line(&["harness", "--steer=it's", "a b", "--x"].map(OsString::from)),
             "harness '--steer=it'\\''s' 'a b' --x"
+        );
+    }
+
+    fn log_rows(app: &mut App) -> Vec<serde_json::Value> {
+        app.log_pass();
+        app.runlog.close();
+        let text = std::fs::read_to_string(
+            app.config
+                .target
+                .join("migration/build")
+                .join(crate::runlog::FILE),
+        )
+        .unwrap();
+        text.lines()
+            .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("{e}: {l}")))
+            .collect()
+    }
+
+    /// docs/RUN-LOG-DESIGN.md §8, the hooks: a dialog answered, a command
+    /// started with its command line and who allowed it, every line with
+    /// the line as printed, its exit with the duration — and every line
+    /// Details shows is in the file, in order.
+    #[test]
+    fn the_log_keeps_the_dialog_the_command_and_every_line() {
+        let mut app = app("log-hooks");
+        // A dialog answered: the quit dialog (a command runs), left by Esc.
+        app.running = true;
+        assert_eq!(key(&mut app, 'q'), Command::None);
+        arm(&mut app);
+        assert_eq!(code(&mut app, KeyCode::Esc), Command::None);
+        assert!(matches!(app.mode, Mode::Normal));
+        app.running = false;
+        let p = app
+            .act_argv(Act::Verify, Some("u-lib"), None, None)
+            .unwrap();
+        app.on_spawned(&p);
+        let printed = std::fs::read_to_string(
+            crate::testutil::repo()
+                .join("crates/harness-tui/tests/fixtures/events/verify-green.ndjson"),
+        )
+        .unwrap();
+        for line in printed.lines() {
+            app.on_child_msg(ChildMsg::Event {
+                event: crate::events::parse_line(line),
+                line: line.to_string(),
+            });
+        }
+        app.on_child_msg(ChildMsg::Stderr("warning: slow disk".into()));
+        app.say("a notice the row showed");
+        let _ = app.on_child_exit(ExitStatus::from_raw(0));
+        let shown: Vec<String> = app
+            .run
+            .as_ref()
+            .unwrap()
+            .lines
+            .iter()
+            .map(|l| l.text.clone())
+            .collect();
+        let rows = log_rows(&mut app);
+        assert_eq!(rows[0]["k"], "header");
+        assert_eq!(rows[0]["schema"], crate::runlog::SCHEMA);
+        let words: Vec<&str> = rows.iter().filter_map(|r| r["words"].as_str()).collect();
+        // The dialog's row: its title and the button pressed (Esc: Stay).
+        let dialog = rows.iter().find(|r| r["k"] == "dialog").unwrap();
+        assert!(
+            dialog["words"].as_str().unwrap().ends_with(" — Stay"),
+            "{dialog}"
+        );
+        assert!(dialog.get("piece").is_none());
+        // The start: who allowed it, the command line beside it.
+        let started = rows
+            .iter()
+            .find(|r| {
+                r["words"]
+                    .as_str()
+                    .is_some_and(|w| w.ends_with("— started (allowed by you)"))
+            })
+            .unwrap();
+        assert_eq!(started["k"], "command");
+        assert_eq!(started["piece"], "u-lib");
+        assert!(
+            started["raw"].as_str().unwrap().contains("verify u-lib"),
+            "{started}"
+        );
+        // Every line Details shows is in the file, in order.
+        let mut at = 0;
+        for line in &shown {
+            at = words[at..]
+                .iter()
+                .position(|w| w == line)
+                .map(|i| at + i + 1)
+                .unwrap_or_else(|| panic!("{line:?} missing after row {at}: {words:#?}"));
+        }
+        // A check's row carries the event line as printed; stderr its line.
+        let check = rows
+            .iter()
+            .find(|r| {
+                r["words"]
+                    .as_str()
+                    .is_some_and(|w| w.starts_with("[check] "))
+            })
+            .unwrap();
+        assert!(
+            check["raw"]
+                .as_str()
+                .unwrap()
+                .starts_with(r#"{"k":"check""#),
+            "{check}"
+        );
+        let stderr = rows
+            .iter()
+            .find(|r| r["words"] == "warning: slow disk")
+            .unwrap();
+        assert_eq!(stderr["raw"], "warning: slow disk");
+        // The exit, with the duration and the raw exit; the notice once.
+        let exit = rows
+            .iter()
+            .find(|r| {
+                r["words"]
+                    .as_str()
+                    .is_some_and(|w| w.starts_with("exit 0 ("))
+            })
+            .unwrap();
+        assert_eq!(exit["raw"], "exit 0");
+        assert_eq!(exit["k"], "command");
+        assert_eq!(
+            rows.iter().filter(|r| r["k"] == "notice").count(),
+            1,
+            "{rows:#?}"
+        );
+        assert_eq!(
+            rows.iter().find(|r| r["k"] == "notice").unwrap()["words"],
+            "a notice the row showed"
+        );
+        assert!(rows.iter().all(|r| r["pid"] == std::process::id()));
+    }
+
+    /// docs/RUN-LOG-DESIGN.md §8, the adoption: the file is closed before
+    /// (the adoption deletes `build/`) and opened again after, with a new
+    /// header; the rows after it land.
+    #[test]
+    fn the_log_is_closed_for_an_adoption_and_opened_again() {
+        let mut app = app("log-adopt");
+        assert!(app.runlog.writing());
+        app.not_adopted = Some("made elsewhere".into());
+        app.ask_adopt();
+        arm(&mut app);
+        assert_eq!(key(&mut app, 'y'), Command::None);
+        assert!(app.not_adopted.is_none(), "{:?}", app.notice);
+        assert!(app.runlog.writing(), "{:?}", app.runlog.not_written);
+        app.say("after the adoption");
+        let rows = log_rows(&mut app);
+        assert_eq!(rows[0]["k"], "header", "{rows:#?}");
+        // The new header comes before every row after the adoption (the
+        // earlier file goes with `build/` when the adoption deletes it;
+        // here the folder was already this checkout's and stayed).
+        let header = rows.iter().rposition(|r| r["k"] == "header").unwrap();
+        let after = rows
+            .iter()
+            .position(|r| r["words"] == "after the adoption")
+            .unwrap();
+        assert!(header < after, "{rows:#?}");
+        assert!(
+            rows[header + 1]["words"]
+                .as_str()
+                .unwrap()
+                .contains("Adopt this folder?"),
+            "the dialog's row waited for the new file: {rows:#?}"
         );
     }
 }

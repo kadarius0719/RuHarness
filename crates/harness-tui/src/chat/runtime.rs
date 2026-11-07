@@ -303,9 +303,23 @@ pub fn sign_in_words(env: &[(OsString, OsString)]) -> String {
         "your Claude subscription".to_string()
     };
     if let Some(url) = get(env, "ANTHROPIC_BASE_URL") {
-        words.push_str(&format!(" at {}", url.to_string_lossy()));
+        words.push_str(&format!(" at {}", scrub_url(&url.to_string_lossy())));
     }
     words
+}
+
+/// `url` without a user name and password written into it: the words go
+/// on the screen and into the run log (docs/RUN-LOG-DESIGN.md §2).
+pub fn scrub_url(url: &str) -> String {
+    let Some(at) = url.find("://") else {
+        return url.to_string();
+    };
+    let rest = &url[at + 3..];
+    let host_end = rest.find('/').unwrap_or(rest.len());
+    match rest[..host_end].rfind('@') {
+        Some(i) => format!("{}{}", &url[..at + 3], &rest[i + 1..]),
+        None => url.to_string(),
+    }
 }
 
 /// Four random bytes as hex (from the system's randomness; the process id

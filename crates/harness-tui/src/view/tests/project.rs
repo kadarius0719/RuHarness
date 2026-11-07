@@ -153,7 +153,7 @@ fn a_map_run_shows_its_words_and_the_rows_follow() {
     };
     app.on_spawned(&p);
     for line in ["programs: 3", "  p1 t-lzg — tools/lzg.c (main)"] {
-        app.on_child_msg(crate::spawn::ChildMsg::Event(crate::events::parse_line(
+        app.on_child_msg(crate::spawn::ChildMsg::event(crate::events::parse_line(
             line,
         )));
     }
@@ -201,7 +201,7 @@ fn a_failed_run_says_so_and_offers_the_adoption_question() {
             panic!("y did not run it: {:?}", app.mode)
         };
         app.on_spawned(&p);
-        app.on_child_msg(crate::spawn::ChildMsg::Event(crate::events::parse_line(
+        app.on_child_msg(crate::spawn::ChildMsg::event(crate::events::parse_line(
             "project map: wrote migration/map/project-map.json",
         )));
         app.on_child_msg(crate::spawn::ChildMsg::Stderr(stderr.into()));

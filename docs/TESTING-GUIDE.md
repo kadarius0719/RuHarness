@@ -5399,9 +5399,17 @@ Ready. Last: Re-check u-checksum — GREEN — all 11 checks passed (<time>)
 
 **You should see** the unit's View again.
 
-**What it means.** Nothing in the cockpit is hidden: this is the same output the command would print in Terminal.
+**Do.** Press `L` (a capital L).
 
-**If you do not see that.** Press `Esc`, then `c` again.
+**You should see** the log over the panes: `Log — this session` as its title, then one row for each thing the cockpit did since you opened it — the dialog you answered in Step 9.6 (`Re-check u-checksum? — Run`), the command it started (`Re-check u-checksum — started (allowed by you)`), each line the command printed, and its exit (`exit 0 (… s)`) — each row with the time and `u-checksum` before the words; and, as the box's last row, `migration/build/cockpit.log — copy this file when reporting a problem`.
+
+**Do.** Press `r`, look, then press `r` again; then press `Esc`.
+
+**You should see** with `r` on, under each row that has one, the raw line it came from (the exact command line, the exact event the command printed), and the title `Log — this session · raw`; then the rows alone again; then the unit's View again.
+
+**What it means.** Nothing in the cockpit is hidden: this is the same output the command would print in Terminal, and the log keeps every step of the session — on the screen while the cockpit runs, and in a file in your project (`migration/build/cockpit.log`, one JSON line per row, in a folder git ignores) that you can copy when reporting a problem or follow from another window with `tail -f`.
+
+**If you do not see that.** Press `Esc`, then `c` (or `L`) again. A log that says `not written: …` as its last row could not open its file (the reason follows); the screen still shows the session.
 
 ### Step 9.8 — Look at a unit that no feature reaches
 

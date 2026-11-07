@@ -160,6 +160,20 @@ pub fn wrap(raw: &str, width: usize) -> Vec<String> {
     rows
 }
 
+/// A line for the run log (docs/RUN-LOG-DESIGN.md §2): the transcript is
+/// the funnel every pane line passes, so every one of them reaches the
+/// file — a read's call and its result as two rows (the fold is the
+/// screen's), the person's words behind "you: ".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogLine {
+    /// Its tone on the screen.
+    pub tone: Tone,
+    /// The words.
+    pub words: String,
+    /// A tool call's name and input, when it has one.
+    pub raw: Option<String>,
+}
+
 /// Where the view is: following the newest line, or at a row of a cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scroll {
@@ -185,6 +199,8 @@ pub struct Transcript {
     pub scroll: Scroll,
     /// Cells dropped to keep the bound.
     pub dropped: usize,
+    /// Lines for the run log since the app last drained them.
+    pub log: Vec<LogLine>,
 }
 
 impl Default for Transcript {
@@ -195,6 +211,7 @@ impl Default for Transcript {
             bytes: 0,
             scroll: Scroll::Follow,
             dropped: 0,
+            log: Vec::new(),
         }
     }
 }
@@ -238,6 +255,7 @@ impl Transcript {
 
     /// A message the person sent.
     pub fn you(&mut self, uuid: &str, text: &str) -> u64 {
+        self.log_raw(Tone::You, format!("you: {text}"), None);
         self.push(
             Kind::You {
                 uuid: uuid.to_string(),
@@ -265,13 +283,28 @@ impl Transcript {
         false
     }
 
-    /// A tool or cockpit line; its id.
+    /// A tool or cockpit line; its id. Logged.
     pub fn line(&mut self, tone: Tone, text: impl Into<String>) -> u64 {
+        let text = text.into();
+        self.log_raw(tone, text.clone(), None);
+        self.push(Kind::Line(tone), text)
+    }
+
+    /// [`Transcript::line`] without its log row (the caller logs the
+    /// folded reads its own way).
+    pub fn line_quiet(&mut self, tone: Tone, text: impl Into<String>) -> u64 {
         self.push(Kind::Line(tone), text.into())
     }
 
-    /// Replace line `id`'s text and tone (a read's "done").
+    /// Replace line `id`'s text and tone (a read's "done"). Logged.
     pub fn update_line(&mut self, id: u64, tone: Tone, text: impl Into<String>) {
+        let text = text.into();
+        self.log_raw(tone, text.clone(), None);
+        self.update_line_quiet(id, tone, text);
+    }
+
+    /// [`Transcript::update_line`] without its log row.
+    pub fn update_line_quiet(&mut self, id: u64, tone: Tone, text: impl Into<String>) {
         if let Some(c) = self.cells.iter_mut().find(|c| c.id == id) {
             let text = text.into();
             self.bytes = self.bytes - c.text.len() + text.len();
@@ -279,6 +312,16 @@ impl Transcript {
             c.kind = Kind::Line(tone);
             c.touched();
         }
+    }
+
+    /// A row for the run log alone (a read's call with its tool input, a
+    /// reply's start, a stderr line): nothing on the screen.
+    pub fn log_raw(&mut self, tone: Tone, words: impl Into<String>, raw: Option<String>) {
+        self.log.push(LogLine {
+            tone,
+            words: words.into(),
+            raw,
+        });
     }
 
     fn claude_cell(&mut self, msg: &str) -> usize {

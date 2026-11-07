@@ -21,4 +21,4 @@
 └───────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────┘└─────────────────────────────────────────────────────────────────────────┘
  harness-tui-chat-goldens-0000000000: the C project moving to Rust, its files below; its one piece that can move is in Rust.
 
- Enter review   Esc decline   Ctrl-J new line   ↑↓ scroll   Tab pane   F1 help   Ctrl-C quit
+ Enter review   Esc decline   Ctrl-J new line   ↑↓ scroll   Tab pane   Ctrl-L log   F1 help   Ctrl-C quit

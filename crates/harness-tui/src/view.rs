@@ -3748,11 +3748,18 @@ fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
             let mut style = status();
             let taken: usize = buttons.iter().map(|(b, _)| width_of(b) + 1).sum();
             let reason = menu_reason_rows(app, width.saturating_sub(taken + 1));
+            let heartbeat = chat_heartbeat(app);
             let text = match (app.chat_waits_why(app.now), &app.last) {
                 // A focused greyed item's reason is never cut: it takes
                 // this row while the menu is open and goes on in the notice
                 // row (the whole-journey check, item 13).
                 _ if reason.is_some() => reason.map(|(first, _)| first).unwrap_or_default(),
+                // A command paused for the chat: the chat's clocks, first
+                // (docs/RUN-LOG-DESIGN.md §4).
+                _ if heartbeat.is_some() => {
+                    style = notice();
+                    heartbeat.unwrap_or_default()
+                }
                 (Some(why), _) => {
                     style = notice();
                     why.to_string()
@@ -3792,6 +3799,134 @@ fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
         Span::raw(" ".repeat(pad)),
         Span::styled(right, bold()),
     ])
+}
+
+/// The status row while the last command paused for the chat's answer
+/// (docs/RUN-LOG-DESIGN.md §4): the chat's clocks first — how long the
+/// reply has been thinking and when Claude Code was last heard from; a
+/// reply that ended without the command being asked again; a chat that
+/// ended, with the way out.
+fn chat_heartbeat(app: &App) -> Option<String> {
+    let p = app.chat_pause.as_ref()?;
+    let now = std::time::Instant::now();
+    let turn = p
+        .turn
+        .map_or_else(|| "its turn".to_string(), |t| format!("turn {t}"));
+    let piece = p
+        .piece
+        .as_deref()
+        .map(|u| format!(" for {u}"))
+        .unwrap_or_default();
+    Some(if !app.chat.alive() {
+        format!("Chat ended — {turn} waits; Ctrl-N for a new chat")
+    } else if let Some(d) = app.chat.thinking_for(now) {
+        format!(
+            "Chat thinking {} · heard {} ago — answering {turn}{piece}",
+            elapsed_words(d),
+            elapsed_words(app.chat.heard_ago(now))
+        )
+    } else if app.chat.turn {
+        format!("Chat is told the outcome, then answers {turn}{piece}")
+    } else {
+        format!(
+            "Chat quiet {} — its reply ended; the command has not been asked again",
+            elapsed_words(app.chat.heard_ago(now))
+        )
+    })
+}
+
+/// A log row's style (the screen's tones; docs/RUN-LOG-DESIGN.md §3).
+fn log_style(t: crate::runlog::Tone) -> Style {
+    use crate::runlog::Tone as L;
+    match t {
+        L::Plain => Style::default(),
+        L::Dim => muted(),
+        L::Label => label_role(),
+        L::Good => good(),
+        L::Bad => bad(),
+        L::Warn => attention(),
+        L::Notice | L::Cockpit => notice(),
+        L::You => bold(),
+    }
+}
+
+/// The Log view's title: this session, raw on, what memory dropped, the
+/// clock's zone when it is not the local one.
+fn log_title(app: &App, raw: bool, utc: bool) -> String {
+    let mut title = " Log — this session".to_string();
+    if raw {
+        title.push_str(" · raw");
+    }
+    if app.runlog.dropped > 0 {
+        title.push_str(&format!(
+            " (the first {} are in the file)",
+            app.runlog.dropped
+        ));
+    }
+    if utc {
+        title.push_str(" · times in UTC");
+    }
+    title.push(' ');
+    title
+}
+
+/// The Log view's rows (docs/RUN-LOG-DESIGN.md §3): one event per row —
+/// the time, the piece in a column as wide as the plan's longest unit id,
+/// the words wrapped under their own column — and, with `raw` on, the raw
+/// line under every row that has one, in the dim tone.
+fn log_rows(app: &mut App, width: usize, raw: bool) -> Vec<Line<'static>> {
+    let offset = app.runlog.offset();
+    let pw = app
+        .snapshot
+        .units
+        .iter()
+        .map(|u| width_of(&u.unit.id))
+        .max()
+        .unwrap_or(0);
+    let lead_w = 8 + 2 + if pw > 0 { pw + 2 } else { 0 };
+    let body_w = width.saturating_sub(lead_w).max(8);
+    let blank = " ".repeat(lead_w);
+    let mut lines = Vec::new();
+    for e in &app.runlog.events {
+        let time = crate::runlog::hms(e.t, offset);
+        let piece = display::line(e.piece.as_deref().unwrap_or(""));
+        let lead = if pw > 0 {
+            format!("{time}  {piece:<pw$}  ")
+        } else {
+            format!("{time}  ")
+        };
+        let style = log_style(e.tone);
+        // A row in the notice or label role is one run (the theme's rule:
+        // those colours start their line); the rest keep a muted lead.
+        let lead_style = match e.tone {
+            crate::runlog::Tone::Notice
+            | crate::runlog::Tone::Cockpit
+            | crate::runlog::Tone::Label => style,
+            _ => muted(),
+        };
+        for (i, row) in word_wrap(&e.words, body_w).into_iter().enumerate() {
+            let head = if i == 0 { lead.clone() } else { blank.clone() };
+            lines.push(Line::from(vec![
+                Span::styled(head, lead_style),
+                Span::styled(row, style),
+            ]));
+        }
+        if raw {
+            if let Some(r) = &e.raw {
+                for row in hard_wrap(&display::line(r), body_w.saturating_sub(2)) {
+                    lines.push(Line::from(Span::styled(format!("{blank}  {row}"), muted())));
+                }
+            }
+        }
+    }
+    if lines.is_empty() {
+        lines.extend(wrapped(
+            "Nothing yet: the log fills as commands run and the chat talks.",
+            width,
+            notice(),
+        ));
+    }
+    lines
 }
 
 /// A path shortened to its last three parts: `…/a/b/c`; anything shorter
@@ -3848,6 +3983,16 @@ fn notice_row(app: &App, width: usize) -> Line<'static> {
             ellipsis(&format!(" {}", n.text), width),
             notice(),
         ));
+    }
+    // Under the log the chat's request is behind the overlay: Esc sees it
+    // (docs/RUN-LOG-DESIGN.md §3).
+    if matches!(app.mode, Mode::Log { .. }) {
+        if let Some(r) = app.asks.shown() {
+            return Line::from(Span::styled(
+                ellipsis(&format!(" The chat asks: {} — Esc to see", r.words), width),
+                bold(),
+            ));
+        }
     }
     // A request of the chat's stays announced outside the chat until it is
     // answered, naming the key back from the focused pane (§3.2).
@@ -3928,6 +4073,24 @@ fn overlay_hints(app: &App) -> Option<Vec<(&'static str, &'static str)>> {
         }
         Mode::Note { .. } | Mode::EditNote { .. } | Mode::RunName { .. } => {
             vec![("Enter", "continue"), ("Esc", "cancel")]
+        }
+        Mode::Log { raw, .. } => {
+            let mut h = vec![
+                ("↑↓", "scroll"),
+                ("r", if *raw { "raw off" } else { "raw" }),
+                ("Esc", "close"),
+            ];
+            if app.running {
+                h.push((
+                    if app.focus == Focus::Chat {
+                        "Ctrl-X"
+                    } else {
+                        "x"
+                    },
+                    "cancel",
+                ));
+            }
+            h
         }
         // Opened from the chat, the details keep the chat's keys: no
         // letters (review USE-1; fix check N2).
@@ -4016,6 +4179,7 @@ fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
         h.push(("]f", "next pair"));
     }
     h.push(("c", "details"));
+    h.push(("L", "log"));
     h.push(("i", "what is this?"));
     h.push(("g", "re-read"));
     h
@@ -4041,7 +4205,7 @@ fn draw_hints(frame: &mut Frame, app: &mut App, area: Rect) {
     // then whole entries from the end, never one cut.
     let mut list = list;
     let total = |l: &Keys| tail_w + l.iter().map(|e| width_of(&entry(e)) + 1).sum::<usize>();
-    for least in ["g", "c", "Esc", "Tab", "]f", "←→"] {
+    for least in ["L", "g", "c", "Esc", "Tab", "]f", "←→"] {
         if !panes || total(&list) <= width {
             break;
         }
@@ -4201,6 +4365,7 @@ const HELP_KEYS: &[(&str, &str)] = &[
     ("PgUp PgDn Home End", "page, or go to the ends"),
     ("i", "what the selected row is, on a card (in a dialog: what the act does); also What is this? in every menu"),
     ("c", "the activity details: the command, every event, its exit"),
+    ("L", "the log of this session, and its file (r: the raw lines)"),
     ("g", "re-read the project"),
     ("t", "try again, after a refusal"),
     ("q", "quit (a dialog while a command runs)"),
@@ -4400,8 +4565,8 @@ const HELP_CHAT: &[&str] = &[
     "Letters in the chat are text. Enter sends; Ctrl-J, \\ then Enter, or Alt-Enter is a new \
      line. Esc: decline a request, hold a waiting Continue, or stop the reply. Ctrl-C: stop, \
      clear the draft, or quit (asked). Ctrl-X: cancel the running command. Ctrl-N: a new \
-     chat (asked). ↑↓ PgUp PgDn scroll; Home/End on an empty input: the top / the newest \
-     line. F1: this screen.",
+     chat (asked). Ctrl-L: the log. ↑↓ PgUp PgDn scroll; Home/End on an empty input: the \
+     top / the newest line. F1: this screen.",
     "When you run a migration the chat asked for, it answers the model's turns here and each \
      answer continues the run without asking again — until you hold one (Esc), decline or \
      cancel one, stop the chat, or start a new one. Nothing is accepted without you.",
@@ -4623,6 +4788,28 @@ fn details_rows(app: &App, width: usize) -> Vec<Line<'static>> {
     match &app.run {
         None => lines.extend(wrapped(NOTHING_RAN, width, notice())),
         Some(run) => {
+            // A run that paused on a hand-off says so first, in plain words
+            // (docs/RUN-LOG-DESIGN.md §5): the harness's own "error:
+            // awaiting" and "result: exit 1" lines below are true, and this
+            // row says what they mean.
+            if run
+                .exit
+                .as_deref()
+                .is_some_and(|e| e.starts_with("paused: "))
+            {
+                let words = if run.pending.chat.is_some() {
+                    "This pause is normal: the harness wrote its question to a file and waits \
+                     for the chat's answer."
+                        .to_string()
+                } else {
+                    format!(
+                        "This pause is normal: the harness wrote its question to a file and \
+                         waits for your answer — {}",
+                        run.narrator.awaited_path().unwrap_or("see below")
+                    )
+                };
+                lines.extend(wrapped(&words, width, notice()));
+            }
             lines.extend(wrapped(
                 &format!("$ {}", shell_line(&run.argv)),
                 width,
@@ -5048,6 +5235,49 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         Mode::Menu(m) => draw_menu(frame, app, area, &m),
         Mode::Dialog(_) => draw_dialog(frame, app, area),
+        // The log over the whole panes area; the status rows stay underneath
+        // (docs/RUN-LOG-DESIGN.md §3).
+        Mode::Log {
+            scroll,
+            follow,
+            raw,
+        } => {
+            let rect = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(3));
+            if rect.width < 40 || rect.height < 3 {
+                let rows = wrapped(
+                    "make the window wider to read the log — Esc closes",
+                    rect.width.saturating_sub(2) as usize,
+                    notice(),
+                );
+                overlay(frame, rect, " Log ", &rows, 0, None, None);
+                app.hits.push((rect, Hit::Overlay));
+                return;
+            }
+            let inner = rect.width.saturating_sub(2) as usize;
+            let rows = log_rows(app, inner, raw);
+            let utc = app.runlog.offset().is_none();
+            let page = rect.height.saturating_sub(2) as usize;
+            let max = rows.len().saturating_sub(page);
+            let shown = if follow { max } else { scroll.min(max) };
+            let follow = follow || shown >= max;
+            let title = log_title(app, raw, utc);
+            let footer = app.runlog.footer_words();
+            overlay(
+                frame,
+                rect,
+                &title,
+                &rows,
+                shown,
+                Some(&footer),
+                if follow { None } else { Some("End: newest") },
+            );
+            app.mode = Mode::Log {
+                scroll: shown,
+                follow,
+                raw,
+            };
+            app.hits.push((rect, Hit::Overlay));
+        }
         Mode::Details { scroll } => {
             // Below 80 columns over the panes, the activity rows and the
             // hint bar still showing — so it can be closed with a click
@@ -5488,7 +5718,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::app::tests::{app, app_of, arm, attempt, key, LIB_C, PROVENANCE};
+    use crate::app::tests::{app, app_of, arm, attempt, code, key, LIB_C, PROVENANCE};
+    use crate::testutil::READ_SCALEFACTORS;
 
     /// The chat's connection, and the Project view's model work in chat.
     mod connection;
@@ -11640,5 +11871,320 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
             "{:?}",
             shown(20)
         );
+    }
+
+    /// Fixed events for the Log view's goldens (docs/RUN-LOG-DESIGN.md §3),
+    /// at a fixed clock shown in UTC.
+    fn log_events(app: &mut App) {
+        use crate::runlog::{Kind, Tone as L};
+        use std::time::{Duration, UNIX_EPOCH};
+        app.runlog.set_offset(Some(0));
+        let t0 = UNIX_EPOCH + Duration::from_secs(1_762_535_553);
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        type Row<'a> = (u64, Kind, Option<&'a str>, &'a str, Option<&'a str>, L);
+        let rows: [Row; 10] = [
+            (0, Kind::Dialog, Some("u-lib"), "Re-check u-lib? — Run", None, L::Label),
+            (
+                1,
+                Kind::Command,
+                Some("u-lib"),
+                "Re-check u-lib — started (allowed by you)",
+                Some("/opt/ruharness/bin/harness --json verify u-lib --target=/work/case"),
+                L::Plain,
+            ),
+            (
+                2,
+                Kind::Command,
+                Some("u-lib"),
+                "[check] symbol-set ✓ 1 exported symbol(s) match",
+                Some(r#"{"k":"check","unit":"u-lib","name":"symbol-set","passed":true,"detail":"1 exported symbol(s) match"}"#),
+                L::Good,
+            ),
+            (
+                40,
+                Kind::Command,
+                Some("u-lib"),
+                "turn 1 generate → …  (d-8378804af048)",
+                Some(r#"{"k":"turn-start","unit":"u-lib","attempt":"d-8378804af048","index":1,"kind":"generate"}"#),
+                L::Plain,
+            ),
+            (
+                41,
+                Kind::Command,
+                Some("u-lib"),
+                "paused: waiting for the chat's answer to turn 1 (the reply goes to …/bec63844.response.json) (41 s)",
+                Some("exit 1"),
+                L::Notice,
+            ),
+            (
+                42,
+                Kind::Chat,
+                Some("u-lib"),
+                "told the chat: Ran by the cockpit after the person confirmed it: {\"outcome\":\"awaiting\"}",
+                None,
+                L::Dim,
+            ),
+            (
+                55,
+                Kind::Chat,
+                Some("u-lib"),
+                "· read the request of d-8378804a… (page 1)",
+                Some(r#"harness_request {"attempt":"d-8378804af048","page":1}"#),
+                L::Dim,
+            ),
+            (
+                56,
+                Kind::Chat,
+                Some("u-lib"),
+                "· read the request of d-8378804a… (page 1) — done",
+                None,
+                L::Dim,
+            ),
+            (
+                400,
+                Kind::Chat,
+                Some("u-lib"),
+                "Claude Code says: the reply hit the output limit; the chat goes on from where it was cut",
+                None,
+                L::Cockpit,
+            ),
+            (
+                401,
+                Kind::Notice,
+                None,
+                "a notice the row showed, with a \u{1b}[31mcontrol\u{1b}[0m in it",
+                None,
+                L::Notice,
+            ),
+        ];
+        for (s, k, piece, words, raw, tone) in rows {
+            app.runlog.push_at(at(s), k, piece, words, raw, tone);
+        }
+    }
+
+    /// Goldens of the Log view (docs/RUN-LOG-DESIGN.md §3): plain, raw,
+    /// scrolled with its hint, the footer's two states, the narrow
+    /// terminal's one row, the title's count of what memory dropped.
+    #[test]
+    fn golden_log_plain_raw_and_scrolled() {
+        let mut app = app("glog");
+        log_events(&mut app);
+        key(&mut app, 'L');
+        assert!(matches!(
+            app.mode,
+            Mode::Log {
+                follow: true,
+                raw: false,
+                ..
+            }
+        ));
+        let buffer = render(&mut app, 120, 30);
+        golden("log.txt", &app, &buffer);
+        let screen = text(&buffer);
+        assert!(
+            screen.contains("17:12:33  u-lib  Re-check u-lib? — Run"),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("copy this file when reporting a problem"),
+            "{screen}"
+        );
+        assert!(
+            !screen.contains("verify u-lib --target"),
+            "raw off: {screen}"
+        );
+        assert!(!screen.contains('\u{1b}'), "filtered: {screen}");
+        assert!(
+            screen.lines().last().unwrap().contains(" r raw "),
+            "{screen}"
+        );
+        // Raw on: the command line, the event record, the tool call.
+        key(&mut app, 'r');
+        let buffer = render(&mut app, 120, 30);
+        golden("log-raw.txt", &app, &buffer);
+        let screen = text(&buffer);
+        assert!(screen.contains("Log — this session · raw"), "{screen}");
+        assert!(screen.contains("verify u-lib --target"), "{screen}");
+        assert!(screen.contains(r#"harness_request {"attempt""#), "{screen}");
+        assert!(
+            screen.lines().last().unwrap().contains(" r raw off "),
+            "{screen}"
+        );
+        // Scrolled up: the hint to the newest; End follows again.
+        key(&mut app, 'r');
+        let buffer = render(&mut app, 120, 14);
+        assert!(
+            text(&buffer).contains("Claude Code says"),
+            "follows the end"
+        );
+        code(&mut app, KeyCode::Up);
+        code(&mut app, KeyCode::Up);
+        let buffer = render(&mut app, 120, 14);
+        golden("log-scrolled.txt", &app, &buffer);
+        let screen = text(&buffer);
+        assert!(screen.contains("End: newest"), "{screen}");
+        assert!(matches!(app.mode, Mode::Log { follow: false, .. }));
+        code(&mut app, KeyCode::End);
+        let buffer = render(&mut app, 120, 14);
+        assert!(matches!(app.mode, Mode::Log { follow: true, .. }));
+        assert!(!text(&buffer).contains("End: newest"));
+        // The footer when the file is not written; the title's count.
+        app.runlog.not_written =
+            Some("migration/build is not a directory (symlinks are refused)".into());
+        app.runlog.dropped = 12;
+        let screen = text(&render(&mut app, 120, 30));
+        assert!(
+            screen.contains("not written: migration/build is not a directory (symlinks are refused) — this view shows this session only"),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("(the first 12 are in the file)"),
+            "{screen}"
+        );
+        // Too narrow: one row, offering Esc.
+        let screen = text(&render(&mut app, 38, 20));
+        assert!(
+            screen.contains("make the window wider") && screen.contains("Esc closes"),
+            "{screen}"
+        );
+        code(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+        // Nothing yet: said.
+        let mut empty = app_of(READ_SCALEFACTORS, "glog-empty");
+        empty.runlog.events.clear();
+        key(&mut empty, 'L');
+        assert!(text(&render(&mut empty, 120, 30)).contains("Nothing yet: the log fills"));
+    }
+
+    /// docs/RUN-LOG-DESIGN.md §3: the keys the Log keeps and the ones it
+    /// passes — `r` is raw, never Retry; `m` does nothing; `x` cancels and
+    /// `q` quits through their dialogs; `L` and Esc close; Ctrl-L opens it
+    /// from the chat; the wheel scrolls it.
+    #[test]
+    fn the_log_keeps_its_keys_and_passes_cancel_and_quit() {
+        let mut app = app("log-keys");
+        log_events(&mut app);
+        running(&mut app);
+        key(&mut app, 'L');
+        render(&mut app, 120, 30);
+        key(&mut app, 'm');
+        assert!(matches!(app.mode, Mode::Log { .. }));
+        assert_eq!(
+            app.notice.as_ref().map(|n| n.text.as_str()),
+            Some("the log is open — Esc closes it")
+        );
+        key(&mut app, 'r');
+        assert!(
+            matches!(app.mode, Mode::Log { raw: true, .. }),
+            "raw, never Retry"
+        );
+        key(&mut app, 'a');
+        assert!(
+            matches!(app.mode, Mode::Log { .. }),
+            "no accelerator: {:?}",
+            app.mode
+        );
+        key(&mut app, 'x');
+        assert!(
+            matches!(&app.mode, Mode::Dialog(c) if c.purpose == Purpose::Cancel),
+            "{:?}",
+            app.mode
+        );
+        app.mode = Mode::Normal;
+        key(&mut app, 'L');
+        key(&mut app, 'q');
+        assert!(
+            matches!(&app.mode, Mode::Dialog(c) if c.purpose == Purpose::Quit),
+            "{:?}",
+            app.mode
+        );
+        app.mode = Mode::Normal;
+        key(&mut app, 'L');
+        key(&mut app, 'L');
+        assert!(matches!(app.mode, Mode::Normal));
+        // From the chat: Ctrl-L; letters there are text.
+        app.focus = Focus::Chat;
+        app.chat_on = true;
+        key(&mut app, 'L');
+        assert!(
+            matches!(app.mode, Mode::Normal),
+            "a letter is text in the chat"
+        );
+        app.on_key(
+            KeyEvent::new(
+                KeyCode::Char('l'),
+                ratatui::crossterm::event::KeyModifiers::CONTROL,
+            ),
+            Instant::now(),
+        );
+        assert!(matches!(app.mode, Mode::Log { .. }));
+        let screen = text(&render(&mut app, 120, 30));
+        assert!(
+            screen.lines().last().unwrap().contains("Ctrl-X cancel"),
+            "{screen}"
+        );
+        // The wheel scrolls the log, never the pane under it.
+        let before = app.mode.clone();
+        app.on_mouse(
+            ratatui::crossterm::event::MouseEvent {
+                kind: ratatui::crossterm::event::MouseEventKind::ScrollUp,
+                column: 40,
+                row: 10,
+                modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+            },
+            Instant::now(),
+            std::time::Duration::ZERO,
+        );
+        assert!(
+            matches!(app.mode, Mode::Log { follow: false, .. }),
+            "{:?} from {before:?}",
+            app.mode
+        );
+    }
+
+    /// docs/RUN-LOG-DESIGN.md §5: a run that paused on a hand-off says so
+    /// first in Details, in plain words; a finished run has no such row.
+    #[test]
+    fn details_say_the_pause_is_normal_first() {
+        let mut app = app("details-pause");
+        running(&mut app);
+        app.running = false;
+        if let Some(run) = app.run.as_mut() {
+            run.narrator.on_event(&crate::events::Event::Awaiting {
+                attempt: Some("a-0123456789ab".into()),
+                path: "/work/case/migration/units/u-lib/traces/external/0123abcd.response.json"
+                    .into(),
+                resume: "harness migrate u-lib".into(),
+                args: None,
+                request_key: Some("0123abcd".into()),
+            });
+            run.exit = Some("paused: waiting for your answer — …/0123abcd.response.json".into());
+        }
+        key(&mut app, 'c');
+        let screen = text(&render(&mut app, 120, 30));
+        let first = screen
+            .lines()
+            .position(|l| {
+                l.contains("This pause is normal: the harness wrote its question to a file")
+            })
+            .expect(&screen);
+        let argv = screen
+            .lines()
+            .position(|l| l.contains("$ /opt/ruharness"))
+            .unwrap();
+        assert!(first < argv, "the pause row comes first: {screen}");
+        assert!(screen.contains("waits for your answer —"), "{screen}");
+        assert!(
+            screen.contains(
+                "/work/case/migration/units/u-lib/traces/external/0123abcd.response.json"
+            ),
+            "{screen}"
+        );
+        app.mode = Mode::Normal;
+        if let Some(run) = app.run.as_mut() {
+            run.exit = Some("exit 0".into());
+        }
+        key(&mut app, 'c');
+        assert!(!text(&render(&mut app, 120, 30)).contains("This pause is normal"));
     }
 }

@@ -64,6 +64,9 @@ impl App {
             );
             return;
         }
+        // Adopting deletes `migration/build/`: the log's file is closed
+        // before and opened again after (docs/RUN-LOG-DESIGN.md §1).
+        self.runlog.close();
         match harness_core::adopt::adopt(&self.config.target) {
             Ok(done) => {
                 self.not_adopted = None;
@@ -73,5 +76,6 @@ impl App {
             }
             Err(e) => self.notice = notice(format!("not adopted: {e}")),
         }
+        self.runlog.reopen();
     }
 }

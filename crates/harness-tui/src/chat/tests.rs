@@ -180,6 +180,78 @@ fn a_recorded_round_is_played_through() {
     assert!(cwd.contains(runtime::DIR_PREFIX), "{cwd}");
     let env = std::fs::read_to_string(tmp.0.join("log/env")).unwrap();
     assert!(env.lines().any(|l| l == "TERM=dumb"), "{env}");
+    // The run log's funnel (docs/RUN-LOG-DESIGN.md §2): the person's
+    // words, every tool and cockpit line, a read's call with its tool input
+    // and separately its result, the reply's start and end.
+    let log: Vec<(String, Option<String>)> = c
+        .transcript
+        .log
+        .iter()
+        .map(|l| (l.words.clone(), l.raw.clone()))
+        .collect();
+    let words: Vec<&str> = log.iter().map(|(w, _)| w.as_str()).collect();
+    assert!(
+        words.contains(&"you: Please migrate this piece."),
+        "{words:#?}"
+    );
+    let call = log
+        .iter()
+        .find(|(w, _)| w == "· read the project's status")
+        .unwrap();
+    assert!(
+        call.1
+            .as_deref()
+            .is_some_and(|r| r.starts_with("harness_status ")),
+        "{call:?}"
+    );
+    assert!(words.contains(&"· read the project's status — done"));
+    let request = log
+        .iter()
+        .find(|(w, _)| w == "· read the request of a-939463cb… (page 1)")
+        .unwrap();
+    assert!(
+        request
+            .1
+            .as_deref()
+            .is_some_and(|r| r.starts_with("harness_request {") && r.contains("a-939463cb")),
+        "{request:?}"
+    );
+    assert!(words.contains(&"· read the request of a-939463cb… (page 1) — done"));
+    // Started at the send and at each outcome handed back; ended once.
+    assert!(
+        words
+            .iter()
+            .filter(|w| **w == "the chat's reply started")
+            .count()
+            >= 3,
+        "{words:#?}"
+    );
+    let ended: Vec<&&str> = words
+        .iter()
+        .filter(|w| w.starts_with("the chat's reply ended — "))
+        .collect();
+    assert_eq!(ended.len(), 1, "{words:#?}");
+    assert!(ended[0].contains("of plan usage"));
+    assert!(c.reply_started.is_none());
+    // Every tool or cockpit line on the screen is in the log (the folded
+    // reads' line is the screen's; its reads are rows of their own).
+    for cell in &c.transcript.cells {
+        if let transcript::Kind::Line(_) = cell.kind {
+            if cell.text.starts_with("· read ") && cell.text.contains(" and ") {
+                continue;
+            }
+            // The reply's end: its row says so in words.
+            if let Some(rest) = cell.text.strip_prefix("— ") {
+                assert_eq!(*ended[0], format!("the chat's reply ended — {rest}"));
+                continue;
+            }
+            assert!(
+                words.contains(&cell.text.as_str()),
+                "{:?} not logged: {words:#?}",
+                cell.text
+            );
+        }
+    }
     let dir = c.live.as_ref().unwrap().dir.clone();
     end(&mut c);
     assert!(!dir.exists(), "the chat's directory is removed");

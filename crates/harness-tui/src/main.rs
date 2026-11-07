@@ -804,6 +804,7 @@ fn run(
         pump_loads(app, loader, &mut whys);
         app.chat_pump(Instant::now());
         app.expire_notice(Instant::now());
+        app.log_pass();
         // Under the guard: a frame in flight when a signal restores the
         // terminal finishes before the second restore (PROC-5).
         match GUARD.enable(|| terminal.draw(|f| view::draw(f, app)).map(|_| ())) {
@@ -858,10 +859,12 @@ fn run(
         match command {
             Command::None => {}
             Command::Quit => {
+                app.log_end();
                 end_chat_for_quit(app);
                 break;
             }
             Command::CancelAndQuit => {
+                app.log_end();
                 end_chat_for_quit(app);
                 // The mouse off before the wait (up to 1.5 s, nothing read):
                 // what comes meanwhile is read away on the way out, never by

@@ -105,6 +105,11 @@ pub const MIGRATION_DIR: &str = "migration";
 /// File name of the writer lock inside the ledger dir (gitignored).
 pub const LOCK_FILE: &str = ".lock";
 
+/// File name of the cockpit's run log inside the ledger's `build/`
+/// (gitignored; docs/RUN-LOG-DESIGN.md): the cockpit's one write into the
+/// ledger, a diary and never a result — the adoption check knows it.
+pub const COCKPIT_LOG_FILE: &str = "cockpit.log";
+
 /// Path helpers over a ledger folder. Pure path arithmetic, no I/O.
 #[derive(Debug, Clone)]
 pub struct Ledger {
@@ -569,7 +574,7 @@ fn unix_now() -> u64 {
 
 /// Seconds since the epoch as `YYYY-MM-DDTHH:MM:SSZ` (civil-from-days,
 /// proleptic Gregorian; no crate).
-fn rfc3339_utc(secs: u64) -> String {
+pub fn rfc3339_utc(secs: u64) -> String {
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
     let (h, m, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);

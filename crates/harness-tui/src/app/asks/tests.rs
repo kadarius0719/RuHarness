@@ -412,7 +412,7 @@ fn the_outcome_waits_for_the_read_after_the_reap() {
         r#"{"k":"result","exit":1}"#,
     ];
     for e in events {
-        a.on_child_msg(ChildMsg::Event(crate::events::parse_line(e)));
+        a.on_child_msg(ChildMsg::event(crate::events::parse_line(e)));
     }
     assert!(
         a.asks.table.contains_key("a-0123456789ab"),
@@ -449,6 +449,30 @@ fn the_outcome_waits_for_the_read_after_the_reap() {
         m.starts_with("Ran by the cockpit after the person confirmed it: "),
         "{m}"
     );
+    // The run log (docs/RUN-LOG-DESIGN.md §2): what the chat was told, the
+    // permission granted, the chat's rows with the act's piece; the status
+    // row's heartbeat knows the pause is the chat's (§4).
+    a.log_pass();
+    let rows: Vec<&crate::runlog::Event> = a.runlog.events.iter().collect();
+    let told = rows
+        .iter()
+        .find(|e| e.words.starts_with("told the chat: "))
+        .unwrap();
+    assert_eq!(told.words, format!("told the chat: {m}"));
+    assert_eq!(told.piece.as_deref(), Some("u-cache"));
+    assert!(
+        rows.iter().any(|e| e.words
+            == "the chat may continue Migrate u-cache (asked in chat) without asking \
+                (a-0123456789ab)"),
+        "{:#?}",
+        rows.iter().map(|e| &e.words).collect::<Vec<_>>()
+    );
+    assert!(rows
+        .iter()
+        .any(|e| e.words == "running" && e.piece.as_deref() == Some("u-cache")));
+    let pause = a.chat_pause.as_ref().expect("the pause is the chat's");
+    assert_eq!(pause.turn, Some(1));
+    assert_eq!(pause.piece.as_deref(), Some("u-cache"));
     let v: Value = serde_json::from_str(m.split_once(": ").unwrap().1).unwrap();
     assert_eq!(v["outcome"], "awaiting");
     assert_eq!(v["awaiting"]["request_key"], "0123abcd");
@@ -501,7 +525,7 @@ fn unsent_outcomes_go_with_the_next_message_of_their_chat_only() {
         },
         Instant::now(),
     );
-    a.on_child_msg(ChildMsg::Event(crate::events::parse_line(
+    a.on_child_msg(ChildMsg::event(crate::events::parse_line(
         r#"{"k":"attempt","unit":"u-cache","id":"a-0123456789ab","outcome":"green","promotion":"not-promoted"}"#,
     )));
     let _ = a.on_child_exit(ExitStatus::from_raw(0));
@@ -991,7 +1015,7 @@ fn run_shown(a: &mut App) -> Pending {
 }
 
 fn awaiting_event(a: &mut App, attempt: &str) {
-    a.on_child_msg(ChildMsg::Event(crate::events::parse_line(&format!(
+    a.on_child_msg(ChildMsg::event(crate::events::parse_line(&format!(
         r#"{{"k":"awaiting","attempt":"{attempt}","path":"/t/traces/chat/0123abcd.response.json","resume":"r","request_key":"0123abcd"}}"#
     ))));
 }
@@ -1409,6 +1433,15 @@ fn a_continue_that_asks_says_why() {
             "stop" => {
                 a.chat.turn = true;
                 a.chat_stop();
+                a.log_pass();
+                assert!(
+                    a.runlog.events.iter().any(|e| e.words
+                        == format!(
+                            "the chat's permission to continue {RED} ended: you stopped the chat"
+                        )),
+                    "{:#?}",
+                    a.runlog.events
+                );
                 "the permission ended (you stopped the chat)"
             }
             _ => {
