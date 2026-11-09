@@ -53,7 +53,9 @@ fn chat(tmp: &TmpDir, recording: &Path, extra: &str) -> Chat {
 
 /// Pump until `done` sees what it waits for (bounded); every event seen.
 fn pump_until(c: &mut Chat, mut done: impl FnMut(&Chat, &[Event]) -> bool) -> Vec<Event> {
-    let deadline = Instant::now() + Duration::from_secs(20);
+    // Generous: under the whole workspace's tests at once the fake chat
+    // can take most of a minute to be scheduled (the run of 2026-11-08).
+    let deadline = Instant::now() + Duration::from_secs(90);
     let mut all = Vec::new();
     loop {
         all.extend(c.pump(Instant::now()));

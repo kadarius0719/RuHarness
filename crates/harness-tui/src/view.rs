@@ -3808,7 +3808,7 @@ fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
 /// ended, with the way out.
 fn chat_heartbeat(app: &App) -> Option<String> {
     let p = app.chat_pause.as_ref()?;
-    let now = std::time::Instant::now();
+    let now = app.now;
     let turn = p
         .turn
         .map_or_else(|| "its turn".to_string(), |t| format!("turn {t}"));
