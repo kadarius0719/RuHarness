@@ -127,6 +127,14 @@ library t-…`, the compiler is the cause, not the project: clang 21 (Xcode's SD
 took that for a read outside the project and withheld every symbol. A build from 2026-11-07
 or later counts the SDK's and the toolchain's own folders as the toolchain's; rebuild and Map
 again. The log (`L`) shows the map's own lines if you want to see what it read.
+**A plan older than the harness (from 2026-11-08).** If the chat refuses a test program saying
+that functions in the contract "are not external" or "cannot be reached from a separate
+driver.c", the plan lists helpers the scanner has since learnt are static. **Scan the project**,
+then **Refresh the plan** (both from the tool's row), and ask for the test program again. A
+piece that reads `blocked` after a refresh with no reason of yours comes back to `pending` on
+the next refresh once its functions are public again — before 2026-11-08 it stayed blocked. A
+try left `waiting for your answer` from before the refresh carries the old contract: do not
+Continue it; ask for the test program afresh.
 **Stop rule.** Stop after the third wall, or after `lz4.c` either way (green or not). Everything
 past that is the same lesson again.
 

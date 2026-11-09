@@ -429,12 +429,29 @@ impl CFrontend {
         // A specifier macro the project defines as `static …` (lz4's
         // `UTIL_STATIC`, the run of 2026-10-30): a function whose head
         // starts with it is static, whatever else the macro spells
-        // (docs/HEADER-FUNCTIONS-DESIGN.md §2).
-        let static_macros: BTreeSet<String> = files
-            .iter()
-            .filter_map(|f| f.parse.as_ref().map(|(_, src)| src.as_slice()))
-            .flat_map(static_macros_in)
-            .collect();
+        // (docs/HEADER-FUNCTIONS-DESIGN.md §2). A name the project also
+        // defines as something else — xxhash's `XXH_PUBLIC_API`, `static`
+        // only under `#if XXH_INLINE_ALL`, empty otherwise (the run of
+        // 2026-11-08) — is not static: the scan does not preprocess, so it
+        // cannot tell which definition a build takes, and a wrong "static"
+        // empties a whole piece.
+        let static_macros: BTreeSet<String> = {
+            let mut is_static: BTreeMap<String, bool> = BTreeMap::new();
+            for (name, stat) in files
+                .iter()
+                .filter_map(|f| f.parse.as_ref().map(|(_, src)| src.as_slice()))
+                .flat_map(specifier_macros_in)
+            {
+                is_static
+                    .entry(name)
+                    .and_modify(|all| *all &= stat)
+                    .or_insert(stat);
+            }
+            is_static
+                .into_iter()
+                .filter_map(|(name, all)| all.then_some(name))
+                .collect()
+        };
         let mut defs: Vec<FnDef> = Vec::new();
         let mut file_records: Vec<FileRecord> = Vec::with_capacity(files.len());
         for file in files {
@@ -582,12 +599,14 @@ impl CFrontend {
 }
 
 /// The names of the object-like macros `src` defines as `static …`
-/// (`#define UTIL_STATIC static inline`): one per matching line, as
-/// written. A line reader: a `#define` inside a comment is a false hit the
-/// parse of a function head then has to confirm (the head must start with
-/// the name), and a macro defined under one `#if` branch counts for every
-/// branch — the scan does not preprocess.
-fn static_macros_in(src: &[u8]) -> Vec<String> {
+/// (`#define UTIL_STATIC static inline`), and whether each one's body
+/// starts with `static`: one entry per object-like `#define`, as written.
+/// A line reader: a `#define` inside a comment is a false hit the parse of
+/// a function head then has to confirm (the head must start with the name),
+/// and a macro defined under one `#if` branch is read in every branch — the
+/// scan does not preprocess, which is why the caller counts a name static
+/// only when all its definitions are.
+fn specifier_macros_in(src: &[u8]) -> Vec<(String, bool)> {
     let ident = |b: &u8| b.is_ascii_alphanumeric() || *b == b'_';
     let mut names = Vec::new();
     for line in src.split(|&b| b == b'\n') {
@@ -610,13 +629,29 @@ fn static_macros_in(src: &[u8]) -> Vec<String> {
         let is_static = body
             .strip_prefix(b"static")
             .is_some_and(|after| after.first().is_none_or(|b| !ident(b)));
-        if is_static {
-            if let Ok(name) = std::str::from_utf8(&rest[..name_len]) {
-                names.push(name.to_string());
-            }
+        if let Ok(name) = std::str::from_utf8(&rest[..name_len]) {
+            names.push((name.to_string(), is_static));
         }
     }
     names
+}
+
+/// The names [`specifier_macros_in`] reads as `static` in `src`, for the
+/// tests of the reader alone (one file: a name is static when every one of
+/// its definitions here is).
+#[cfg(test)]
+fn static_macros_in(src: &[u8]) -> Vec<String> {
+    let mut is_static: BTreeMap<String, bool> = BTreeMap::new();
+    for (name, stat) in specifier_macros_in(src) {
+        is_static
+            .entry(name)
+            .and_modify(|all| *all &= stat)
+            .or_insert(stat);
+    }
+    is_static
+        .into_iter()
+        .filter_map(|(name, all)| all.then_some(name))
+        .collect()
 }
 
 /// Render `path` relative to `root` with forward slashes.
@@ -3396,12 +3431,50 @@ mod tests {
         assert_eq!(callees("alone"), [("helper_b".to_string(), false)]);
     }
 
+    /// The lz4 run of 2026-11-08: xxhash's `XXH_PUBLIC_API` is `static`
+    /// under `#if XXH_INLINE_ALL` and empty otherwise, and the scan took it
+    /// for static — every function of xxhash.c went internal and the piece
+    /// was blocked as "files no longer in facts". A name the project defines
+    /// both ways is not static; one it defines as static every time still is.
+    #[test]
+    fn a_macro_defined_static_in_one_branch_only_is_not_static() {
+        let t = TempTarget::new("mixed-macro", "[]");
+        t.write(
+            "src/api.h",
+            "#ifndef API_H\n#define API_H\n#if defined(INLINE_ALL)\n\
+             #  define PUBLIC_API static inline\n#else\n#  define PUBLIC_API   /* nothing */\n\
+             #endif\n#if defined(__GNUC__)\n#  define FORCE_INLINE static inline\n#else\n\
+             #  define FORCE_INLINE static\n#endif\n#endif\n",
+        );
+        t.write(
+            "src/hash.c",
+            "#include \"api.h\"\nFORCE_INLINE int mix(int x) { return x * 3; }\n\
+             PUBLIC_API int hash32(int x) { return mix(x) + 1; }\n",
+        );
+        let target = TargetContext::load(&t.0).expect("target loads");
+        let (facts, _) = CFrontend.scan_reporting(&target).expect("scan");
+        let by_name = |n: &str| {
+            facts
+                .symbols
+                .iter()
+                .find(|s| s.name == n)
+                .unwrap_or_else(|| panic!("{n}: {:?}", facts.symbols))
+        };
+        assert_eq!(by_name("hash32").visibility, "public");
+        assert_eq!(by_name("src/hash.c::mix").visibility, "internal");
+    }
+
     /// The macro reader: object-like `#define NAME static…` lines only.
     #[test]
     fn the_static_macro_reader() {
         let src = b"#define A static\n  #  define  B\tstatic inline\n#define C(x) static x\n\
             #define D staticky\n#define E\n#define F static_assert(1, \"\")\n#undef A\n";
         assert_eq!(static_macros_in(src), ["A", "B"]);
+        // xxhash's shape: `static` under one `#if` branch, nothing under the
+        // other. Which one a build takes the reader cannot know: not static.
+        let mixed = b"#if defined(XXH_INLINE_ALL)\n#  define P static inline\n#else\n\
+            #  define P   /* do nothing */\n#endif\n#define Q static\n#define Q static inline\n";
+        assert_eq!(static_macros_in(mixed), ["Q"]);
     }
 
     /// The readers review, finding 11: with `source_dir` itself a link, a

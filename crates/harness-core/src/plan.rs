@@ -291,7 +291,8 @@ pub struct ComputedUnit {
     pub files: Vec<String>,
     /// Canonical ids of owned public symbols.
     pub symbols: Vec<String>,
-    /// Display signatures for `interface` (only written on first creation).
+    /// Display signatures for `interface` (rewritten with `symbols` on every
+    /// reconcile: the two lists describe the same functions).
     pub interface: Vec<String>,
     /// Unit ids this cluster depends on.
     pub depends_on: Vec<String>,
@@ -343,6 +344,9 @@ pub fn adopt_existing_ids(computed: &mut [ComputedUnit], existing: &Plan) {
         cu.depends_on.dedup();
     }
 }
+/// The comment pass 2 of [`reconcile`] leaves on a `status = "blocked"` it
+/// set itself; pass 1 reads it to know the block is the planner's to lift.
+const PLANNER_BLOCK_NOTE: &str = "planner: files no longer present in facts";
 
 /// Reconcile plan.toml with planner output (docs/SCHEMAS.md): keyed by unit
 /// id (or file overlap for renamed clusters); existing units keep `status`,
@@ -425,13 +429,39 @@ pub fn reconcile_to_string(
             .find(|t| t.get("id").and_then(|v| v.as_str()) == Some(cu.id.as_str()));
         match existing {
             Some(t) => {
-                // Planner-owned fields only; status/comments/unknowns untouched.
+                // Planner-owned fields only; status/comments/unknowns untouched
+                // — except a block the planner itself set (pass 2's comment
+                // marks it): computed again, the unit is pending again. The
+                // lz4 run of 2026-11-08: a scanner fix made xxhash's functions
+                // public again, and the piece would have stayed blocked for
+                // good.
+                let planner_blocked = t.get("status").is_some_and(|v| {
+                    v.as_str() == Some("blocked")
+                        && v.as_value().is_some_and(|val| {
+                            val.decor().suffix().is_some_and(|d| {
+                                d.as_str().is_some_and(|d| d.contains(PLANNER_BLOCK_NOTE))
+                            })
+                        })
+                });
+                if planner_blocked {
+                    t["status"] = toml_edit::value("pending");
+                    changes.push(format!(
+                        "unit {}: pending again (its files are back in the facts)",
+                        cu.id
+                    ));
+                }
                 let old_hash = t.get("source_hash").and_then(|v| v.as_str()).unwrap_or("");
                 if old_hash != cu.source_hash {
                     changes.push(format!("unit {}: source changed (hash updated)", cu.id));
                 }
                 t["files"] = toml_edit::value(str_array(&cu.files));
                 t["symbols"] = toml_edit::value(str_array(&cu.symbols));
+                // The signatures travel with the symbols: the driver
+                // contract shows `interface` as the unit's external
+                // functions, so a refresh that dropped a symbol (a helper
+                // the scanner now knows is static, the lz4 run of
+                // 2026-11-08) must drop its signature too.
+                t["interface"] = toml_edit::value(str_array(&cu.interface));
                 t["depends_on"] = toml_edit::value(str_array(&cu.depends_on));
                 t["source_hash"] = toml_edit::value(cu.source_hash.as_str());
             }
@@ -472,7 +502,7 @@ pub fn reconcile_to_string(
                 if let Some(v) = t.get_mut("status") {
                     if let Some(item) = v.as_value_mut() {
                         item.decor_mut()
-                            .set_suffix(" # planner: files no longer present in facts");
+                            .set_suffix(format!(" # {PLANNER_BLOCK_NOTE}"));
                     }
                 }
                 changes.push(format!("unit {id}: blocked (files no longer in facts)"));

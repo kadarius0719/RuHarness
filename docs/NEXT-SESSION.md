@@ -139,6 +139,16 @@ no spike edits. The live walk on a fresh copy moved u-checksum, u-encode and u-v
    Next on the run, top to bottom: `u-lz4`, `u-lz4hc`, `u-threadpool`, `u-xxhash` (expect the
    `-D` rename at the symbol-set check), `u-lz4frame`, then `u-bench` and `u-lz4io` — the first
    pieces with header helpers, the proof of the fourth fix.
+   **2026-11-08:** the log's first real evening found the seventh wall (DECISIONS 2026-11-08):
+   the chat refused u-lz4hc's test program because the plan, older than the October 30 scanner
+   fix, listed static helpers as callable; a Refresh then kept the old signatures and blocked
+   u-xxhash. Three fixes landed the same evening; the person's steps are Scan, Refresh the plan,
+   then u-lz4. **First design item for this session:** `LZ4HC_hexOut`, a function the source
+   defines only under a debug `#if`, is still in u-lz4hc's list and the judge requires every
+   listed symbol to be called — decide between preprocessing with the map's compile flags and
+   letting the judge require only what the compiled unit defines (DECISIONS 2026-11-08, "Left
+   open"). Known for later: the scanner reads `XXH_PUBLIC_API XXH_errorcode XXH32_update(…)` as
+   a function named `XXH_errorcode`, so u-xxhash lacks its two `_update` functions.
 6. **Then the briefing's next milestone (M5, the extension proof)**, or what the scale run shows,
    as the person decides.
 

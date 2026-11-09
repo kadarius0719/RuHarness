@@ -261,8 +261,12 @@ fn reconcile_preserves_human_state() {
     );
     std::fs::write(&path, &text).unwrap();
 
-    // Replan with a changed hash and a new unit.
+    // Replan with a changed hash and a new unit. The scanner has learnt
+    // that one of u-a's functions was static all along (the lz4 run of
+    // 2026-11-08): its symbol goes, and so must its signature.
     computed[0].source_hash = "blake3:v2".into();
+    computed[0].symbols = vec!["alpha".into(), "gamma".into()];
+    computed[0].interface = vec!["int alpha(void)".into(), "int gamma(int)".into()];
     computed.push(ComputedUnit {
         id: "u-b".into(),
         files: vec!["src/b.c".into()],
@@ -284,12 +288,43 @@ fn reconcile_preserves_human_state() {
     let loaded = Plan::load(&path).unwrap();
     assert_eq!(loaded.units.len(), 2);
     assert_eq!(loaded.units[0].status, UnitStatus::InProgress);
+    assert_eq!(loaded.units[0].symbols, ["alpha", "gamma"]);
+    assert_eq!(
+        loaded.units[0].interface,
+        ["int alpha(void)", "int gamma(int)"],
+        "the signatures follow the symbols on a refresh"
+    );
 
     // A third replan without u-b blocks it but keeps it.
-    computed.truncate(1);
+    let u_b = computed.pop().unwrap();
     plan::reconcile(&path, "demo", &computed).unwrap();
     let loaded = Plan::load(&path).unwrap();
     assert_eq!(loaded.units[1].status, UnitStatus::Blocked);
+
+    // Computed again (a scanner fix gave its functions back), the planner
+    // lifts its own block; a block a person set by hand it leaves alone.
+    computed.push(u_b);
+    let changes = plan::reconcile(&path, "demo", &computed).unwrap();
+    assert!(
+        changes.iter().any(|c| c.contains("u-b: pending again")),
+        "{changes:?}"
+    );
+    let loaded = Plan::load(&path).unwrap();
+    assert_eq!(loaded.units[1].status, UnitStatus::Pending);
+    let text = std::fs::read_to_string(&path).unwrap();
+    let text = text.replacen(
+        "status = \"pending\"",
+        "status = \"blocked\" # not this version",
+        1,
+    );
+    std::fs::write(&path, &text).unwrap();
+    plan::reconcile(&path, "demo", &computed).unwrap();
+    let loaded = Plan::load(&path).unwrap();
+    assert_eq!(
+        loaded.units[1].status,
+        UnitStatus::Blocked,
+        "a person's block stays"
+    );
 }
 
 #[test]

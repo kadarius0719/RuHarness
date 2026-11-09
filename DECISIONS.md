@@ -103,6 +103,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-10-30 — **The lz4 run's fifth wall: the runtime's own words taken for a stranger's** — a reply cut at the output limit brings a `user` line Claude Code writes itself (`isSynthetic`); the cockpit knows those sentences and keeps the turn's permissions; the output ceiling raised to 128 000.
 - 2026-11-07 — **The run log: the cockpit's one write into the ledger, a Log view, the chat's heartbeat** — `migration/build/cockpit.log` (append-only, link-safe, never read back) as the exception to "the cockpit never writes the ledger"; the Log view on `L`; the status row and the chat's title say how long the reply has been thinking; Details says a pause is normal.
 - 2026-11-07 — **The lz4 run's sixth wall: the SDK's own settings file taken for a read outside the project** — clang 21 lists `SDKSettings.json` in every dependency list; the map withheld every symbol and found no program; the SDK and toolchain roots now count as the toolchain's.
+- 2026-11-08 — **The lz4 run's seventh wall: a refreshed plan kept its old signatures, and a macro static in one `#if` branch emptied a piece** — the plan refresh now rewrites `interface` with `symbols` and lifts its own blocks; a specifier macro is static only when every definition of it is; the judge's "calls every symbol" rule meets a debug-only function (`LZ4HC_hexOut`), left open.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -4531,3 +4532,53 @@ list is the compiler's, but the flags are the project's (`-include` reaches anyw
 **Revisit when.** A toolchain whose own files live outside both an `.sdk` and an
 `.xctoolchain` root (a Linux cross SDK) hits the same wall: the rule would then take the
 compiler's resource dir (`cc -print-resource-dir`) and sysroot as roots.
+
+
+## 2026-11-08 — The lz4 run's seventh wall: a refreshed plan kept its old signatures, and a macro static in one `#if` branch emptied a piece
+
+**Seen.** The person asked the chat for u-lz4hc's test program (2026-11-07 evening). The chat
+read the request and refused, rightly: the contract listed 46 functions to call, and 12 of them
+cannot be reached from another file — 11 are `LZ4_FORCE_INLINE` helpers (`static inline`) and
+one, `LZ4HC_hexOut`, exists only when `LZ4_DEBUG >= 2`. The facts were right (the scanner's
+static-macro rule of 2026-10-30 marks the helpers internal), but the plan dated from 16:01 that
+day, before the fix landed at 18:30, and the plan is what the contract is built from. After a
+Refresh of the plan the next evening, the symbol lists were right and the signature lists were
+not: `reconcile` rewrote `files`, `symbols`, `depends_on` and `source_hash` of an existing unit
+and left `interface` as first written (the comment on the field said so) — u-lz4 showed 49
+symbols and 70 signatures, u-lz4hc 35 and 46. The same refresh blocked u-xxhash, "files no
+longer present in facts": the static-macro reader had taken `XXH_PUBLIC_API` for static because
+its definitions under `#if XXH_INLINE_ALL` say `static inline`, and the scan does not know which
+branch a build takes — every function of `xxhash.c` had gone internal in the November 7 scan.
+And a unit the planner blocks stays blocked for good: pass 1 never touches `status`.
+
+**Decided.** Three mechanical fixes, each with a test. (1) `reconcile` rewrites `interface`
+together with `symbols`: the two lists describe the same functions, and the contract shows
+`interface` as "the unit's external functions". (2) A specifier macro counts as `static` only
+when every object-like definition of that name in the scanned files starts with `static`
+(`UTIL_STATIC`: four definitions, all static; `LZ4_FORCE_INLINE`: five, all static;
+`XXH_PUBLIC_API`: four static and one empty — not static). docs/HEADER-FUNCTIONS-DESIGN.md §2
+says so. (3) A `status = "blocked"` that carries the planner's own comment is lifted to
+`pending` when the planner computes the unit again; a block a person wrote stays. Proved on a
+scratch copy of the person's lz4 project with the fixed build: scan, then plan — u-lz4 49
+symbols and 49 signatures, u-lz4hc 35 and 35, `xxhash.c` 18 public functions and u-xxhash
+"pending again (its files are back in the facts)".
+
+**Rejected.** Taking a piece's callable functions from the compiled object's exports instead of
+the facts: `xxhash.c` exports `LZ4_XXH32` for the source's `XXH32` (the `XXH_NAMESPACE`
+rename), so the intersection would be empty and the piece empty again. The object stays the
+judge's baseline, not the planner's source.
+
+**Left open.** `LZ4HC_hexOut` is still in u-lz4hc's list: it is public in the source and
+defined only under a debug `#if`, which the scan does not evaluate. The contract says "call
+every symbol" and the judge's `symbols-called` check requires every one, so the chat will refuse
+u-lz4hc again, or a program that skips it will fail. It is the per-platform `#if` wall of
+2026-10-30 in another shape; the fix wants a decision (preprocess with the map's compile
+flags, or let the judge require only the symbols the compiled unit defines when most of them
+match by name) and is the kickoff's first design item. Also seen in passing: the scanner reads
+`XXH_PUBLIC_API XXH_errorcode XXH32_update(...)` as a function named `XXH_errorcode` — two
+identifiers before the name — so `XXH32_update` and `XXH64_update` are missing from u-xxhash
+and a phantom `XXH_errorcode` is in it. That piece's turn is later in the run.
+
+**Revisit when.** u-xxhash's test program is asked for (the two `_update` functions and the
+phantom), or a project defines a specifier macro static in one file and not in another (the
+rule is project-wide, one set of names).

@@ -24,8 +24,13 @@ includes the header, the way a macro is. Three consequences, each a part of the 
 file's lines are read for `#define NAME static…` (object-like only: `NAME(` is a function-like
 macro and skipped; `static` must end the token: `staticky` and `static_assert` do not match).
 A function whose signature's first token is such a name is static. The reader does not
-preprocess: a macro defined under one `#if` branch counts for every branch, and a `#define` in
-a comment is a false hit that costs nothing unless a function head starts with that word.
+preprocess, so it reads every `#if` branch; a name is static only when **every** definition of
+it in the scanned files says `static` (lz4's `UTIL_STATIC` and `LZ4_FORCE_INLINE`: all of
+them do). A name defined both ways — xxhash's `XXH_PUBLIC_API`, `static inline` under
+`#if XXH_INLINE_ALL` and empty otherwise — is not static: the reader cannot know which branch
+a build takes, and a wrong "static" empties a whole piece (the lz4 run of 2026-11-08, where
+every function of `xxhash.c` went internal and the planner blocked the piece). A `#define` in a
+comment is a false hit that costs nothing unless a function head starts with that word.
 
 **Where a call lands.** A call to `N` from file `F` resolves, in this order: `F`'s own static
 `N`; the static `N` of the nearest file in `F`'s include closure (breadth first, includes in
