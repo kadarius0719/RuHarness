@@ -32,7 +32,7 @@ use harness_tui::termguard::{EnableMouse, TermGuard, ENABLE_WAIT};
 use harness_tui::view;
 use ratatui::crossterm::cursor;
 use ratatui::crossterm::event::{
-    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, Event as TermEvent,
 };
 use ratatui::crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::crossterm::ExecutableCommand;
@@ -781,6 +781,58 @@ fn finish_chats(app: &mut App) {
     chat::runtime::kill_all(&app.chat.procs);
 }
 
+/// The most input events one frame applies: a flood of them (a long burst
+/// of wheel notches) still lets the screen be drawn.
+const DRAIN_CAP: usize = 200;
+
+/// Where the loop's input comes from: the terminal, or a test's queue.
+trait InputSource {
+    /// Another event already waiting, read or not.
+    fn waiting(&mut self) -> std::io::Result<bool>;
+    /// The next event (one is waiting).
+    fn read(&mut self) -> std::io::Result<TermEvent>;
+}
+
+/// The terminal's own queue.
+struct TermQueue;
+
+impl InputSource for TermQueue {
+    fn waiting(&mut self) -> std::io::Result<bool> {
+        event::poll(Duration::ZERO)
+    }
+
+    fn read(&mut self) -> std::io::Result<TermEvent> {
+        event::read()
+    }
+}
+
+/// Reads the input already waiting and applies it before the next frame.
+/// A wheel or a trackpad sends dozens to hundreds of notches at once; drawn
+/// one per frame they kept the screen scrolling long after the wheel
+/// stopped, with the person's clicks waiting behind them. One event is
+/// waiting when this is called. It stops at the first event that asks for
+/// a command (the events after it wait for the next frame, so nothing is
+/// read past a quit), when the queue is empty, or at [`DRAIN_CAP`].
+fn drain_input(
+    app: &mut App,
+    queue: &harness_tui::app::QueueClock,
+    source: &mut impl InputSource,
+) -> std::io::Result<Command> {
+    for _ in 0..DRAIN_CAP {
+        let event = source.read()?;
+        let now = Instant::now();
+        // More input already waiting: this event is part of a burst.
+        app.input_pending = source.waiting()?;
+        // Every input read restarts an open dialog's quiet time (the
+        // mouse's too), then it is a key, a click or a paste.
+        let command = app.on_event(event, now, queue.late(now));
+        if !matches!(command, Command::None) || !app.input_pending {
+            return Ok(command);
+        }
+    }
+    Ok(Command::None)
+}
+
 fn run(
     terminal: &mut DefaultTerminal,
     app: &mut App,
@@ -825,13 +877,7 @@ fn run(
         let ready = event::poll(Duration::from_millis(60))?;
         queue.polled(began, empty, ready, Instant::now());
         if ready {
-            let event = event::read()?;
-            let now = Instant::now();
-            // More input already waiting: this event is part of a burst.
-            app.input_pending = event::poll(Duration::ZERO)?;
-            // Every input read restarts an open dialog's quiet time (the
-            // mouse's too), then it is a key, a click or a paste.
-            command = app.on_event(event, now, queue.late(now));
+            command = drain_input(app, &queue, &mut TermQueue)?;
         }
         if let Some(r) = running.as_mut() {
             for msg in r.drain() {
@@ -1407,5 +1453,121 @@ mod tests {
         );
         assert!(guard(&KEPT_EDITS).contains(&edit));
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A test's input queue: the events still waiting, and how many the
+    /// drain took.
+    struct Fake {
+        events: std::collections::VecDeque<TermEvent>,
+        taken: usize,
+    }
+
+    impl Fake {
+        fn of(events: Vec<TermEvent>) -> Fake {
+            Fake {
+                events: events.into(),
+                taken: 0,
+            }
+        }
+    }
+
+    impl InputSource for Fake {
+        fn waiting(&mut self) -> std::io::Result<bool> {
+            Ok(!self.events.is_empty())
+        }
+
+        fn read(&mut self) -> std::io::Result<TermEvent> {
+            self.taken += 1;
+            Ok(self.events.pop_front().expect("an event is waiting"))
+        }
+    }
+
+    /// The tractor case's cockpit, drawn once at 120x16, and the middle of
+    /// its Files pane.
+    fn drawn_app() -> (App, (u16, u16)) {
+        let case = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../targets/tractor/cases/Hidden-Tests/B01_organic/read_scalefactors_lib")
+            .canonicalize()
+            .unwrap();
+        harness_core::adopt::testing::adopt(&case);
+        let mut app = App::new(
+            Config {
+                target: case.clone(),
+                tool: None,
+                harness: None,
+                allow_unsandboxed: false,
+                layout: LayoutMode::Auto,
+                providers: vec!["external".into()],
+            },
+            load::read(&case).unwrap(),
+        );
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 16)).unwrap();
+        terminal.draw(|f| view::draw(f, &mut app)).unwrap();
+        let files = harness_tui::app::Hit::Pane(harness_tui::app::Focus::Files);
+        let (r, _) = app
+            .hits
+            .iter()
+            .rev()
+            .find(|(_, h)| *h == files)
+            .expect("the Files pane is drawn");
+        let spot = (r.x + r.width / 2, r.y);
+        (app, spot)
+    }
+
+    fn wheel(at: (u16, u16)) -> TermEvent {
+        TermEvent::Mouse(event::MouseEvent {
+            kind: event::MouseEventKind::ScrollDown,
+            column: at.0,
+            row: at.1,
+            modifiers: event::KeyModifiers::NONE,
+        })
+    }
+
+    fn quit_key() -> TermEvent {
+        TermEvent::Key(event::KeyEvent::from(event::KeyCode::Char('q')))
+    }
+
+    /// A wheel burst is applied before the next frame, at most
+    /// [`DRAIN_CAP`] notches of it: the rest waits for the next frame.
+    #[test]
+    fn a_wheel_burst_is_applied_in_one_frame_up_to_the_cap() {
+        let (mut app, files) = drawn_app();
+        let mut source = Fake::of((0..300).map(|_| wheel(files)).collect());
+        let queue = harness_tui::app::QueueClock::new(Instant::now());
+        let command = drain_input(&mut app, &queue, &mut source).unwrap();
+        assert_eq!(command, Command::None);
+        assert_eq!(source.taken, DRAIN_CAP);
+        assert_eq!(source.events.len(), 300 - DRAIN_CAP);
+        assert!(app.input_pending, "the rest of the burst still waits");
+    }
+
+    /// The first event that asks for a command ends the drain: the events
+    /// after a quit are never read.
+    #[test]
+    fn a_command_in_a_burst_stops_the_drain() {
+        let (mut app, files) = drawn_app();
+        let mut events: Vec<TermEvent> = (0..4).map(|_| wheel(files)).collect();
+        events.push(quit_key());
+        events.extend((0..10).map(|_| wheel(files)));
+        let mut source = Fake::of(events);
+        let queue = harness_tui::app::QueueClock::new(Instant::now());
+        let command = drain_input(&mut app, &queue, &mut source).unwrap();
+        assert_eq!(command, Command::Quit);
+        assert_eq!(source.taken, 5);
+        assert_eq!(source.events.len(), 10);
+    }
+
+    /// One event with nothing behind it is read and applied alone, as
+    /// before the drain.
+    #[test]
+    fn a_lone_event_is_applied_alone() {
+        let (mut app, files) = drawn_app();
+        let mut source = Fake::of(vec![wheel(files)]);
+        let queue = harness_tui::app::QueueClock::new(Instant::now());
+        let command = drain_input(&mut app, &queue, &mut source).unwrap();
+        assert_eq!(command, Command::None);
+        assert_eq!(source.taken, 1);
+        assert!(!app.input_pending);
     }
 }

@@ -159,6 +159,9 @@ no spike edits. The live walk on a fresh copy moved u-checksum, u-encode and u-v
    abandons), which removes its attempt record and its unanswered request; and the waiting state
    should come from the try's record, not from "newest request without a response", so a stray
    request cannot hold a piece waiting forever. An Opus task with a brief, after u-lz4's result.
+   Also 2026-11-11: u-lz4 went through whole (test program accepted, Rust green on turn 2, waits
+   for Accept), and the wheel burst that froze the cockpit is fixed (DECISIONS 2026-11-11). Start
+   the cockpit with `--chat-model opus` from now on.
 6. **Then the briefing's next milestone (M5, the extension proof)**, or what the scale run shows,
    as the person decides.
 

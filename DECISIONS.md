@@ -104,6 +104,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-11-07 — **The run log: the cockpit's one write into the ledger, a Log view, the chat's heartbeat** — `migration/build/cockpit.log` (append-only, link-safe, never read back) as the exception to "the cockpit never writes the ledger"; the Log view on `L`; the status row and the chat's title say how long the reply has been thinking; Details says a pause is normal.
 - 2026-11-07 — **The lz4 run's sixth wall: the SDK's own settings file taken for a read outside the project** — clang 21 lists `SDKSettings.json` in every dependency list; the map withheld every symbol and found no program; the SDK and toolchain roots now count as the toolchain's.
 - 2026-11-08 — **The lz4 run's seventh wall: a refreshed plan kept its old signatures, and a macro static in one `#if` branch emptied a piece** — the plan refresh now rewrites `interface` with `symbols` and lifts its own blocks; a specifier macro is static only when every definition of it is; the judge's "calls every symbol" rule meets a debug-only function (`LZ4HC_hexOut`), left open.
+- 2026-11-11 — **The lz4 run's first full piece, and two cockpit finds: a stale hand-off with no way out, and a wheel burst drawn one notch per frame** — u-lz4 (49 functions) went through the whole journey; a waiting try from an older contract blocked the piece with no cockpit way out (removed by hand, an action to design); the main loop now applies a whole input burst before it draws.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -4582,3 +4583,37 @@ and a phantom `XXH_errorcode` is in it. That piece's turn is later in the run.
 **Revisit when.** u-xxhash's test program is asked for (the two `_update` functions and the
 phantom), or a project defines a specifier macro static in one file and not in another (the
 rule is project-wide, one set of names).
+
+## 2026-11-11 — The lz4 run's first full piece, and two cockpit finds: a stale hand-off with no way out, and a wheel burst drawn one notch per frame
+
+**Seen.** After the seventh wall's fixes, the person scanned, refreshed the plan (u-xxhash
+pending again, one piece changed) and ran u-lz4: its test program was accepted, the migration
+went green on the second turn (a missing `as usize`, repaired), and the piece waits for Accept.
+It is the lz4 library itself, 49 functions, the run's first full-size piece. Two things stood in
+the way, both the cockpit's.
+
+**A stale hand-off with no way out.** u-lz4 read "waiting for your answer" because of a try from
+October 30 (one request, never answered), posed under the old contract. A waiting piece offers no
+Make the test program, and its Next step says to answer the old file. The person removed the
+piece's ledger folder by hand this time. The rule it breaks is the person's own: a refusal must
+offer the way out. Decided: a "Drop the waiting try" action, and the waiting state read from the
+try's record rather than from "newest request without a response" (a stray request must not hold
+a piece waiting for ever). Designed and built next (docs/NEXT-SESSION.md, item 5).
+
+**The wheel.** A mouse wheel on macOS sends a burst of notches at once. The main loop read one
+event, drew the whole screen, then read the next, so the screen kept scrolling long after the
+wheel stopped and clicks waited behind the burst. Decided: the loop applies every event already
+waiting before the next frame, through one small function with a fake-able input source. It stops
+at the first event that yields a command (nothing is read past a quit), when the queue is empty,
+or at 200 events a frame so a flood never starves drawing. The burst bookkeeping (`input_pending`
+before each event, the queue clock's lateness) is unchanged. Rejected: coalescing scroll notches
+into one larger scroll — the person's expectation is the terminal's, one row-step per notch, and
+draining alone makes the burst cheap. Built by an Opus subagent from a brief; reviewed and gated
+here (the first task under the 2026-11-11 division of labour).
+
+**Also seen.** The cockpit's chat ran on Fable, Claude Code's own default. The rule puts
+handed-off work on Opus: start the cockpit with `--chat-model opus`.
+
+**Revisit when** a burst of keys (a paste outside bracketed paste, a held key) shows the cap
+too low or too high, or when the drop action lands and the hand-removal note above is history.
+
