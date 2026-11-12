@@ -149,6 +149,16 @@ no spike edits. The live walk on a fresh copy moved u-checksum, u-encode and u-v
    letting the judge require only what the compiled unit defines (DECISIONS 2026-11-08, "Left
    open"). Known for later: the scanner reads `XXH_PUBLIC_API XXH_errorcode XXH32_update(…)` as
    a function named `XXH_errorcode`, so u-xxhash lacks its two `_update` functions.
+   **2026-11-11, the eighth wall, small:** after the Refresh, u-lz4 still read "waiting for
+   your answer" because of a try from October 30 (attempt d-8378804af048, request bec63844,
+   never answered) posed under the old contract. A waiting piece offers no Make the test program
+   and the Next step says to answer the old file: the cockpit has no way out of a stale hand-off
+   (the person's rule: a refusal must offer the way out). The person removed the try by hand this
+   time. **Second design item:** a "Drop the waiting try" action on a piece whose in-progress
+   try's prompt digest no longer matches today's prompt (or on any waiting try the person
+   abandons), which removes its attempt record and its unanswered request; and the waiting state
+   should come from the try's record, not from "newest request without a response", so a stray
+   request cannot hold a piece waiting forever. An Opus task with a brief, after u-lz4's result.
 6. **Then the briefing's next milestone (M5, the extension proof)**, or what the scale run shows,
    as the person decides.
 
