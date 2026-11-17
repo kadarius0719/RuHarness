@@ -177,6 +177,62 @@ no spike edits. The live walk on a fresh copy moved u-checksum, u-encode and u-v
   journey, after Accept Rust: `Improve` (optional, never required). Design it with the
   "program works" stage; it needs nothing new in the judge.
 
+## Ideas from rust-anything (read 2026-11-17), to take one at a time
+
+The person found https://github.com/erkamyaman/rust-anything (MIT, one author, published
+2026-11-16): record-and-replay checking with bridge generators for six languages; the agent
+writes the Rust. Its C path ports only scalar and `const char *` functions, so it could move
+almost nothing of lz4; it is not a replacement for the harness and is not installed here (its
+`setup` rewrites Claude Code's settings file). What is worth taking, in the order to take it:
+
+1. **A trap catalogue for the test program's inputs.** It feeds every function the same list of
+   semantic traps by parameter type: non-ASCII and emoji text, empty strings, `-0`, NaN, large
+   and tiny floats, integer overflow edges, negative division and modulo. For C add NULL, zero
+   lengths, sizes at the type's edge. The driver prompt could carry the list, and the judge could
+   check the driver reaches each trap its parameters allow, instead of trusting the model's
+   imagination each time.
+2. **Two gate rules for the Rust.** (a) No `unwrap`, `expect`, `panic!`, `unreachable!` or
+   `todo!` in a function whose C returns an error code, unless marked `// INFALLIBLE: <why>`; a
+   panic across `extern "C"` aborts, so this matters twice for us. (b) Every error path of the C
+   (each distinct error return) must be reached by at least one recorded case, or the gate says
+   which is not.
+3. **Run twice, sort the noise, never accept it silently.** It runs the original twice and sorts
+   the differences into three kinds: changed values (times, ids: wildcards), the same lines in
+   another order (compared in any order, but the port must produce exactly those lines), a
+   different number of lines (a stretch that matches anything). Each kind is listed for a human;
+   normalizing goes in the case, never in the port. For when the lz4 run reaches `lz4io.c` and the
+   bench program, whose output has timings.
+4. **One number for the whole-program journey: the fallback rate.** In its whole-app mode a Rust
+   front door owns the entry point and hands unported commands to the original; the share the
+   original still answers only goes down, and the final lift refuses until it is zero. Our
+   cockpit's header could show the share of the program answered in Rust, and Accept Rust on the
+   `main` piece could be the lift, refusing while any piece falls back.
+5. **A speed verdict, not just numbers.** `bench` times the original and the port, bridge
+   included, and ends in a verdict: ship, keep the slow functions in C, or port a bigger unit.
+   "Do not ship a port that makes callers slower without saying so." The Speed item of the
+   roadmap should end that way.
+6. **Grilling in rounds, with a recommended answer each.** Its whole-app skill interviews the
+   person in rounds: every question whose prerequisites are settled, numbered, with the
+   recommended answer first and worded so "yes" takes it; decisions become numbered ADRs that
+   are superseded, never edited; a glossary maps the original's terms to the Rust names so every
+   unit names the same thing the same way. The guided workflow's Configure and Features stages
+   could ask this way, and a glossary would keep the lz4 pieces consistent.
+7. **A per-unit kill switch until the end.** Each wired unit can be sent back to the original by
+   an environment variable until the lift removes the switch. Worth a thought when pieces are
+   linked into the program (BEYOND-LEAVES): a way to run the program with one piece back in C.
+8. **A one-case rerun loop.** `replay --case <name>` reruns one failing case in seconds, the loop
+   for fixing a mismatch before the full run. Check the judge and the cockpit's failing-check card
+   offer the same: one scenario, by the name the report gives it.
+9. **A "what it can't catch" page.** Short and honest: inputs nobody recorded, regex engines,
+   floats, anything not in the output. Our docs should have one, in the fast-path set.
+10. **Faithful first, idiomatic after.** Translate with the original's structure and error paths,
+    make it idiomatic only after the cases pass, then run them again. A line for the migration
+    prompt, if it is not there already.
+
+Not taken: its rule that a crash of the original on an input makes any port behaviour acceptable
+(we would rather exclude the input and say so), and its C bridge shape (ctypes from Python, one
+fork per case), which cannot reach buffer and state-struct APIs.
+
 ## Small open items (rechecked against the code on 2026-10-18)
 
 - The ask prompt still asks for fields "in this order" (crates/harness-llm/src/projectask.rs);
