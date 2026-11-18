@@ -289,6 +289,24 @@ Order of building: (1) "Run the plan": every pending piece in order with the cha
 stopping at the first wall or at the end of a wave, with the report; (2) the review page and the
 rounds of questions; (3) the run record and the shareable report.
 
+Added the same day, on what a stopped run may do by itself:
+- **What it may touch.** The Rust (repairs, steers, new tries: the loop itself) and the
+  migration's own records (plan, ledger, a piece set aside). Never the harness: a run that
+  patches its own judge to pass a wall is the one failure we must not have; a harness wall is a
+  hand-back with the log and a bug report, fixed in a development session with the gates, and
+  the run resumes as a new run naming the harness build. Never the C program: it is the truth
+  the judge compares against; the only knob is configuration (flags, defines, what counts as
+  the program), decided at the review step.
+- **Stops have kinds, and a policy per kind set once at the review**, not a question at each
+  stop (unattended, nobody answers): red judge → steer up to N, then set aside and go on with
+  the wave; refusal (the contract is wrong) → wait; stale plan → refresh, go on only if no piece
+  changed; harness error → wait, bug report written; budget reached → wait; end of a wave →
+  report, then go on or wait as chosen. "Have another agent debug and keep going" is a policy,
+  and only ever the Rust kind of fix. Anything outside the table stops.
+- **Accept.** A chat try is never promoted by itself today. In this mode the agreement is at
+  the review, so accepting green pieces during the run may be automatic when the person said
+  so there; the final product still comes back for review; every try stays in the ledger.
+
 ## Small open items (rechecked against the code on 2026-10-18)
 
 - The ask prompt still asks for fields "in this order" (crates/harness-llm/src/projectask.rs);
