@@ -263,6 +263,32 @@ verbs and verdicts, and `setup` registers the MCP server and a skill with the ag
 - **Cases a person can read and edit.** Its recorded cases are plain files meant to be opened
   and changed by hand. Check our drivers' scenarios can be read the same way from the cockpit.
 
+## "Do it All" (the person, 2026-11-17): the milestone after the lz4 run
+
+The person's shape, kept as stated: three steps. **Load the program** (Map, Configure, Accept
+program, Scan, Plan). **The harness and the model propose for review**: the plan, a risk list per
+piece, the decisions only the person can make asked in rounds with a recommended answer each,
+the rough cost, and the model's forecast of what comes out. **Execute and return the agreed
+product**: every pending piece in plan order (test program, Rust, Accept), the link into one
+program, and a report: what changed, what ran, what stayed and why, and the harness's and the
+model's determination of what the transitioned product looks like, with its honest limits.
+
+Design points agreed in the conversation:
+- It is the cockpit pressing its own Enter with one review stop, not a new machine.
+- It must stop well: at the first refusal, red judge or stale plan it writes the report as it
+  stands and hands back to the cockpit, the piece selected and the way out on the card. The
+  report is written at every stop, not only at the end.
+- The report renders the ledger (attempts, traces, plan, decisions) plus one paragraph of the
+  model's judgment on top. A run record names the run: start, the decisions taken at the
+  review, each piece's outcome, where it stopped and why, the report. That record is what a
+  person shares, and the cockpit on the same target is the way back to hands-on.
+- A budget and a checkpoint per wave; the cost said at the review step before "go".
+- Prove before planning: build it once one target has gone through by hand without a wall.
+
+Order of building: (1) "Run the plan": every pending piece in order with the chat's model,
+stopping at the first wall or at the end of a wave, with the report; (2) the review page and the
+rounds of questions; (3) the run record and the shareable report.
+
 ## Small open items (rechecked against the code on 2026-10-18)
 
 - The ask prompt still asks for fields "in this order" (crates/harness-llm/src/projectask.rs);
