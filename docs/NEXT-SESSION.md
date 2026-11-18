@@ -233,6 +233,36 @@ Not taken: its rule that a crash of the original on an input makes any port beha
 (we would rather exclude the input and say so), and its C bridge shape (ctypes from Python, one
 fork per case), which cannot reach buffer and state-struct APIs.
 
+**From the person's side of it (read 2026-11-17, second pass: what it makes easier to use).**
+It has no screen of its own: the person's coding agent is the interface, the tool gives it
+verbs and verdicts, and `setup` registers the MCP server and a skill with the agent in one line
+(reversible, with a dry run and a backup of every settings file it touches). What to take:
+
+- **The agent as the front door, the cockpit optional.** A `harness setup` that registers
+  harness-mcp and a skill file with the person's own Claude Code, so "migrate this with the
+  harness" works in any session, the cockpit being the screen for those who want one. Most of
+  the pieces exist (harness-mcp, the chat brief); the skill and the registration do not.
+- **The same numbered verbs everywhere.** Its help text, its MCP tool descriptions and its
+  skill all say "1. Map, 2. Bridge, 3. Record, …". Check that the cockpit's header stages, the
+  CLI subcommands, the MCP tools and the docs use one numbering and one set of names.
+- **A plan written for a person, with "Start here".** Its plan is a Markdown page: a ranked
+  table of the best first units (safe, and worth it), each with a readiness score, its tests,
+  and its risks counted by kind with `file:line`; a `--json` twin carries the same facts to the
+  agent. Our walls (static helpers listed as callable, macro-made functions, a debug-only `#if`,
+  pointer-heavy APIs) are the kind of thing a per-piece risk list would have named before the
+  run. The cockpit's piece card could show those risks; `harness plan` could write the page.
+- **One place the model writes, and "never overwrites" said in every command.** The agent
+  edits one file per unit (`port.rs`); every generator refuses to overwrite and says so in its
+  description. State the same for ours: what each stage writes, what it never touches.
+- **Verdicts in words at the end of every step.** Its gate lists each check by name with one
+  line of detail; its bench ends in ship, keep or port bigger; its lift refuses and names every
+  blocker. Our Accept and judge output should read the same way on the card.
+- **Explicit wait points in the skill.** "Wait for the person's approval of the plan and of the
+  first unit"; "a mismatch is fixed in the port, never in the recording; if the difference is
+  intended, ask first". Our chat brief should say its wait points as plainly.
+- **Cases a person can read and edit.** Its recorded cases are plain files meant to be opened
+  and changed by hand. Check our drivers' scenarios can be read the same way from the cockpit.
+
 ## Small open items (rechecked against the code on 2026-10-18)
 
 - The ask prompt still asks for fields "in this order" (crates/harness-llm/src/projectask.rs);
