@@ -62,6 +62,16 @@ pub struct Unit {
     /// authoritative contract is the unit's contract.md plus its oracle.
     #[serde(default)]
     pub interface: Vec<String>,
+    /// Functions the scan found in the source that this build does not
+    /// compile (a function under an `#if` the build leaves out): kept out of
+    /// `symbols`, so no driver is asked to call them.
+    #[serde(default)]
+    pub not_built: Vec<String>,
+    /// Function names the build defines that the scan does not know (a build
+    /// flag that renames them): when this is non-empty, nothing was left out
+    /// of `symbols`, since the build and the scan do not clearly agree.
+    #[serde(default)]
+    pub build_only: Vec<String>,
     /// Unit ids this unit's code depends on.
     #[serde(default)]
     pub depends_on: Vec<String>,
@@ -294,6 +304,12 @@ pub struct ComputedUnit {
     /// Display signatures for `interface` (rewritten with `symbols` on every
     /// reconcile: the two lists describe the same functions).
     pub interface: Vec<String>,
+    /// Functions in the source this build does not compile, left out of
+    /// `symbols` and `interface` ([`crate::planner::keep_built`]).
+    pub not_built: Vec<String>,
+    /// Function names the build defines that the scan does not know, sorted;
+    /// when non-empty, nothing was left out.
+    pub build_only: Vec<String>,
     /// Unit ids this cluster depends on.
     pub depends_on: Vec<String>,
     /// File-set hash of files + transitive includes.
@@ -344,6 +360,58 @@ pub fn adopt_existing_ids(computed: &mut [ComputedUnit], existing: &Plan) {
         cu.depends_on.dedup();
     }
 }
+/// Write a unit's `not_built` and `build_only` (what the build said about
+/// its functions, [`crate::planner::keep_built`]): each is written when
+/// non-empty and its key removed when empty, so a plan with neither stays
+/// as it was. A value that differs from the plan's gets a change line, and
+/// so does a `not_built` that goes back to empty (its functions are in
+/// `symbols` again).
+fn build_fields(t: &mut toml_edit::Table, cu: &ComputedUnit, changes: &mut Vec<String>) {
+    let had = |t: &toml_edit::Table, key: &str| -> Vec<String> {
+        t.get(key)
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    for (key, now) in [("not_built", &cu.not_built), ("build_only", &cu.build_only)] {
+        let before = had(t, key);
+        if now.is_empty() {
+            // A function that was left out is in the piece again: said, so
+            // its return to `symbols` is never silent.
+            if key == "not_built" && !before.is_empty() {
+                changes.push(format!(
+                    "unit {}: no longer leaves out {}",
+                    cu.id,
+                    before.join(", ")
+                ));
+            }
+            t.remove(key);
+            continue;
+        }
+        if before != *now {
+            changes.push(if key == "not_built" {
+                format!(
+                    "unit {}: left out {} — in the source, not compiled in this build",
+                    cu.id,
+                    now.join(", ")
+                )
+            } else {
+                format!(
+                    "unit {}: the build's function names differ from the source's ({} the scan \
+                     does not know) — nothing left out",
+                    cu.id,
+                    now.len()
+                )
+            });
+        }
+        t[key] = toml_edit::value(str_array(now));
+    }
+}
+
 /// The comment pass 2 of [`reconcile`] leaves on a `status = "blocked"` it
 /// set itself; pass 1 reads it to know the block is the planner's to lift.
 const PLANNER_BLOCK_NOTE: &str = "planner: files no longer present in facts";
@@ -462,6 +530,7 @@ pub fn reconcile_to_string(
                 // the scanner now knows is static, the lz4 run of
                 // 2026-11-08) must drop its signature too.
                 t["interface"] = toml_edit::value(str_array(&cu.interface));
+                build_fields(t, cu, &mut changes);
                 t["depends_on"] = toml_edit::value(str_array(&cu.depends_on));
                 t["source_hash"] = toml_edit::value(cu.source_hash.as_str());
             }
@@ -473,6 +542,7 @@ pub fn reconcile_to_string(
                 t["source_hash"] = toml_edit::value(cu.source_hash.as_str());
                 t["symbols"] = toml_edit::value(str_array(&cu.symbols));
                 t["interface"] = toml_edit::value(str_array(&cu.interface));
+                build_fields(&mut t, cu, &mut changes);
                 t["depends_on"] = toml_edit::value(str_array(&cu.depends_on));
                 t["test_strategy"] = toml_edit::value("");
                 t["done_criteria"] = toml_edit::value("");

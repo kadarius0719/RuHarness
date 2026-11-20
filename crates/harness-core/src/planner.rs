@@ -8,7 +8,9 @@ use crate::error::Error;
 use crate::facts::Facts;
 use crate::hash;
 use crate::plan::ComputedUnit;
+use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 /// Compute unit clusters from facts.
 ///
@@ -163,6 +165,8 @@ fn compute_units_with(
             files,
             symbols,
             interface,
+            not_built: Vec::new(),
+            build_only: Vec::new(),
             depends_on: Vec::new(), // filled below once all ids exist
             source_hash: hash::file_set_hash(&pairs),
         });
@@ -186,6 +190,136 @@ fn compute_units_with(
 
     // Advisory order: topological (deps first), unit-id tiebreak.
     topo_sort(units)
+}
+
+/// Let the build have the last word on a unit's functions, but only when it
+/// clearly agrees with the scan. The scan reads the C without preprocessing,
+/// so a function under an `#if` the build leaves out is planned yet never
+/// compiled, and a driver asked to call it can never be written.
+///
+/// `built` maps a file path to the function names its compiled object
+/// defines, holding only files that compiled ([`built_functions`]). A unit is
+/// looked at only when every one of its files is in `built`. Then, with `S`
+/// its planned symbols and `D` the functions its files' objects define:
+/// planned names the build lacks are moved from `symbols` (and the matching
+/// `interface` lines) to `not_built`, in their planned order, when the build
+/// defines no name the plan does not know and shares at least one with it;
+/// when the build does define names the plan does not know (a build flag
+/// that renames them), nothing is removed and those names go to
+/// `build_only`, sorted. A build that defines none of the unit's functions
+/// changes nothing.
+pub fn keep_built(units: &mut [ComputedUnit], built: &BTreeMap<String, BTreeSet<String>>) {
+    for unit in units.iter_mut() {
+        let mut defined: BTreeSet<&str> = BTreeSet::new();
+        let mut all_built = !unit.files.is_empty();
+        for f in &unit.files {
+            match built.get(f) {
+                Some(names) => defined.extend(names.iter().map(String::as_str)),
+                None => all_built = false,
+            }
+        }
+        if !all_built {
+            continue;
+        }
+        let planned: BTreeSet<&str> = unit.symbols.iter().map(String::as_str).collect();
+        let build_only: Vec<String> = defined
+            .iter()
+            .filter(|n| !planned.contains(*n))
+            .map(|n| n.to_string())
+            .collect();
+        if !build_only.is_empty() {
+            unit.build_only = build_only;
+            continue;
+        }
+        let shared = unit.symbols.iter().any(|s| defined.contains(s.as_str()));
+        if !shared {
+            continue;
+        }
+        let keep: Vec<bool> = unit
+            .symbols
+            .iter()
+            .map(|s| defined.contains(s.as_str()))
+            .collect();
+        let mut symbols = Vec::with_capacity(unit.symbols.len());
+        let mut interface = Vec::with_capacity(unit.interface.len());
+        let mut not_built = Vec::new();
+        let mut lines = std::mem::take(&mut unit.interface).into_iter();
+        for (name, kept) in std::mem::take(&mut unit.symbols).into_iter().zip(keep) {
+            let line = lines.next();
+            if kept {
+                symbols.push(name);
+                interface.extend(line);
+            } else {
+                not_built.push(name);
+            }
+        }
+        interface.extend(lines);
+        unit.symbols = symbols;
+        unit.interface = interface;
+        unit.not_built = not_built;
+    }
+}
+
+/// The largest project map [`built_functions`] reads.
+const MAX_BUILT_MAP_BYTES: u64 = 256 << 20;
+
+/// The function names each compiled file of the project map defines, for
+/// [`keep_built`]: file path to names, holding only files the map records as
+/// compiled `"ok"` and whose size on disk still matches the map's (a file
+/// changed since the map could define a function the map does not know, so
+/// it is left out and its unit planned from the scan alone). `Ok(None)` when
+/// `root` has no map; `Err` with one line when the map cannot be read.
+pub fn built_functions(root: &Path) -> Result<Option<BTreeMap<String, BTreeSet<String>>>, String> {
+    #[derive(Deserialize)]
+    struct Defined {
+        name: String,
+        kind: String,
+    }
+    #[derive(Deserialize)]
+    struct File {
+        path: String,
+        #[serde(default)]
+        compiled: Option<serde_json::Value>,
+        bytes: u64,
+        #[serde(default)]
+        defined_symbols: Vec<Defined>,
+    }
+    #[derive(Deserialize)]
+    struct Map {
+        files: Vec<File>,
+    }
+    let path = root.join(crate::ledger::PROJECT_MAP_FILE);
+    match std::fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        _ => {}
+    }
+    let unreadable = |why: String| {
+        format!(
+            "the project map ({}) could not be read ({why}): run `harness project map` again",
+            crate::ledger::PROJECT_MAP_FILE
+        )
+    };
+    let bytes = crate::ledger::read_regular(&path, MAX_BUILT_MAP_BYTES)
+        .map_err(|e| unreadable(e.to_string()))?;
+    let map: Map = serde_json::from_slice(&bytes).map_err(|e| unreadable(e.to_string()))?;
+    let mut built = BTreeMap::new();
+    for file in map.files {
+        if file.compiled.as_ref().and_then(|c| c.as_str()) != Some("ok") {
+            continue;
+        }
+        let on_disk = std::fs::symlink_metadata(root.join(&file.path)).map(|m| m.len());
+        if on_disk.ok() != Some(file.bytes) {
+            continue;
+        }
+        let names: BTreeSet<String> = file
+            .defined_symbols
+            .into_iter()
+            .filter(|d| d.kind == "function")
+            .map(|d| d.name)
+            .collect();
+        built.insert(file.path, names);
+    }
+    Ok(Some(built))
 }
 
 /// A header by its extension (`.h`, `.hh`, `.hpp`, `.hxx`): a file no
@@ -350,4 +484,137 @@ fn tarjan_sccs<'a>(edges: &BTreeMap<&'a str, BTreeSet<&'a str>>) -> Vec<Vec<&'a 
     }
     sccs.sort();
     sccs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unit(files: &[&str], symbols: &[&str]) -> ComputedUnit {
+        ComputedUnit {
+            id: "u-a".into(),
+            files: files.iter().map(|f| f.to_string()).collect(),
+            symbols: symbols.iter().map(|s| s.to_string()).collect(),
+            interface: symbols.iter().map(|s| format!("int {s}(void)")).collect(),
+            not_built: Vec::new(),
+            build_only: Vec::new(),
+            depends_on: Vec::new(),
+            source_hash: String::new(),
+        }
+    }
+
+    fn built(entries: &[(&str, &[&str])]) -> BTreeMap<String, BTreeSet<String>> {
+        entries
+            .iter()
+            .map(|(f, names)| (f.to_string(), names.iter().map(|n| n.to_string()).collect()))
+            .collect()
+    }
+
+    /// A build that defines exactly the planned functions changes nothing.
+    #[test]
+    fn keep_built_leaves_a_matching_unit_alone() {
+        let mut units = vec![unit(&["a.c"], &["b", "a"])];
+        let before = units[0].clone();
+        keep_built(&mut units, &built(&[("a.c", &["a", "b"])]));
+        assert_eq!(units[0].symbols, before.symbols);
+        assert_eq!(units[0].interface, before.interface);
+        assert!(units[0].not_built.is_empty() && units[0].build_only.is_empty());
+    }
+
+    /// A planned function the build does not compile leaves `symbols` with
+    /// its `interface` line, and the rest keep their order.
+    #[test]
+    fn keep_built_leaves_out_a_function_the_build_lacks() {
+        let mut units = vec![unit(&["a.c"], &["c", "hexOut", "a"])];
+        keep_built(&mut units, &built(&[("a.c", &["a", "c"])]));
+        assert_eq!(units[0].symbols, ["c", "a"]);
+        assert_eq!(units[0].interface, ["int c(void)", "int a(void)"]);
+        assert_eq!(units[0].not_built, ["hexOut"]);
+        assert!(units[0].build_only.is_empty());
+    }
+
+    /// Names the build defines that the plan does not know mean the two do
+    /// not clearly agree: nothing is removed, the names are recorded sorted.
+    #[test]
+    fn keep_built_removes_nothing_when_the_build_has_unknown_names() {
+        let mut units = vec![unit(&["x.c"], &["XXH32", "XXH64"])];
+        keep_built(
+            &mut units,
+            &built(&[("x.c", &["LZ4_XXH64", "LZ4_XXH32", "XXH32"])]),
+        );
+        assert_eq!(units[0].symbols, ["XXH32", "XXH64"]);
+        assert_eq!(units[0].interface.len(), 2);
+        assert!(units[0].not_built.is_empty());
+        assert_eq!(units[0].build_only, ["LZ4_XXH32", "LZ4_XXH64"]);
+    }
+
+    /// A unit with a file the map does not hold as compiled is untouched.
+    #[test]
+    fn keep_built_skips_a_unit_with_a_file_not_built() {
+        let mut units = vec![unit(&["a.c", "b.c"], &["a", "b"])];
+        keep_built(&mut units, &built(&[("a.c", &["a"])]));
+        assert_eq!(units[0].symbols, ["a", "b"]);
+        assert!(units[0].not_built.is_empty() && units[0].build_only.is_empty());
+    }
+
+    /// A build that defines none of the unit's functions changes nothing.
+    #[test]
+    fn keep_built_skips_a_unit_whose_build_defines_no_function() {
+        let mut units = vec![unit(&["a.c"], &["a", "b"])];
+        keep_built(&mut units, &built(&[("a.c", &[])]));
+        assert_eq!(units[0].symbols, ["a", "b"]);
+        assert!(units[0].not_built.is_empty() && units[0].build_only.is_empty());
+    }
+
+    /// A merged unit compares its planned functions with every file's build:
+    /// a function built by its other file is not left out.
+    #[test]
+    fn keep_built_takes_the_union_of_a_units_files() {
+        let mut units = vec![unit(&["a.c", "b.c"], &["a", "b", "gone"])];
+        keep_built(&mut units, &built(&[("a.c", &["a"]), ("b.c", &["b"])]));
+        assert_eq!(units[0].symbols, ["a", "b"]);
+        assert_eq!(units[0].not_built, ["gone"]);
+    }
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("ruharness-built-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("migration/map")).unwrap();
+        root
+    }
+
+    /// The reader keeps a file compiled "ok" with its function names only,
+    /// skips one not compiled (either form) or changed in size since the
+    /// map, says nothing without a map and refuses one it cannot parse.
+    #[test]
+    fn built_functions_reads_only_compiled_files_functions() {
+        let root = scratch("read");
+        assert_eq!(built_functions(&root), Ok(None));
+        for (name, body) in [("a.c", "12345"), ("b.c", "1"), ("c.c", "1"), ("d.c", "123")] {
+            std::fs::write(root.join(name), body).unwrap();
+        }
+        let map = r#"{"schema": "ruharness-project-map", "files": [
+            {"path": "a.c", "compiled": "ok", "bytes": 5, "extra": 1,
+             "defined_symbols": [{"name": "fa", "kind": "function"},
+                                 {"name": "table", "kind": "read-only"}]},
+            {"path": "b.c", "compiled": null, "bytes": 1, "defined_symbols": []},
+            {"path": "c.c", "compiled": {"reason": "syntax"}, "bytes": 1,
+             "defined_symbols": [{"name": "fc", "kind": "function"}]},
+            {"path": "d.c", "compiled": "ok", "bytes": 99,
+             "defined_symbols": [{"name": "fd", "kind": "function"}]}
+        ]}"#;
+        std::fs::write(root.join(crate::ledger::PROJECT_MAP_FILE), map).unwrap();
+        let got = built_functions(&root).unwrap().unwrap();
+        let want: BTreeMap<String, BTreeSet<String>> =
+            [("a.c".to_string(), ["fa".to_string()].into_iter().collect())]
+                .into_iter()
+                .collect();
+        assert_eq!(got, want);
+        std::fs::write(root.join(crate::ledger::PROJECT_MAP_FILE), "not json").unwrap();
+        let err = built_functions(&root).unwrap_err();
+        assert!(err.contains("could not be read"), "{err}");
+        assert!(!err.contains('\n'), "{err}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

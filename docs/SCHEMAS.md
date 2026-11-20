@@ -102,6 +102,10 @@ symbols = ["ZopfliLengthLimitedCodeLengths"]   # canonical ids of owned public s
 interface = ["int ZopfliLengthLimitedCodeLengths(const size_t*, int, int, unsigned*)"]
                           # informational display strings in source-language syntax;
                           # the authoritative contract is units/<id>/contract.md + the oracle
+not_built = ["LZ4HC_hexOut"]  # present only when non-empty: in the source but not compiled
+                          # in this build (the project map says so), left out of symbols
+build_only = ["LZ4_XXH32"]    # present only when non-empty: functions the build defines that
+                          # the scan does not know; nothing was left out of symbols
 depends_on = []           # unit ids
 test_strategy = "..."
 done_criteria = "..."

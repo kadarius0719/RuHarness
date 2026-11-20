@@ -248,6 +248,8 @@ fn reconcile_preserves_human_state() {
         files: vec!["src/a.c".into()],
         symbols: vec!["alpha".into()],
         interface: vec!["int alpha(void)".into()],
+        not_built: vec![],
+        build_only: vec![],
         depends_on: vec![],
         source_hash: "blake3:v1".into(),
     }];
@@ -272,6 +274,8 @@ fn reconcile_preserves_human_state() {
         files: vec!["src/b.c".into()],
         symbols: vec!["beta".into()],
         interface: vec![],
+        not_built: vec![],
+        build_only: vec![],
         depends_on: vec![],
         source_hash: "blake3:bb".into(),
     });
@@ -327,6 +331,100 @@ fn reconcile_preserves_human_state() {
     );
 }
 
+fn lz4hc_unit() -> ComputedUnit {
+    ComputedUnit {
+        id: "u-lz4hc".into(),
+        files: vec!["lib/lz4hc.c".into()],
+        symbols: vec!["LZ4_compressHC".into()],
+        interface: vec!["int LZ4_compressHC(void)".into()],
+        not_built: vec![],
+        build_only: vec![],
+        depends_on: vec![],
+        source_hash: "blake3:v1".into(),
+    }
+}
+
+/// A function the build leaves out is written to `not_built` with a change
+/// line; when the build has it again the key goes, with no line of its own.
+#[test]
+fn reconcile_writes_and_clears_not_built() {
+    let dir = temp_dir("plan-notbuilt");
+    let path = dir.join("plan.toml");
+    let mut computed = vec![lz4hc_unit()];
+    computed[0].not_built = vec!["LZ4HC_hexOut".into(), "LZ4HC_dump".into()];
+    let changes = plan::reconcile(&path, "demo", &computed).unwrap();
+    assert!(
+        changes.contains(
+            &"unit u-lz4hc: left out LZ4HC_hexOut, LZ4HC_dump — in the source, not compiled in \
+              this build"
+                .to_string()
+        ),
+        "{changes:?}"
+    );
+    let loaded = Plan::load(&path).unwrap();
+    assert_eq!(loaded.units[0].not_built, ["LZ4HC_hexOut", "LZ4HC_dump"]);
+    assert!(loaded.units[0].build_only.is_empty());
+
+    // The same again: nothing new to say.
+    let changes = plan::reconcile(&path, "demo", &computed).unwrap();
+    assert!(changes.is_empty(), "{changes:?}");
+
+    // Cleared: the key goes, and the plan says the functions are back.
+    computed[0].not_built.clear();
+    let changes = plan::reconcile(&path, "demo", &computed).unwrap();
+    assert_eq!(
+        changes,
+        ["unit u-lz4hc: no longer leaves out LZ4HC_hexOut, LZ4HC_dump"]
+    );
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(!text.contains("not_built"), "{text}");
+}
+
+/// Build names the scan does not know are written to `build_only` with a
+/// change line that says nothing was left out; cleared, the key goes.
+#[test]
+fn reconcile_writes_and_clears_build_only() {
+    let dir = temp_dir("plan-buildonly");
+    let path = dir.join("plan.toml");
+    let mut computed = vec![ComputedUnit {
+        id: "u-xxhash".into(),
+        ..lz4hc_unit()
+    }];
+    plan::reconcile(&path, "demo", &computed).unwrap();
+    computed[0].build_only = vec!["LZ4_XXH32".into(), "LZ4_XXH64".into()];
+    let changes = plan::reconcile(&path, "demo", &computed).unwrap();
+    assert_eq!(
+        changes,
+        [
+            "unit u-xxhash: the build's function names differ from the source's (2 the scan does \
+          not know) — nothing left out"
+        ],
+    );
+    let loaded = Plan::load(&path).unwrap();
+    assert_eq!(loaded.units[0].build_only, ["LZ4_XXH32", "LZ4_XXH64"]);
+    assert!(loaded.units[0].not_built.is_empty());
+
+    computed[0].build_only.clear();
+    let changes = plan::reconcile(&path, "demo", &computed).unwrap();
+    assert!(changes.is_empty(), "{changes:?}");
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(!text.contains("build_only"), "{text}");
+}
+
+/// A plan written with neither field reconciles to the very same text.
+#[test]
+fn reconcile_without_build_fields_keeps_the_plan_byte_identical() {
+    let dir = temp_dir("plan-nobuild");
+    let path = dir.join("plan.toml");
+    let computed = vec![lz4hc_unit()];
+    plan::reconcile(&path, "demo", &computed).unwrap();
+    let before = std::fs::read_to_string(&path).unwrap();
+    assert!(!before.contains("not_built") && !before.contains("build_only"));
+    let changes = plan::reconcile(&path, "demo", &computed).unwrap();
+    assert!(changes.is_empty(), "{changes:?}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+}
+
 #[test]
 fn adopt_existing_ids_matches_by_file_overlap() {
     let dir = temp_dir("plan-adopt");
@@ -343,6 +441,8 @@ fn adopt_existing_ids_matches_by_file_overlap() {
             files: vec!["src/a.c".into()],
             symbols: vec![],
             interface: vec![],
+            not_built: vec![],
+            build_only: vec![],
             depends_on: vec![],
             source_hash: "blake3:x".into(),
         },
@@ -351,6 +451,8 @@ fn adopt_existing_ids_matches_by_file_overlap() {
             files: vec!["src/b.c".into()],
             symbols: vec![],
             interface: vec![],
+            not_built: vec![],
+            build_only: vec![],
             depends_on: vec!["u-a".into()],
             source_hash: "blake3:y".into(),
         },
@@ -415,6 +517,8 @@ fn split_cycle_keeps_both_units() {
             files: vec!["src/b.c".into()],
             symbols: vec![],
             interface: vec![],
+            not_built: vec![],
+            build_only: vec![],
             depends_on: vec![],
             source_hash: "blake3:b".into(),
         },
@@ -423,6 +527,8 @@ fn split_cycle_keeps_both_units() {
             files: vec!["src/a.c".into()],
             symbols: vec![],
             interface: vec![],
+            not_built: vec![],
+            build_only: vec![],
             depends_on: vec!["u-b".into()],
             source_hash: "blake3:a".into(),
         },
@@ -454,6 +560,8 @@ fn reconcile_rejects_duplicate_computed_ids() {
         files: vec!["src/x.c".into()],
         symbols: vec![],
         interface: vec![],
+        not_built: vec![],
+        build_only: vec![],
         depends_on: vec![],
         source_hash: "blake3:x".into(),
     };

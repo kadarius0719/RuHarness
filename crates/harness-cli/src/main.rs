@@ -1123,6 +1123,21 @@ pub(crate) fn plan_target(ctx: &TargetContext) -> Result<(Vec<String>, String, u
         return Err(facts_stale(ctx, stale).into());
     }
     let mut computed = planner::compute_units_in(ctx, &facts)?;
+    // The compiler has the last word on a unit's functions when it clearly
+    // agrees with the scan: the project map (under the project root, which
+    // `ctx.root` is for a mapped tool too) says what each file's object
+    // defines. No map: plan from the scan alone, silently.
+    match planner::built_functions(&ctx.root) {
+        Ok(Some(built)) => planner::keep_built(&mut computed, &built),
+        Ok(None) => {}
+        Err(why) => {
+            let _ = writeln!(
+                std::io::stderr(),
+                "harness: {}; planning from the scan alone",
+                report::terminal_safe(&why)
+            );
+        }
+    }
     let plan_path = ledger.plan_path();
     let existing_text = if plan_path.exists() {
         let existing = Plan::load(&plan_path)?;
