@@ -165,6 +165,10 @@ no spike edits. The live walk on a fresh copy moved u-checksum, u-encode and u-v
    **2026-11-19:** the wheel fix held in the person's hands and u-lz4 is accepted: 3 of 9, five
    checks green (the whole-program check not set up). Next is the `LZ4HC_hexOut` decision, then
    u-lz4hc.
+   The decision is taken and built the same day (DECISIONS 2026-11-19): the plan leaves out a
+   function the build does not compile (`not_built`), and flags a piece whose build names differ
+   (`build_only`). The person's steps: rebuild, Refresh the plan (expect the lines for u-lz4hc,
+   u-xxhash and u-lz4io), then u-lz4hc's test program. u-xxhash stays for the rename work.
 6. **Then the briefing's next milestone (M5, the extension proof)**, or what the scale run shows,
    as the person decides.
 

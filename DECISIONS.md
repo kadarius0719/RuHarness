@@ -105,6 +105,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-11-07 — **The lz4 run's sixth wall: the SDK's own settings file taken for a read outside the project** — clang 21 lists `SDKSettings.json` in every dependency list; the map withheld every symbol and found no program; the SDK and toolchain roots now count as the toolchain's.
 - 2026-11-08 — **The lz4 run's seventh wall: a refreshed plan kept its old signatures, and a macro static in one `#if` branch emptied a piece** — the plan refresh now rewrites `interface` with `symbols` and lifts its own blocks; a specifier macro is static only when every definition of it is; the judge's "calls every symbol" rule meets a debug-only function (`LZ4HC_hexOut`), left open.
 - 2026-11-11 — **The lz4 run's first full piece, and two cockpit finds: a stale hand-off with no way out, and a wheel burst drawn one notch per frame** — u-lz4 (49 functions) went through the whole journey; a waiting try from an older contract blocked the piece with no cockpit way out (removed by hand, an action to design); the main loop now applies a whole input burst before it draws.
+- 2026-11-19 — **A function the build does not compile is left out of its piece: the compiler has the last word when it clearly agrees with the scan** — the plan step reads what each compiled file defines from the project map; `LZ4HC_hexOut` and `BufPool_releaseBuffer` go to `not_built`; xxhash.c's renamed functions are flagged in `build_only` and nothing is left out; preprocessing the scan rejected for now.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -4616,4 +4617,51 @@ handed-off work on Opus: start the cockpit with `--chat-model opus`.
 
 **Revisit when** a burst of keys (a paste outside bracketed paste, a held key) shows the cap
 too low or too high, or when the drop action lands and the hand-removal note above is history.
+
+## 2026-11-19 — A function the build does not compile is left out of its piece: the compiler has the last word when it clearly agrees with the scan
+
+**Seen.** The item left open on 2026-11-08. The scanner reads C as text, without the
+preprocessor, so a function inside a switched-off `#if` is a public function to it. u-lz4hc
+listed 35 functions; the compiled `lz4hc.c` defines 34. The 35th, `LZ4HC_hexOut`, exists only
+when `LZ4_DEBUG >= 2`. The plan put it in the driver's contract and the judge requires every
+planned symbol to be called, so the piece's test program could never be made. Compared on the
+person's project: u-lz4 49 planned and 49 built, the same names; u-lz4hc 35 and 34, the one
+difference `LZ4HC_hexOut`; u-xxhash 18 and 19, every name different (`XXH32` in the source,
+`LZ4_XXH32` in the object: a build flag renames them).
+
+**Decided (the person, on the two options laid out).** Keep the scanner; let the build have the
+last word, at the plan step. The project map already records what each compiled file defines.
+For a unit whose files the map all compiled:
+- the build defines nothing the plan does not know, and the plan lists names the build lacks:
+  those names leave `symbols` and `interface` and are kept in a new plan field, `not_built`;
+- the build defines names the plan does not know: the names differ between source and build, so
+  nothing is left out and those names are kept in `build_only`;
+- everything matches, or the build defines none of the unit's functions: nothing changes.
+The rule needs no threshold: a rename always shows as names the plan does not know, a
+switched-off `#if` never does. Each case has a change line on Refresh the plan (and one when a
+left-out function comes back), the model's contract names the left-out functions ("do not
+define, export or call them") only for a piece that has some, and the cockpit's piece card says
+it in words. A plan with neither field is byte-identical to before.
+
+**Guard.** A map older than a file could drop a function added since: a file whose size on disk
+differs from the map's is treated as not in the map, and its unit is planned from the scan alone.
+An unreadable map prints one warning and plans from the scan; no map is silent (folder targets).
+
+**Rejected, for now.** Preprocessing the scan with the map's compile flags. It is the thorough
+answer (it would also fix the `XXH_PUBLIC_API XXH_errorcode` misreading and show renames), but it
+rebuilds the scanner's foundation: system headers flood in, lines must be mapped back, the facts
+become tied to one configuration. The cross-check stays useful if that day comes.
+
+**Proven.** On a copy of the lz4 project: u-lz4hc 34 symbols with `LZ4HC_hexOut` left out;
+u-xxhash flagged with 19 build names and nothing left out; u-lz4 untouched; and one nobody had
+hit yet: u-lz4io's `BufPool_releaseBuffer`, inside `#if LZ4IO_MULTITHREAD` in a single-threaded
+build. Built by Opus subagents from two briefs (the rule; the card line), reviewed and gated here.
+
+**Left open.** u-xxhash: the rename itself (the driver must call `LZ4_XXH32`, the Rust must
+export it) and the misread `XXH_errorcode`. `build_only` now holds the build's names, which is
+what that work needs. The size guard looks at the unit's own files, not at headers they include.
+
+**Revisit when** a piece's build differs from its source by both a rename and a switched-off
+`#if` (today that flags and leaves nothing out), or when a third wall of this family makes
+preprocessing worth its cost.
 
