@@ -1613,6 +1613,35 @@ fn unit_summary(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> 
         width,
         Style::default(),
     ));
+    // What the build said against the scan: functions this build does not
+    // compile, left out of the piece, or a build that renames its functions,
+    // so nothing could be left out. Each only when there is something to say.
+    let not_built = &unit.unit.not_built;
+    if !not_built.is_empty() {
+        let names: Vec<&str> = not_built.iter().map(|s| short_symbol(s)).collect();
+        lines.extend(wrapped(
+            &format!(
+                "Left out: {} function{} in the source that this build does not compile — {}",
+                not_built.len(),
+                plural_s(not_built.len()),
+                names.join(", ")
+            ),
+            width,
+            Style::default(),
+        ));
+    }
+    let build_only = &unit.unit.build_only;
+    if !build_only.is_empty() {
+        lines.extend(wrapped(
+            &format!(
+                "The build names its functions differently from the source ({} name{} the scan does not know) — nothing was left out",
+                build_only.len(),
+                plural_s(build_only.len())
+            ),
+            width,
+            Style::default(),
+        ));
+    }
     // Helpers written `static` in headers it includes: private copies the
     // piece's Rust carries its own translation of
     // (docs/HEADER-FUNCTIONS-DESIGN.md §5).
@@ -8756,6 +8785,64 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         app.select(Selection::File("src/zopfli/cache.h".into()));
         let screen = text(&render(&mut app, 80, 30));
         assert!(!screen.contains(CODE_FOLDED), "{screen}");
+    }
+
+    /// A piece's card says, one line each, what the build said against the
+    /// scan: functions left out because this build does not compile them, or
+    /// a build that names its functions differently, so nothing was left out.
+    /// With neither, the card says nothing about it.
+    #[test]
+    fn a_units_summary_says_what_the_build_left_out() {
+        let app = app_of("targets/zopfli", "unitbuilt");
+        let summary = |unit: &UnitView| -> String {
+            unit_summary(&app, unit, 300)
+                .iter()
+                .map(|l| {
+                    l.spans
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let mut unit = app
+            .snapshot
+            .units
+            .iter()
+            .find(|u| u.unit.id == "u-cache")
+            .expect("u-cache")
+            .clone();
+        let plain = summary(&unit);
+        assert!(!plain.contains("Left out:"), "{plain}");
+        assert!(
+            !plain.contains("names its functions differently"),
+            "{plain}"
+        );
+
+        unit.unit.not_built = vec!["ZopfliOld".into(), "ZopfliOlder".into()];
+        let left_out = summary(&unit);
+        assert!(
+            left_out.contains(
+                "Left out: 2 functions in the source that this build does not compile — ZopfliOld, ZopfliOlder"
+            ),
+            "{left_out}"
+        );
+        assert!(
+            !left_out.contains("names its functions differently"),
+            "{left_out}"
+        );
+
+        unit.unit.not_built.clear();
+        unit.unit.build_only = vec!["zopfli_renamed".into()];
+        let renamed = summary(&unit);
+        assert!(
+            renamed.contains(
+                "The build names its functions differently from the source (1 name the scan does not know) — nothing was left out"
+            ),
+            "{renamed}"
+        );
+        assert!(!renamed.contains("Left out:"), "{renamed}");
     }
 
     /// A unit with no test program says "No Rust yet" and leads to its test
