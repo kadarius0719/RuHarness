@@ -162,6 +162,9 @@ no spike edits. The live walk on a fresh copy moved u-checksum, u-encode and u-v
    Also 2026-11-11: u-lz4 went through whole (test program accepted, Rust green on turn 2, waits
    for Accept), and the wheel burst that froze the cockpit is fixed (DECISIONS 2026-11-11). Start
    the cockpit with `--chat-model opus` from now on.
+   **2026-11-19:** the wheel fix held in the person's hands and u-lz4 is accepted: 3 of 9, five
+   checks green (the whole-program check not set up). Next is the `LZ4HC_hexOut` decision, then
+   u-lz4hc.
 6. **Then the briefing's next milestone (M5, the extension proof)**, or what the scale run shows,
    as the person decides.
 
@@ -262,6 +265,52 @@ verbs and verdicts, and `setup` registers the MCP server and a skill with the ag
   intended, ask first". Our chat brief should say its wait points as plainly.
 - **Cases a person can read and edit.** Its recorded cases are plain files meant to be opened
   and changed by hand. Check our drivers' scenarios can be read the same way from the cockpit.
+
+**Second read, 2026-11-19 (it is at 2.1.0: about a hundred commits, outside contributors, a
+Prettier port 91.9% in Rust).** Its C path is unchanged (scalars and `const char *` only). New
+ideas, the first two the ones that matter most to us:
+
+- **Coverage of the original.** Its `record` measures which lines of the original the recorded
+  cases ran, and `record` and `gate` print the lines never reached. For us: build the C with
+  clang's coverage flags when the test program runs, and put on the piece card "the scenarios
+  run N% of lib/lz4.c; never reached: …". It turns "same outputs as C ✓" from a yes into a
+  yes-over-how-much, and it is the honest number for the report. The toolchain is already here.
+- **Scenarios from the project's own tests.** `record --from-tests` runs the original's test
+  suite and captures every call it makes to the unit's functions (twice what was copied by hand
+  on its example). lz4 ships `tests/` (fuzzer, frametest, fullbench): the harness could wrap a
+  piece's exported functions (the `-D` rename we already use), run the project's tests, and
+  hand the captured calls to the test program as real inputs.
+- **Stall detection.** `diff` keeps a short history per change to the port and reports a
+  stalled port after three changes that gain no matching case; the skill says stop and ask.
+  Ours counts repairs; counting progress (checks or scenarios gained per turn) is the better
+  stop rule, and it is a stop kind for Do it All.
+- **A known-differences file.** Cases where the port is meant to differ, each with the exact
+  result it gives and a reason; they pass only with exactly that result, and the gate fails on
+  an entry that no longer differs. The honest home for a deliberate difference (a fixed bug, an
+  input outside the C's contract), instead of excluding it silently.
+- **A status page: verified against tested.** "Verified": run end to end on real code someone
+  else wrote, named and dated. "Tested": fixtures only. Per stage and per command. Ours would
+  say which stages lz4, liblzg and the tractor cases have proven and which only fixtures have.
+- **A pitfalls page loaded by CLAUDE.md.** Each mistake already made, with the rule that
+  prevents it, added in the same change. Shorter to recall than DECISIONS (ours: a pipeline
+  hides an exit code; never the full suite while the cockpit is mid-turn; a plan older than the
+  harness), and the page to hand every Opus brief.
+- **A doctor.** Runtimes and versions, the agent's setup, a self-test, each problem with its
+  fix; the bug form asks for its output. The sixth wall (clang 21 and the SDK's settings file)
+  was a doctor-kind problem.
+- **Every failure carries its next step, structured.** Each failed gate check names the command
+  that fixes it; a failed MCP call returns code, message, retryable and next. Check harness-mcp
+  hands the chat the way out as a field, not only as prose.
+- **One option set for the CLI and the MCP tools, kept in step by a test; the tools page
+  generated from the tool list.**
+- **Platform-specific C as a named risk** (inline assembly, `volatile`, bitfields, packed
+  layouts, compiler extensions, integers cast to addresses): "a recording on this machine says
+  nothing about the target". For the per-piece risk list.
+- **Smaller ones:** a size check (the port fails above three times the original's lines); a
+  test that an unported crate passes no case (a panic must not match an error); every outside
+  program in its own process group with stdin closed and a time limit, a runaway case dropped
+  and listed with the rest kept; files a piece writes compared as output (for `lz4io.c`); the
+  report's headline says how much runs in Rust, not only that nothing mismatches.
 
 ## "Do it All" (the person, 2026-11-17): the milestone after the lz4 run
 
