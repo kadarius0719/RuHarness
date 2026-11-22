@@ -1223,7 +1223,8 @@ fn not_signed_in_is_caught_from_the_stream() {
         text(&mut c)
     );
     assert!(
-        text(&mut c).contains("claude is not signed in: run `claude` in a terminal"),
+        text(&mut c)
+            .contains("claude is not signed in: in a plain Terminal run `claude auth login`"),
         "{}",
         text(&mut c)
     );

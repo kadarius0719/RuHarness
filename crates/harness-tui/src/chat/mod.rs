@@ -1732,7 +1732,7 @@ fn last_page(text: &str, key: &str) -> bool {
 fn error_words(error: &str, model_flag: Option<&str>) -> String {
     match error {
         "authentication_failed" => {
-            "claude is not signed in: run `claude` in a terminal and sign in, then send again"
+            "claude is not signed in: in a plain Terminal run `claude auth login`, then send again"
                 .to_string()
         }
         "model_not_found" | "invalid_model" => format!(

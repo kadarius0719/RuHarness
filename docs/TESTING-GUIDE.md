@@ -2720,7 +2720,7 @@ The cockpit acts on whatever is selected, so you select the unit first.
 
 | You see | Do this |
 |---|---|
-| ``claude is not signed in: run `claude` in a terminal and sign in, then send again`` | Do that in another Terminal window, then press `Enter` here again. |
+| ``claude is not signed in: in a plain Terminal run `claude auth login`, then send again`` | Do that in another Terminal window, then press `Enter` here again. |
 | `The chat is unavailable…` or `harness-mcp not found` | Quit (`q`) and redo the installs in Part 0. |
 | the chat says the unit has no validated driver | Part 3 is not complete. |
 | anything else | Use Plan B at the end of this part. |
@@ -7657,7 +7657,7 @@ In Part 12 the paths and the flag differ from Parts 1–11: where a row says `ta
 
 | You see | What it means | Do this |
 |---|---|---|
-| ``claude is not signed in: run `claude` in a terminal and sign in, then send again`` | Claude Code is not signed in. | Do exactly that. |
+| ``claude is not signed in: in a plain Terminal run `claude auth login`, then send again`` | Claude Code is not signed in. | Do exactly that. |
 | `The chat is unavailable…` / `harness-mcp not found` | The chat's helper program is missing. | `cargo install --locked --path crates/harness-mcp`, then restart the cockpit. |
 | `… — the chat is off` | A safety check at start-up turned the chat off, for example because of an unexpected Claude Code setting. | Use the appendix's Plan B, which works without the chat. |
 

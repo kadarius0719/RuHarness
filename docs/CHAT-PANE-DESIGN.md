@@ -214,7 +214,7 @@ block**, several messages per turn, sharing a message id (spike logs: 49 of 49).
 | `control_request` `can_use_tool` | §2 |
 | `control_request` of any other subtype | answered at once with an error `control_response` (its `request_id`), and noted; a known one (a model-consent prompt) in words: "this model needs consent — give it in a normal `claude` session, or choose another with --chat-model" |
 | `control_cancel_request` | the request is withdrawn: its line says so; its dialog closes (a frame change for §R6's swallow) |
-| `result` | the turn ends when `queued_turn_count` is 0 (absent = 0): its time and cost as the difference from the previous `result` ("plan usage" under a subscription); `aborted_*` → "stopped"; an error → `result`/`errors` in words, known ones translated ("claude is not signed in: run `claude` in a terminal and sign in, then send again"; "unknown model <m> (--chat-model)"; "the plan needs credits") |
+| `result` | the turn ends when `queued_turn_count` is 0 (absent = 0): its time and cost as the difference from the previous `result` ("plan usage" under a subscription); `aborted_*` → "stopped"; an error → `result`/`errors` in words, known ones translated ("claude is not signed in: in a plain Terminal run `claude auth login`, then send again"; "unknown model <m> (--chat-model)"; "the plan needs credits") |
 | `rate_limit_event` | `allowed_warning` → "nearing the plan's limit"; `rejected` → "the plan's limit is reached — resets in N min" (from `resetsAt`, relative), or its `errorCode` in words |
 
 Out (stdin), in the shapes the spike verified: user messages
