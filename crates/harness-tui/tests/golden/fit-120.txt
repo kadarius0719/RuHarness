@@ -3,20 +3,20 @@
 │  ▾ Pieces (11)                       ││◇ u-cache no test program                                                     │
 │    ▸ ✓ u001-katajainen           done││Next: Make the test program — run harness gen-driver u-cache (the chat is off)│
 │      ◇ u-cache        no test program││                                                                              │
-│      ◇ u-hash         no test program││5 exported functions: ZopfliCacheToSublen (22 lines), ZopfliCleanCache (5     │
-│      ◇ u-lz77         no test program││lines), ZopfliInitCache (19 lines), ZopfliMaxCachedSublen (11 lines),         │
-│      ◇ u-tree         no test program││ZopfliSublenToCache (32 lines)                                                │
-│      ◇ u-block…queeze no test program││Its C: 1 file — src/zopfli/cache.c                                            │
-│      ◇ u-gzip_…tainer no test program││No Rust yet                                                                   │
-│      ◇ u-util         no test program││5 of your features run it · still C — see Features                            │
-│      ◇ u-zlib_…tainer no test program││Tries: none yet                                                               │
+│      ◇ u-hash         no test program││This piece                                                                    │
+│      ◇ u-lz77         no test program││  5 exported functions in 1 file — src/zopfli/cache.c                         │
+│      ◇ u-tree         no test program││                                                                              │
+│      ◇ u-block…queeze no test program││Where it stands                                                               │
+│      ◇ u-gzip_…tainer no test program││  No Rust yet                                                                 │
+│      ◇ u-util         no test program││  5 of your features run it · still C — see Features                          │
+│      ◇ u-zlib_…tainer no test program││  Tries: none yet                                                             │
 │      ◇ u-zopfli_lib   no test program││                                                                              │
-│      · u-zopfli_bin        holds main││▸ C source (Tab to the View, then Enter)                                      │
-│  ▾ Features (7)                      ││                                                                              │
-│      ◉ Compress to gzip         holds││                                                                              │
-│      ◉ Compress to zlib         holds││                                                                              │
+│      · u-zopfli_bin        holds main││Functions (5)  lines of C                                                     │
+│  ▾ Features (7)                      ││  ZopfliCacheToSublen   22   ZopfliMaxCachedSublen 11                         │
+│      ◉ Compress to gzip         holds││  ZopfliCleanCache       5   ZopfliSublenToCache   32                         │
+│      ◉ Compress to zlib         holds││  ZopfliInitCache       19                                                    │
 │      ◉ Compress to raw deflate  holds││                                                                              │
-│      ◉ Say what it does         holds││                                                                              │
+│      ◉ Say what it does         holds││▸ C source (Tab to the View, then Enter)                                      │
 │      ◉ Compress quickly         holds││                                                                              │
 │      ◌ Show the help      still all C││                                                                              │
 │      ◌ Report a …ing file still all C││                                                                              │

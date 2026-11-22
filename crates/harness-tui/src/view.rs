@@ -1560,57 +1560,69 @@ pub const CODE_FOLDED: &str = "▸ C source (Tab to the View, then Enter)";
 /// The same heading while the View has the keys: Enter (or →) opens it.
 pub const CODE_FOLDED_IN_VIEW: &str = "▸ C source (Enter to open)";
 
-/// A unit's View, in words first (pass 2 of the 2026-10-18 critique): its
-/// state and Next step; what it is — its exported functions and their
-/// sizes, its files; its Rust and verdict, which features run it, its
-/// speed; its attempts in one line; its checks once it has a verdict. The
-/// code comes after, under [`CODE_FOLDED`].
+/// A unit's View, in words first (pass 2 of the 2026-10-18 critique; its
+/// groups 2026-11-21): its state and Next step, then titled groups, a blank
+/// line between them and their rows indented under the heading. *This
+/// piece*: how many exported functions in which files, what the build left
+/// out or names differently, the helpers it carries from headers. *Where it
+/// stands*: its Rust and verdict, which features run it, its speed, its
+/// tries in one line. *Checks* once it has a verdict. *Functions (n)*: the
+/// names in columns with their lines of C; *Helpers (n)* for each header
+/// whose helpers it translates. The code comes after, under
+/// [`CODE_FOLDED`].
 fn unit_summary(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
     let mut lines = unit_lead(app, unit, width);
-    lines.push(Line::from(""));
-    // The exported functions, by name, each with its size in lines of C.
-    let functions: Vec<String> = if app.pairs.is_empty() {
+    let inner = width.saturating_sub(2);
+    let heading = |title: String, rest: Option<String>| {
+        let mut spans = vec![Span::styled(title, section_role())];
+        if let Some(rest) = rest {
+            spans.push(Span::styled(format!("  {rest}"), label_role()));
+        }
+        Line::from(clipped(spans, width))
+    };
+    // The exported functions, by name, each with its size in lines of C
+    // when the pairs are read.
+    let functions: Vec<(String, usize)> = if app.pairs.is_empty() {
         unit.unit
             .symbols
             .iter()
-            .map(|s| short_symbol(s).to_string())
+            .map(|s| (short_symbol(s).to_string(), 0))
             .collect()
     } else {
         app.pairs
             .iter()
             .map(|p| {
-                let name = short_symbol(&p.symbol).to_string();
                 let code =
                     p.c.iter()
                         .filter(|l| matches!(l, CodeLine::Code { .. }))
                         .count();
-                match code {
-                    0 => name,
-                    1 => format!("{name} (1 line)"),
-                    n => format!("{name} ({n} lines)"),
-                }
+                (short_symbol(&p.symbol).to_string(), code)
             })
             .collect()
     };
+    let sized = !app.pairs.is_empty() && functions.iter().any(|(_, n)| *n > 0);
+    let helpers = app
+        .snapshot
+        .facts
+        .as_ref()
+        .map(|facts| facts.header_helpers(&unit.unit.files))
+        .unwrap_or_default();
+
+    // This piece: what it is.
+    lines.push(Line::from(""));
+    lines.push(heading("This piece".into(), None));
+    let mut piece = Vec::new();
     let n = functions.len();
-    lines.extend(wrapped(
-        &format!(
-            "{n} exported function{}: {}",
-            plural_s(n),
-            functions.join(", ")
-        ),
-        width,
-        Style::default(),
-    ));
     let files = &unit.unit.files;
-    lines.extend(wrapped(
+    piece.extend(wrapped(
         &format!(
-            "Its C: {} file{} — {}",
+            "{n} exported function{} in {} file{} — {}",
+            plural_s(n),
             files.len(),
             plural_s(files.len()),
             files.join(", ")
         ),
-        width,
+        inner,
         Style::default(),
     ));
     // What the build said against the scan: functions this build does not
@@ -1619,55 +1631,168 @@ fn unit_summary(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> 
     let not_built = &unit.unit.not_built;
     if !not_built.is_empty() {
         let names: Vec<&str> = not_built.iter().map(|s| short_symbol(s)).collect();
-        lines.extend(wrapped(
+        piece.extend(headed(
             &format!(
                 "Left out: {} function{} in the source that this build does not compile — {}",
                 not_built.len(),
                 plural_s(not_built.len()),
                 names.join(", ")
             ),
-            width,
-            Style::default(),
+            inner,
         ));
     }
     let build_only = &unit.unit.build_only;
     if !build_only.is_empty() {
-        lines.extend(wrapped(
+        piece.extend(wrapped(
             &format!(
                 "The build names its functions differently from the source ({} name{} the scan does not know) — nothing was left out",
                 build_only.len(),
                 plural_s(build_only.len())
             ),
-            width,
+            inner,
             Style::default(),
         ));
     }
     // Helpers written `static` in headers it includes: private copies the
     // piece's Rust carries its own translation of
-    // (docs/HEADER-FUNCTIONS-DESIGN.md §5).
-    if let Some(facts) = app.snapshot.facts.as_ref() {
-        for (header, names) in facts.header_helpers(files) {
-            let n = names.len();
-            let shown: Vec<&str> = names.iter().map(|s| short_symbol(s)).collect();
-            lines.extend(wrapped(
-                &format!(
-                    "Uses {n} helper function{} written in {header}, translated as part of this \
-                     piece: {}",
-                    plural_s(n),
-                    shown.join(", ")
-                ),
-                width,
-                Style::default(),
-            ));
-        }
+    // (docs/HEADER-FUNCTIONS-DESIGN.md §5). Their names are under Helpers.
+    for (header, names) in &helpers {
+        piece.extend(wrapped(
+            &format!(
+                "Uses {} helper function{} written in {header}, translated as part of this piece",
+                names.len(),
+                plural_s(names.len())
+            ),
+            inner,
+            Style::default(),
+        ));
     }
-    lines.extend(unit_record(app, unit, width));
-    lines.extend(headed(&attempts_line(unit), width));
+    lines.extend(indented(piece));
+
+    // Where it stands: its Rust, its features, its speed, its tries.
+    lines.push(Line::from(""));
+    lines.push(heading("Where it stands".into(), None));
+    let mut stands = unit_record(app, unit, inner);
+    stands.extend(headed(&attempts_line(unit), inner));
+    lines.extend(indented(stands));
+
     if app.shown_verdict().is_some() {
+        lines.push(Line::from(""));
         lines.extend(checks_lines(app, width, 2));
+    }
+
+    if !functions.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(heading(
+            format!("Functions ({n})"),
+            sized.then(|| "lines of C".to_string()),
+        ));
+        let cells: Vec<(&str, Option<usize>)> = functions
+            .iter()
+            .map(|(name, code)| (name.as_str(), sized.then_some(*code)))
+            .collect();
+        lines.extend(columns(&cells, width));
+    }
+
+    for (header, names) in &helpers {
+        lines.push(Line::from(""));
+        lines.push(heading(
+            format!("Helpers ({})", names.len()),
+            Some(format!("written in {header}")),
+        ));
+        let cells: Vec<(&str, Option<usize>)> =
+            names.iter().map(|s| (short_symbol(s), None)).collect();
+        lines.extend(columns(&cells, width));
     }
     lines.push(Line::from(""));
     lines
+}
+
+/// `lines` behind a two-space indent: the rows of a group under its
+/// heading (each was made two columns narrower than the pane).
+fn indented(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    lines
+        .into_iter()
+        .map(|line| {
+            let mut spans = vec![Span::raw("  ")];
+            spans.extend(line.spans);
+            Line::from(spans).style(line.style)
+        })
+        .collect()
+}
+
+/// Names in aligned columns read down each column (as `ls` lays them out),
+/// indented two under their heading in a pane `width` columns wide. A cell
+/// is the name (through the display filter), then — when `cells` carry a
+/// count — one space and the count right-aligned in the label role (a count
+/// of 0 leaves its place empty). Every cell is as wide as the widest; three
+/// spaces between columns; as many columns as fit, at least one. A cell
+/// wider than the pane is clipped, never wrapped. No cells, no rows.
+fn columns(cells: &[(&str, Option<usize>)], width: usize) -> Vec<Line<'static>> {
+    const GAP: usize = 3;
+    if cells.is_empty() {
+        return Vec::new();
+    }
+    let room = width.saturating_sub(2);
+    let names: Vec<String> = cells.iter().map(|(n, _)| display::line(n)).collect();
+    let counts: Vec<Option<String>> = cells
+        .iter()
+        .map(|(_, c)| c.map(|c| if c == 0 { String::new() } else { c.to_string() }))
+        .collect();
+    let counted = counts.iter().any(Option::is_some);
+    let name_w = names.iter().map(|n| width_of(n)).max().unwrap_or(0);
+    let count_w = counts
+        .iter()
+        .flatten()
+        .map(|c| width_of(c))
+        .max()
+        .unwrap_or(0);
+    let cell_w = if counted {
+        name_w + 1 + count_w
+    } else {
+        name_w
+    };
+    let fit = ((room + GAP) / (cell_w + GAP)).max(1);
+    let rows = cells.len().div_ceil(fit);
+    let cols = cells.len().div_ceil(rows);
+    let mut out = Vec::new();
+    for r in 0..rows {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        for c in 0..cols {
+            let i = c * rows + r;
+            if i >= cells.len() {
+                continue;
+            }
+            if c > 0 {
+                spans.push(Span::raw(" ".repeat(GAP)));
+            }
+            let name = &names[i];
+            let last = (c + 1) * rows + r >= cells.len();
+            match &counts[i] {
+                // A last column's empty count leaves no padding behind.
+                Some(count) if counted && !(last && count.is_empty()) => {
+                    let pad = name_w - width_of(name) + 1 + count_w - width_of(count);
+                    spans.push(Span::raw(format!("{name}{}", " ".repeat(pad))));
+                    spans.push(Span::styled(count.clone(), label_role()));
+                }
+                _ if last => spans.push(Span::raw(name.clone())),
+                _ => {
+                    let pad = cell_w - width_of(name);
+                    spans.push(Span::raw(format!("{name}{}", " ".repeat(pad))));
+                }
+            }
+        }
+        // Clipped to the room left of the indent, never wrapped.
+        let mut used = 0;
+        let mut line = vec![Span::raw("  ")];
+        for span in spans {
+            let text = clip(&span.content, room.saturating_sub(used));
+            used += width_of(&text);
+            line.push(Span::styled(text, span.style));
+        }
+        out.push(Line::from(line));
+    }
+    out
 }
 
 /// A unit's attempts in one line: how many, and how they came out. (The
@@ -5902,7 +6027,16 @@ pub(crate) mod tests {
             &["Pieces (", "Features (", "Speed", "Speed ("],
         ),
         ("the Project view's tree", &["Programs (", "Libraries ("]),
-        ("a View", &["Checks"]),
+        (
+            "a View",
+            &[
+                "Checks",
+                "This piece",
+                "Where it stands",
+                "Functions (",
+                "Helpers (",
+            ],
+        ),
         (
             "the help",
             &[
@@ -5949,6 +6083,10 @@ pub(crate) mod tests {
             "Speed (C only)",
             "Programs (3) · 1 accepted",
             "Checks",
+            "This piece",
+            "Where it stands",
+            "Functions (34)",
+            "Helpers (10)",
             "── uses a model ──",
         ] {
             assert!(section_allowed(ok), "{ok}");
@@ -8745,11 +8883,15 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
             "{screen}"
         );
         for words in [
-            "5 exported functions: ZopfliCacheToSublen (22 lines),",
-            "Its C: 1 file — src/zopfli/cache.c",
-            "No Rust yet",
-            "5 of your features run it",
-            "Tries: none yet",
+            "This piece",
+            "  5 exported functions in 1 file — src/zopfli/cache.c",
+            "Where it stands",
+            "  No Rust yet",
+            "  5 of your features run it",
+            "  Tries: none yet",
+            "Functions (5)  lines of C",
+            "  ZopfliCacheToSublen   22",
+            "ZopfliSublenToCache   32",
         ] {
             assert!(screen.contains(words), "{words}:\n{screen}");
         }
@@ -8843,6 +8985,211 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
             "{renamed}"
         );
         assert!(!renamed.contains("Left out:"), "{renamed}");
+    }
+
+    /// A summary's lines as plain text, one string per line.
+    fn summary_text(app: &App, unit: &UnitView, width: usize) -> Vec<String> {
+        unit_summary(app, unit, width)
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    /// The groups' headings in a summary, in order; and every heading
+    /// after the lead stands under exactly one blank line, with its rows
+    /// indented two (or the checks' own strip), never two blanks running.
+    fn summary_groups(lines: &[String]) -> Vec<String> {
+        let headings = [
+            "This piece",
+            "Where it stands",
+            "Checks",
+            "Functions (",
+            "Helpers (",
+        ];
+        let mut found = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            if headings.iter().any(|h| line.starts_with(h)) {
+                assert!(i >= 1 && lines[i - 1].is_empty(), "{i}: {lines:#?}");
+                assert!(i < 2 || !lines[i - 2].is_empty(), "{i}: {lines:#?}");
+                assert!(
+                    lines
+                        .get(i + 1)
+                        .is_some_and(|l| l.starts_with("  ") || line.starts_with("Checks")),
+                    "{i}: {lines:#?}"
+                );
+                found.push(line.clone());
+            }
+        }
+        assert!(
+            !lines.windows(2).any(|w| w[0].is_empty() && w[1].is_empty()),
+            "{lines:#?}"
+        );
+        assert_eq!(lines.last().map(String::as_str), Some(""), "{lines:#?}");
+        found
+    }
+
+    /// A piece's card is groups under titles, in order — This piece, Where
+    /// it stands, Functions — and without a verdict no Checks group.
+    #[test]
+    fn a_units_summary_comes_in_groups() {
+        let mut app = app_of("targets/zopfli", "unitgroups");
+        app.select(Selection::Unit("u-cache".into()));
+        let unit = app
+            .snapshot
+            .units
+            .iter()
+            .find(|u| u.unit.id == "u-cache")
+            .expect("u-cache")
+            .clone();
+        assert!(app.shown_verdict().is_none());
+        let lines = summary_text(&app, &unit, 80);
+        assert_eq!(
+            summary_groups(&lines),
+            ["This piece", "Where it stands", "Functions (5)  lines of C"],
+            "{lines:#?}"
+        );
+        // The lead, unchanged, is first; then its blank, then This piece.
+        let lead: Vec<String> = unit_lead(&app, &unit, 80)
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert!(lead[0].starts_with("◇ u-cache"), "{lead:#?}");
+        assert!(lead.iter().any(|l| l.starts_with("Next: ")), "{lead:#?}");
+        assert_eq!(lines[..lead.len()], lead[..], "{lines:#?}");
+        let piece = lines.iter().position(|l| l == "This piece").unwrap();
+        assert_eq!(piece, lead.len() + 1, "{lines:#?}");
+        assert_eq!(
+            lines[piece + 1],
+            "  5 exported functions in 1 file — src/zopfli/cache.c"
+        );
+        // The names left the first row: they are under Functions only.
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|l| l.contains("ZopfliInitCache"))
+                .count(),
+            1,
+            "{lines:#?}"
+        );
+    }
+
+    /// With a verdict, its checks are a group of their own between Where it
+    /// stands and Functions.
+    #[test]
+    fn a_checked_units_summary_has_its_checks_group() {
+        let mut app = app("unitchecks");
+        app.select(Selection::Unit("u-lib".into()));
+        assert!(app.shown_verdict().is_some());
+        let unit = app
+            .snapshot
+            .units
+            .iter()
+            .find(|u| u.unit.id == "u-lib")
+            .expect("u-lib")
+            .clone();
+        let lines = summary_text(&app, &unit, 80);
+        let groups = summary_groups(&lines);
+        assert_eq!(groups.len(), 4, "{lines:#?}");
+        assert_eq!(groups[..2], ["This piece", "Where it stands"], "{lines:#?}");
+        assert!(groups[2].starts_with("Checks"), "{lines:#?}");
+        assert_eq!(groups[3], "Functions (1)  lines of C", "{lines:#?}");
+    }
+
+    /// A piece with no exported functions has no Functions group (and no
+    /// sizes, its pairs unread: no "lines of C" either).
+    #[test]
+    fn a_units_summary_without_functions_has_no_functions_group() {
+        let app = app_of("targets/zopfli", "unitnofns");
+        let mut unit = app
+            .snapshot
+            .units
+            .iter()
+            .find(|u| u.unit.id == "u-cache")
+            .expect("u-cache")
+            .clone();
+        let lines = summary_text(&app, &unit, 80);
+        assert!(
+            summary_groups(&lines).contains(&"Functions (5)".to_string()),
+            "unread pairs: names, no sizes: {lines:#?}"
+        );
+        unit.unit.symbols.clear();
+        let lines = summary_text(&app, &unit, 80);
+        assert_eq!(
+            summary_groups(&lines),
+            ["This piece", "Where it stands"],
+            "{lines:#?}"
+        );
+        assert!(
+            lines.contains(&"  0 exported functions in 1 file — src/zopfli/cache.c".to_string()),
+            "{lines:#?}"
+        );
+    }
+
+    /// The column layout: read down each column, every cell as wide as the
+    /// widest, counts right-aligned in the label role (a 0 leaves its place
+    /// empty), three spaces between columns, one column when narrow, a cell
+    /// wider than the pane clipped; nothing for nothing.
+    #[test]
+    fn the_names_are_laid_out_in_columns() {
+        let rows = |lines: &[Line<'static>]| -> Vec<String> {
+            lines
+                .iter()
+                .map(|l| {
+                    l.spans
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect::<String>()
+                })
+                .collect()
+        };
+        assert!(columns(&[], 80).is_empty());
+        // Sized: five cells, room for two columns (11 + 3 + 11 = 25 of 28).
+        let sized = [
+            ("alpha", Some(22)),
+            ("b", Some(5)),
+            ("gamma", Some(19)),
+            ("d", Some(0)),
+            ("epsilon", Some(132)),
+        ];
+        let lines = columns(&sized, 30);
+        assert_eq!(
+            rows(&lines),
+            [
+                "  alpha    22   d",
+                "  b         5   epsilon 132",
+                "  gamma    19",
+            ]
+        );
+        // The counts in the label role, the names and padding plain.
+        for line in &lines {
+            for span in &line.spans {
+                let is_count =
+                    span.content.chars().all(|c| c.is_ascii_digit()) && !span.content.is_empty();
+                let want = if is_count {
+                    label_role()
+                } else {
+                    Style::default()
+                };
+                assert_eq!(span.style, want, "{span:?}");
+            }
+        }
+        assert_eq!(lines[1].spans.len(), 6, "{:?}", lines[1]);
+        // Unsized, uniform cells: one row of three.
+        let three = [("a", None), ("bbb", None), ("cc", None)];
+        assert_eq!(rows(&columns(&three, 20)), ["  a     bbb   cc"]);
+        // Narrow: one column, still in order.
+        assert_eq!(rows(&columns(&three, 6)), ["  a", "  bbb", "  cc"]);
+        // Wider than the pane: clipped, never wrapped.
+        assert_eq!(rows(&columns(&[("abcdefghij", None)], 6)), ["  abcd"]);
+        assert_eq!(rows(&columns(&sized, 6)).len(), 5);
+        for row in rows(&columns(&sized, 6)) {
+            assert!(width_of(&row) <= 6, "{row:?}");
+        }
     }
 
     /// A unit with no test program says "No Rust yet" and leads to its test

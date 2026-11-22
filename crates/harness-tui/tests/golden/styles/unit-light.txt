@@ -45,91 +45,100 @@
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      ◇ u-lz77 no test│ │5 exported functions: ZopfliCacheToSublen (22 lines),│
+│      ◇ u-lz77 no test│ │This piece                                           │
+  @0-0 fg 25 BOLD "│"
+  @7-8 fg 240 NONE "◇"
+  @16-22 fg 240 NONE "no test"
+  @23-23 fg 25 BOLD "│"
+  @25-25 fg 244 NONE "│"
+  @26-35 fg 25 BOLD "This piece"
+  @79-79 fg 244 NONE "│"
+│      ◇ u-tree no test│ │  5 exported functions in 1 file — src/zopfli/cache.c│
   @0-0 fg 25 BOLD "│"
   @7-8 fg 240 NONE "◇"
   @16-22 fg 240 NONE "no test"
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      ◇ u-tree no test│ │ZopfliCleanCache (5 lines), ZopfliInitCache (19      │
+│      ◇ u-b…ze no test│ │                                                     │
   @0-0 fg 25 BOLD "│"
   @7-8 fg 240 NONE "◇"
   @16-22 fg 240 NONE "no test"
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      ◇ u-b…ze no test│ │lines), ZopfliMaxCachedSublen (11 lines),            │
+│      ◇ u-g…er no test│ │Where it stands                                      │
+  @0-0 fg 25 BOLD "│"
+  @7-8 fg 240 NONE "◇"
+  @16-22 fg 240 NONE "no test"
+  @23-23 fg 25 BOLD "│"
+  @25-25 fg 244 NONE "│"
+  @26-40 fg 25 BOLD "Where it stands"
+  @79-79 fg 244 NONE "│"
+│      ◇ u-util no test│ │  No Rust yet                                        │
+  @0-0 fg 25 BOLD "│"
+  @7-8 fg 240 NONE "◇"
+  @16-22 fg 240 NONE "no test"
+  @23-23 fg 25 BOLD "│"
+  @25-25 fg 244 NONE "│"
+  @28-38 fg 238 NONE "No Rust yet"
+  @79-79 fg 244 NONE "│"
+│      ◇ u-z…er no test│ │  5 of your features run it · still C — see Features │
   @0-0 fg 25 BOLD "│"
   @7-8 fg 240 NONE "◇"
   @16-22 fg 240 NONE "no test"
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      ◇ u-g…er no test│ │ZopfliSublenToCache (32 lines)                       │
+│      ◇ u-z…ib no test│ │  Tries: none yet                                    │
   @0-0 fg 25 BOLD "│"
   @7-8 fg 240 NONE "◇"
   @16-22 fg 240 NONE "no test"
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
+  @28-33 fg - BOLD "Tries:"
   @79-79 fg 244 NONE "│"
-│      ◇ u-util no test│ │Its C: 1 file — src/zopfli/cache.c                   │
-  @0-0 fg 25 BOLD "│"
-  @7-8 fg 240 NONE "◇"
-  @16-22 fg 240 NONE "no test"
-  @23-23 fg 25 BOLD "│"
-  @25-25 fg 244 NONE "│"
-  @79-79 fg 244 NONE "│"
-│      ◇ u-z…er no test│ │No Rust yet                                          │
-  @0-0 fg 25 BOLD "│"
-  @7-8 fg 240 NONE "◇"
-  @16-22 fg 240 NONE "no test"
-  @23-23 fg 25 BOLD "│"
-  @25-25 fg 244 NONE "│"
-  @26-36 fg 238 NONE "No Rust yet"
-  @79-79 fg 244 NONE "│"
-│      ◇ u-z…ib no test│ │5 of your features run it · still C — see Features   │
-  @0-0 fg 25 BOLD "│"
-  @7-8 fg 240 NONE "◇"
-  @16-22 fg 240 NONE "no test"
-  @23-23 fg 25 BOLD "│"
-  @25-25 fg 244 NONE "│"
-  @79-79 fg 244 NONE "│"
-│      · u-z…in stays C│ │Tries: none yet                                      │
+│      · u-z…in stays C│ │                                                     │
   @0-0 fg 25 BOLD "│"
   @7-8 fg 240 NONE "·"
   @16-22 fg 240 NONE "stays C"
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
-  @26-31 fg - BOLD "Tries:"
   @79-79 fg 244 NONE "│"
-│  ▾ Features (7)      │ │                                                     │
+│  ▾ Features (7)      │ │Functions (5)  lines of C                            │
   @0-0 fg 25 BOLD "│"
   @1-4 fg 238 NONE "▾"
   @5-16 fg 25 BOLD "Features (7)"
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
+  @26-38 fg 25 BOLD "Functions (5)"
+  @39-50 fg 238 NONE "lines of C"
   @79-79 fg 244 NONE "│"
-│      ◉ Comp…zip holds│ │▸ C source (Tab to the View, then Enter)             │
+│      ◉ Comp…zip holds│ │  ZopfliCacheToSublen   22   ZopfliMaxCachedSublen 11│
   @0-0 fg 25 BOLD "│"
   @7-8 fg 22 NONE "◉"
   @18-22 fg 240 NONE "holds"
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
+  @50-51 fg 238 NONE "22"
+  @77-78 fg 238 NONE "11"
   @79-79 fg 244 NONE "│"
-│      ◉ Comp…lib holds│ │                                                     │
+│      ◉ Comp…lib holds│ │  ZopfliCleanCache       5   ZopfliSublenToCache   32│
   @0-0 fg 25 BOLD "│"
   @7-8 fg 22 NONE "◉"
   @18-22 fg 240 NONE "holds"
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
+  @51-51 fg 238 NONE "5"
+  @77-78 fg 238 NONE "32"
   @79-79 fg 244 NONE "│"
-│      ◉ Comp…ate holds│ │                                                     │
+│      ◉ Comp…ate holds│ │  ZopfliInitCache       19                           │
   @0-0 fg 25 BOLD "│"
   @7-8 fg 22 NONE "◉"
   @18-22 fg 240 NONE "holds"
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
+  @50-51 fg 238 NONE "19"
   @79-79 fg 244 NONE "│"
 │      ◉ Say …oes holds│ │                                                     │
   @0-0 fg 25 BOLD "│"
@@ -138,7 +147,7 @@
   @23-23 fg 25 BOLD "│"
   @25-25 fg 244 NONE "│"
   @79-79 fg 244 NONE "│"
-│      ◉ Comp…kly holds│ │                                                     │
+│      ◉ Comp…kly holds│ │▸ C source (Tab to the View, then Enter)             │
   @0-0 fg 25 BOLD "│"
   @7-8 fg 22 NONE "◉"
   @18-22 fg 240 NONE "holds"

@@ -8,29 +8,29 @@
   @0-99 fg - DIM "│    ▸ ✓ u-lib           done││Next: In Rust and checked — nothing to do                           │"
 │    Features (none yet)     ││                                                                    │
   @0-99 fg - DIM "│    Features (none yet)     ││                                                                    │"
-│    Speed — not set up      ││1 exported function: read_scalefactors (44 lines)                   │
-  @0-99 fg - DIM "│    Speed — not set up      ││1 exported function: read_scalefactors (44 lines)                   │"
-│  ▸ test_case/          ✓1/1││Its C: 1 file — test_case/src/lib.c                                 │
-  @0-99 fg - DIM "│  ▸ test_case/          ✓1/1││Its C: 1 file — test_case/src/lib.c                                 │"
-│           ┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐ate        │
+│    Speed — not set up      ││This piece                                                          │
+  @0-99 fg - DIM "│    Speed — not set up      ││This piece                                                          │"
+│  ▸ test_case/          ✓1/1││  1 exported function in 1 file — test_case/src/lib.c               │
+  @0-99 fg - DIM "│  ▸ test_case/          ✓1/1││  1 exported function in 1 file — test_case/src/lib.c               │"
+│           ┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐           │
   @0-11 fg - DIM "│"
   @12-87 fg - BOLD "┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐"
-  @88-99 fg - DIM "ate        │"
-│           │Builds u-lib's Rust and runs it against the C in the sandbox.             │ee)        │
-  @0-11 fg - DIM "│"
-  @12-12 fg - BOLD "│"
-  @87-87 fg - BOLD "│"
-  @88-99 fg - DIM "ee)        │"
-│           │Writes: the judge's check of u-lib and its status in the plan; changes no │           │
+  @88-99 fg - DIM "│"
+│           │Builds u-lib's Rust and runs it against the C in the sandbox.             │           │
   @0-11 fg - DIM "│"
   @12-12 fg - BOLD "│"
   @87-87 fg - BOLD "│"
   @88-99 fg - DIM "│"
-│           │code.                                                                     │           │
+│           │Writes: the judge's check of u-lib and its status in the plan; changes no │ date      │
   @0-11 fg - DIM "│"
   @12-12 fg - BOLD "│"
   @87-87 fg - BOLD "│"
-  @88-99 fg - DIM "│"
+  @88-99 fg - DIM "date      │"
+│           │code.                                                                     │tree)      │
+  @0-11 fg - DIM "│"
+  @12-12 fg - BOLD "│"
+  @87-87 fg - BOLD "│"
+  @88-99 fg - DIM "tree)      │"
 │           │                                                                          │           │
   @0-11 fg - DIM "│"
   @12-12 fg - BOLD "│"
@@ -63,8 +63,8 @@
   @88-99 fg - DIM "│"
 │                            ││                                                                    │
   @0-99 fg - DIM "│                            ││                                                                    │"
-│                            ││                                                                    │
-  @0-99 fg - DIM "│                            ││                                                                    │"
+│                            ││▸ C source (Tab to the View, then Enter)                            │
+  @0-99 fg - DIM "│                            ││▸ C source (Tab to the View, then Enter)                            │"
 │                            ││                                                                    │
   @0-99 fg - DIM "│                            ││                                                                    │"
 └────────────────────────────┘└────────────────────────────────────────────────────────────────────┘

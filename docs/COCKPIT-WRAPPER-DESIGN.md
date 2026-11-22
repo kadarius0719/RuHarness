@@ -1254,7 +1254,8 @@ ask.
   The dialog and the menu are unchanged (§9.4's panel and backdrop).
 - **Fewer blue things.** The section role is for pane titles and group headings only: `Files`,
   the View's title, `Units (n)`, `Features (n)`, `Speed`, `Programs (n)`, `Libraries (n)`,
-  `Checks`, the chat's title. Everything else that borrows it today goes back to plain text:
+  `Checks`, the piece card's `This piece`, `Where it stands`, `Functions (n)` and `Helpers (n)`
+  (2026-11-21), the chat's title. Everything else that borrows it today goes back to plain text:
   the journey line's stage names (plain; the current stage in the accent, done ones in good, as
   §9.4), `Step 6 of 8: Test program` (plain, the stage name bold), `◂ Back to the project view`
   (plain), `▸ C source (…)` (plain), the `Features (none yet)` and `Speed — not set up` rows

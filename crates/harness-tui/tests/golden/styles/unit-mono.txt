@@ -26,48 +26,51 @@
 │      ◇ u-hash no test││                                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│      ◇ u-lz77 no test││5 exported functions: ZopfliCacheToSublen (22 lines), │
+│      ◇ u-lz77 no test││This piece                                            │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│      ◇ u-tree no test││ZopfliCleanCache (5 lines), ZopfliInitCache (19       │
+  @25-34 fg - BOLD "This piece"
+│      ◇ u-tree no test││  5 exported functions in 1 file — src/zopfli/cache.c │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│      ◇ u-b…ze no test││lines), ZopfliMaxCachedSublen (11 lines),             │
+│      ◇ u-b…ze no test││                                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│      ◇ u-g…er no test││ZopfliSublenToCache (32 lines)                        │
+│      ◇ u-g…er no test││Where it stands                                       │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│      ◇ u-util no test││Its C: 1 file — src/zopfli/cache.c                    │
+  @25-39 fg - BOLD "Where it stands"
+│      ◇ u-util no test││  No Rust yet                                         │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│      ◇ u-z…er no test││No Rust yet                                           │
+│      ◇ u-z…er no test││  5 of your features run it · still C — see Features  │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│      ◇ u-z…ib no test││5 of your features run it · still C — see Features    │
+│      ◇ u-z…ib no test││  Tries: none yet                                     │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│      · u-z…in stays C││Tries: none yet                                       │
+  @27-32 fg - BOLD "Tries:"
+│      · u-z…in stays C││                                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-  @25-30 fg - BOLD "Tries:"
-│  ▾ Features (7)      ││                                                      │
+│  ▾ Features (7)      ││Functions (5)  lines of C                             │
   @0-0 fg - BOLD "│"
   @5-16 fg - BOLD "Features (7)"
   @23-23 fg - BOLD "│"
-│      ◉ Comp…zip holds││▸ C source (Tab to the View, then Enter)              │
+  @25-37 fg - BOLD "Functions (5)"
+│      ◉ Comp…zip holds││  ZopfliCacheToSublen   22   ZopfliMaxCachedSublen 11 │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│      ◉ Comp…lib holds││                                                      │
+│      ◉ Comp…lib holds││  ZopfliCleanCache       5   ZopfliSublenToCache   32 │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│      ◉ Comp…ate holds││                                                      │
+│      ◉ Comp…ate holds││  ZopfliInitCache       19                            │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
 │      ◉ Say …oes holds││                                                      │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
-│      ◉ Comp…kly holds││                                                      │
+│      ◉ Comp…kly holds││▸ C source (Tab to the View, then Enter)              │
   @0-0 fg - BOLD "│"
   @23-23 fg - BOLD "│"
 │      ◌ Show…elp all C││                                                      │

@@ -106,6 +106,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-11-08 — **The lz4 run's seventh wall: a refreshed plan kept its old signatures, and a macro static in one `#if` branch emptied a piece** — the plan refresh now rewrites `interface` with `symbols` and lifts its own blocks; a specifier macro is static only when every definition of it is; the judge's "calls every symbol" rule meets a debug-only function (`LZ4HC_hexOut`), left open.
 - 2026-11-11 — **The lz4 run's first full piece, and two cockpit finds: a stale hand-off with no way out, and a wheel burst drawn one notch per frame** — u-lz4 (49 functions) went through the whole journey; a waiting try from an older contract blocked the piece with no cockpit way out (removed by hand, an action to design); the main loop now applies a whole input burst before it draws.
 - 2026-11-19 — **A function the build does not compile is left out of its piece: the compiler has the last word when it clearly agrees with the scan** — the plan step reads what each compiled file defines from the project map; `LZ4HC_hexOut` and `BufPool_releaseBuffer` go to `not_built`; xxhash.c's renamed functions are flagged in `build_only` and nothing is left out; preprocessing the scan rejected for now.
+- 2026-11-21 — **The piece card comes in titled groups** — This piece, Where it stands, Checks, Functions (n), Helpers (n): a blank line between groups, rows indented, the function names in columns with their lines of C; the headings take the section colour, body text stays plain so colour on words still means a state.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -4665,3 +4666,32 @@ what that work needs. The size guard looks at the unit's own files, not at heade
 `#if` (today that flags and leaves nothing out), or when a third wall of this family makes
 preprocessing worth its cost.
 
+
+## 2026-11-21 — The piece card comes in titled groups
+
+**Seen.** The person, reading u-lz4hc's card during the lz4 run: 34 function names joined in one
+wrapped paragraph, then five unrelated facts stacked under it with no gaps. Their words: spacing
+and grouping, "maybe changing colors to indicate groupings", would make it easier to read.
+
+**Decided.** The card (`unit_summary`) is the lead as before, then groups, each under a heading
+with one blank line above and its rows indented two:
+- *This piece*: how many exported functions in which files; what the build left out or names
+  differently; how many helpers it carries from a header.
+- *Where it stands*: its Rust and the judge's word, the features that run it, its speed, its
+  tries in one line.
+- *Checks*: as before, only with a verdict.
+- *Functions (n)*: the names in aligned columns read down, each with its lines of C in the
+  label colour. Last, so a long list never pushes a fact off the screen.
+- *Helpers (n)*: one group per header, the names in the same columns.
+
+**Colour.** The four new headings take the section colour, as `Checks` and the pane titles do
+(the allow-list and COCKPIT-WRAPPER-DESIGN §9.7 name them). Body text is not tinted by group:
+colour on words still means a state (2026-10-19), and the grouping is carried by the headings,
+the gaps and the indent, so it reads the same in the mono theme.
+
+**Left open.** The file card and the function card keep their old shape until the person has
+seen this one. A very large piece (u-lz4, 49 functions) puts the folded `C source` row below
+the first screen; Enter in the View still opens it.
+
+**Built** by an Opus subagent from one brief, reviewed and gated here (the cockpit's tests, the
+lints, the guide gate; the whole workspace not rerun, the change is in the view alone).

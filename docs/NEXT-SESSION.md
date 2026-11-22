@@ -169,6 +169,10 @@ no spike edits. The live walk on a fresh copy moved u-checksum, u-encode and u-v
    function the build does not compile (`not_built`), and flags a piece whose build names differ
    (`build_only`). The person's steps: rebuild, Refresh the plan (expect the lines for u-lz4hc,
    u-xxhash and u-lz4io), then u-lz4hc's test program. u-xxhash stays for the rename work.
+   **2026-11-21:** the refresh did what it should in the person's hands (u-lz4hc offers its test
+   program, the card says `LZ4HC_hexOut` was left out). The person found the piece card a wall
+   of text; it now comes in titled groups (DECISIONS 2026-11-21). The file card and the function
+   card can follow once the person has seen it. Still next: u-lz4hc's test program, then its Rust.
 6. **Then the briefing's next milestone (M5, the extension proof)**, or what the scale run shows,
    as the person decides.
 

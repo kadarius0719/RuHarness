@@ -4,20 +4,20 @@
 │    ▸ ✓ u001…inen done││Next: Make the test program — run harness gen-driver  │
 │      ◇ u-c…he no test││u-cache (the chat is off)                             │
 │      ◇ u-hash no test││                                                      │
-│      ◇ u-lz77 no test││5 exported functions: ZopfliCacheToSublen (22 lines), │
-│      ◇ u-tree no test││ZopfliCleanCache (5 lines), ZopfliInitCache (19       │
-│      ◇ u-b…ze no test││lines), ZopfliMaxCachedSublen (11 lines),             │
-│      ◇ u-g…er no test││ZopfliSublenToCache (32 lines)                        │
-│      ◇ u-util no test││Its C: 1 file — src/zopfli/cache.c                    │
-│      ◇ u-z…er no test││No Rust yet                                           │
-│      ◇ u-z…ib no test││5 of your features run it · still C — see Features    │
-│      · u-z…in stays C││Tries: none yet                                       │
-│  ▾ Features (7)      ││                                                      │
-│      ◉ Comp…zip holds││▸ C source (Tab to the View, then Enter)              │
-│      ◉ Comp…lib holds││                                                      │
-│      ◉ Comp…ate holds││                                                      │
+│      ◇ u-lz77 no test││This piece                                            │
+│      ◇ u-tree no test││  5 exported functions in 1 file — src/zopfli/cache.c │
+│      ◇ u-b…ze no test││                                                      │
+│      ◇ u-g…er no test││Where it stands                                       │
+│      ◇ u-util no test││  No Rust yet                                         │
+│      ◇ u-z…er no test││  5 of your features run it · still C — see Features  │
+│      ◇ u-z…ib no test││  Tries: none yet                                     │
+│      · u-z…in stays C││                                                      │
+│  ▾ Features (7)      ││Functions (5)  lines of C                             │
+│      ◉ Comp…zip holds││  ZopfliCacheToSublen   22   ZopfliMaxCachedSublen 11 │
+│      ◉ Comp…lib holds││  ZopfliCleanCache       5   ZopfliSublenToCache   32 │
+│      ◉ Comp…ate holds││  ZopfliInitCache       19                            │
 │      ◉ Say …oes holds││                                                      │
-│      ◉ Comp…kly holds││                                                      │
+│      ◉ Comp…kly holds││▸ C source (Tab to the View, then Enter)              │
 │      ◌ Show…elp all C││                                                      │
 │      ◌ Repo…ile all C││                                                      │
 │    Speed — not set up││                                                      │

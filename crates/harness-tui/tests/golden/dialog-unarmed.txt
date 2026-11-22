@@ -3,15 +3,15 @@
 │  ▾ Pieces (1)                        ││✓ u-lib done                                                                  │
 │    ▸ ✓ u-lib                     done││Next: In Rust and checked — nothing to do                                     │
 │    Features (none yet)               ││                                                                              │
-│    Speed — not set up                ││1 exported function: read_scalefactors (44 lines)                             │
-│  ▸ test_case/                    ✓1/1││Its C: 1 file — test_case/src/lib.c                                           │
-│                                      ││Its Rust: from try a-13c9 · the judge says green, up to date                  │
-│                                      ││Tries: 3 — 2 green, 1 red (listed under its row in the tree)                  │
-│                                      ││Checks  – whole program not run  ✓ same exports  ✓ allowed calls only         │
-│                     ┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐tizers +1            │
+│    Speed — not set up                ││This piece                                                                    │
+│  ▸ test_case/                    ✓1/1││  1 exported function in 1 file — test_case/src/lib.c                         │
+│                                      ││                                                                              │
+│                                      ││Where it stands                                                               │
+│                                      ││  Its Rust: from try a-13c9 · the judge says green, up to date                │
+│                     ┌ Re-check u-lib with the judge? ──────────────────────────────────────────┐tree)                │
 │                     │Builds u-lib's Rust and runs it against the C in the sandbox.             │                     │
-│                     │Writes: the judge's check of u-lib and its status in the plan; changes no │                     │
-│                     │code.                                                                     │                     │
+│                     │Writes: the judge's check of u-lib and its status in the plan; changes no │d calls only         │
+│                     │code.                                                                     │tizers +1            │
 │                     │                                                                          │                     │
 │                     │Command: /opt/ruharness/bin/harness --json verify u-lib --target=/work/rea│                     │
 │                     │d_scalefactors_lib                                                        │                     │

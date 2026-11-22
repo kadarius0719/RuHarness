@@ -4,20 +4,20 @@
 │    ▸ ✓ u001-katajainen done││Next: Make the test program — run harness gen-driver u-cache (the   │
 │      ◇ u-cache      no test││chat is off)                                                        │
 │      ◇ u-hash       no test││                                                                    │
-│      ◇ u-lz77       no test││5 exported functions: ZopfliCacheToSublen (22 lines),               │
-│      ◇ u-tree       no test││ZopfliCleanCache (5 lines), ZopfliInitCache (19 lines),             │
-│      ◇ u-bloc…ueeze no test││ZopfliMaxCachedSublen (11 lines), ZopfliSublenToCache (32 lines)    │
-│      ◇ u-gzip…ainer no test││Its C: 1 file — src/zopfli/cache.c                                  │
-│      ◇ u-util       no test││No Rust yet                                                         │
-│      ◇ u-zlib…ainer no test││5 of your features run it · still C — see Features                  │
-│      ◇ u-zopfli_lib no test││Tries: none yet                                                     │
+│      ◇ u-lz77       no test││This piece                                                          │
+│      ◇ u-tree       no test││  5 exported functions in 1 file — src/zopfli/cache.c               │
+│      ◇ u-bloc…ueeze no test││                                                                    │
+│      ◇ u-gzip…ainer no test││Where it stands                                                     │
+│      ◇ u-util       no test││  No Rust yet                                                       │
+│      ◇ u-zlib…ainer no test││  5 of your features run it · still C — see Features                │
+│      ◇ u-zopfli_lib no test││  Tries: none yet                                                   │
 │      · u-zo…_bin holds main││                                                                    │
-│  ▾ Features (7)            ││▸ C source (Tab to the View, then Enter)                            │
-│      ◉ Compres…o gzip holds││                                                                    │
-│      ◉ Compres…o zlib holds││                                                                    │
-│      ◉ Compres…eflate holds││                                                                    │
+│  ▾ Features (7)            ││Functions (5)  lines of C                                           │
+│      ◉ Compres…o gzip holds││  ZopfliCacheToSublen   22   ZopfliMaxCachedSublen 11               │
+│      ◉ Compres…o zlib holds││  ZopfliCleanCache       5   ZopfliSublenToCache   32               │
+│      ◉ Compres…eflate holds││  ZopfliInitCache       19                                          │
 │      ◉ Say wha…t does holds││                                                                    │
-│      ◉ Compres…uickly holds││                                                                    │
+│      ◉ Compres…uickly holds││▸ C source (Tab to the View, then Enter)                            │
 │      ◌ Show…elp still all C││                                                                    │
 │      ◌ Repo…ile still all C││                                                                    │
 │    Speed — not set up      ││                                                                    │
