@@ -320,6 +320,57 @@ ideas, the first two the ones that matter most to us:
   and listed with the rest kept; files a piece writes compared as output (for `lz4io.c`); the
   report's headline says how much runs in Rust, not only that nothing mismatches.
 
+## From Anthropic's Messages API port (read 2026-11-25), to take one at a time
+
+The post: https://www.anthropic.com/research/migrating-api-to-rust. They moved a live Python
+service to Rust. Writing the Rust took a week; trusting it took months. Their tests passed at
+98% while only a quarter of real requests matched, and when the model ported the tests it
+weakened more than a hundred assertions. What worked: the old system as the judge on real
+traffic, a difference record that says where (the first step to differ) and which bug (a
+fingerprint), three loops (seconds in a sandbox; real traffic; lessons kept as rules), and
+people reviewing at the seam between the loops, because a judge that rewards matching outputs
+was gamed with a shortcut that matched and was not worth shipping.
+
+What it confirms here: the judge is the product; the test program is pinned to the original C,
+graded by mutants and bound by digests, so a model cannot weaken it afterwards; a changed C file
+makes a verdict stale.
+
+What it changes, in the order to take them (each is a decision for the person first):
+
+1. **A piece's green is the inner loop only; turn the outer loop on now.** lz4 has three pieces
+   accepted on a test program a model wrote, with the whole-program check not set up and no
+   features. That is the post's "98% of tests": set up the whole-program check and the features
+   on lz4 before more pieces, from what the project already holds (its `tests/` folder and its
+   fuzz drivers under `ossfuzz/`, which the map already lists). This is also the rust-anything
+   second read's first two ideas (coverage of the original; scenarios from the project's own
+   tests): three sources now say the same thing.
+2. **Say where, not at which byte.** A red comparison reports "first diff at byte N". The test
+   program prints labelled lines, so the judge can name the first labelled line that differs
+   (the call, the function) to the model and on the card. For the whole program, when the mixed
+   build differs, put pieces back to C one at a time to find which piece.
+3. **A memory loop for the models that write the code.** Lessons go to DECISIONS, which the
+   session reads, not the model that writes a piece. A steer note lives and dies with one try. A
+   per-project rules file the person approves, read into every test-program and Rust prompt
+   (and one for the harness, shipped), would stop a second piece hitting the first piece's wall.
+4. **Review at the seam, in words a person can use.** Green then Accept asks a non-engineer to
+   trust matching outputs. Before Accept: a check on inputs the writing model never saw
+   (generated, or from the fuzz drivers), and a second model at high effort reading the Rust
+   against the C for shortcuts (special-casing the test inputs, a branch left as a stub), its
+   finding on the card in one line.
+5. **One fingerprint per failure** (check, failure class, function, first labelled line): the
+   try list can say "the same failure as try 2", and "Do it All" stops for a new kind only, not
+   for each occurrence. Small now; the base of the stop policy later.
+6. **The headline number is the match rate on real runs**, not pieces done: "the program with
+   its Rust pieces matched the original on N of M runs", beside "3 of 9".
+7. **Later, and bigger:** the post's piece-by-piece attempt lost its gain to crossings between
+   the two languages. Here every piece keeps a C seam; do not read speed off a half-moved
+   program, and plan a last stage that removes the seams once a whole program is Rust, judged by
+   the outer loop.
+
+Not taken: shadowing live traffic, privacy-shaped records and the fleet of agents with a
+coordinator. They answer a service with millions of requests a day and a team; here the program
+is a file on one machine and the reader is one person.
+
 ## "Do it All" (the person, 2026-11-17): the milestone after the lz4 run
 
 The person's shape, kept as stated: three steps. **Load the program** (Map, Configure, Accept
