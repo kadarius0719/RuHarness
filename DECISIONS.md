@@ -107,6 +107,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-11-11 — **The lz4 run's first full piece, and two cockpit finds: a stale hand-off with no way out, and a wheel burst drawn one notch per frame** — u-lz4 (49 functions) went through the whole journey; a waiting try from an older contract blocked the piece with no cockpit way out (removed by hand, an action to design); the main loop now applies a whole input burst before it draws.
 - 2026-11-19 — **A function the build does not compile is left out of its piece: the compiler has the last word when it clearly agrees with the scan** — the plan step reads what each compiled file defines from the project map; `LZ4HC_hexOut` and `BufPool_releaseBuffer` go to `not_built`; xxhash.c's renamed functions are flagged in `build_only` and nothing is left out; preprocessing the scan rejected for now.
 - 2026-11-21 — **The piece card comes in titled groups** — This piece, Where it stands, Checks, Functions (n), Helpers (n): a blank line between groups, rows indented, the function names in columns with their lines of C; the headings take the section colour, body text stays plain so colour on words still means a state.
+- 2026-11-25 — **The outer loop turned on for lz4, and a ninth wall on the way** — Anthropic's Messages API port read; the whole-program check and 15 scenarios pass on a copy with the three accepted pieces; `features map` stopped on lz4's macro-static helpers and now takes a function's identity from the facts; the scenarios run 9 of u-lz4's 49 functions, which is what the program uses.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -4695,3 +4696,51 @@ the first screen; Enter in the View still opens it.
 
 **Built** by an Opus subagent from one brief, reviewed and gated here (the cockpit's tests, the
 lints, the guide gate; the whole workspace not rerun, the change is in the view alone).
+
+## 2026-11-25 — The outer loop turned on for lz4, and a ninth wall on the way
+
+**Why now.** Anthropic's account of moving its Messages API to Rust (docs/NEXT-SESSION.md, "From
+Anthropic's Messages API port"): tests passed at 98% while a quarter of real requests matched.
+lz4 had three pieces accepted on a model-written test program each, the whole-program check off
+and no features. The person: "let's do it".
+
+**Done, on scratch copies of the person's project (theirs untouched).**
+- `[oracle.whole_program] args = ["-c"]` in the tool's harness.toml: u-lz4, u-lorem and u-timefn
+  stay green with the real program run on the three samples. No wall.
+- A features file for the lz4 program, docs/lz4-features.toml: 15 scenarios in 8 features
+  (compress a sample, the project's NEWS and random bytes; levels 9 and 12; `--fast`; block and
+  header options; the legacy format; decompress the project's skippable sample and two lz4 files
+  made from NEWS by the C program, one in small linked blocks; a file that is not lz4; a missing
+  file; the version). All pass on all three pieces. `-h` was dropped at the limit of 16.
+- The person's steps were rehearsed whole on a fresh copy: 12 to 19 seconds a step.
+
+**The ninth wall.** `features map` stopped: "lib/lz4.c: `LZ4_wildCopy8` is not in the facts —
+the facts are stale; scan again". The facts were not stale. Since 2026-10-30 the scan makes a
+function file-private by a project-wide rule (a specifier macro defined as `static`: lz4's
+`LZ4_FORCE_INLINE`); the features probe parses one file and read the same function as public,
+so its id matched nothing. Fixed in `probe_source`: a definition the facts know only under its
+file-qualified id takes that id. The facts are the authority; the rule stays in one place. Three
+tests. Nobody had run the features on lz4 before, which is the post's point about what tests
+do not reach.
+
+**What the feature map says, and it is the finding.** The 15 scenarios run 9 of u-lz4's 49
+exported functions, 6 of u-lz4hc's 34, 18 of u-lz4frame's 33, and none of u-lorem's 2 (only the
+benchmark uses it, and a benchmark prints timings, so it cannot be a check). The command-line
+program uses a small part of the library; the rest is there for other programs. So for most of
+u-lz4 the piece's own test program is still the only evidence. The way to more is the project's
+own library tests (`tests/fuzzer.c`, `tests/frametest.c`, the fuzz drivers under `ossfuzz/`) run
+against the Rust: the next idea on the list, and a design of its own (they are programs of
+their own, with their own `main`).
+
+**Left open.**
+- No cockpit action turns the whole-program check on; it is two lines in a file. A guided step
+  ("Turn on the whole-program check", asking for the flags) belongs on the journey.
+- A verify prints nothing until it ends. Twice a verify on a copy took ten minutes instead of
+  fifteen seconds while a long `cargo test -p harness-oracle` ran beside it; with nothing beside
+  it, never. Probably a lock two harness runs share. Not traced.
+- The sample text compresses 30 000 bytes to 236: it is too regular to test a compressor.
+  The project's own NEWS file stands in here; a less regular built-in sample would serve every
+  project.
+
+**Built** by an Opus subagent from one brief (the probe fix), reviewed and gated here: the
+scanner's and the oracle's tests, the lints. The whole workspace was not rerun.

@@ -13,6 +13,7 @@ built and where the truth lives now. A new document gets a row here, or it is no
 | [TUTORIAL.md](TUTORIAL.md) | current | The ideas, in order, with a friendly reference appendix |
 | [TESTING-GUIDE.md](TESTING-GUIDE.md) | current | Every feature tried by hand on liblzg, step by step (13 parts) |
 | [SCALE-RUN-LZ4.md](SCALE-RUN-LZ4.md) | current | The person's testing script for the first larger project: what to do, what to see, what it means, where to stop |
+| [lz4-features.toml](lz4-features.toml) | current | The lz4 run's features file: 15 scenarios of the real `lz4` program, proven on a copy (DECISIONS 2026-11-25); saved into the project with `harness features save` |
 | **Developers** | | |
 | [SCHEMAS.md](SCHEMAS.md) | current | The contract: every ledger file, every command, every refusal the code cites |
 | [FEATURES-DESIGN.md](FEATURES-DESIGN.md) | current | Features and scenarios; governs with SCHEMAS |

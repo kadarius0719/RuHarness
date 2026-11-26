@@ -1,0 +1,137 @@
+# The features of the lz4 command-line program: what a person does with it.
+# Every check of a piece runs each scenario on the all-C program and on the
+# program with the Rust pieces inside, and compares what a person would see.
+
+schema_version = 1
+
+[[feature]]
+id = "compress"
+name = "Compress a file"
+
+# The everyday use: the default, fast compressor.
+[[scenario]]
+feature = "compress"
+id = "text"
+args = ["-c", "{input}"]
+input = "sample:text"
+
+# A real file of the project: ordinary English text, 18 000 bytes.
+[[scenario]]
+feature = "compress"
+id = "news"
+args = ["-c", "{input}"]
+input = "NEWS"
+
+# Data that does not compress: the compressor must store it as it is.
+[[scenario]]
+feature = "compress"
+id = "random"
+args = ["-c", "{input}"]
+input = "sample:rand"
+
+[[feature]]
+id = "strong"
+name = "Compress harder (levels 9 and 12)"
+
+# Level 9 switches to the high-compression code.
+[[scenario]]
+feature = "strong"
+id = "level9"
+args = ["-9", "-c", "{input}"]
+input = "NEWS"
+
+# Level 12 is the strongest setting, a different search inside the same code.
+[[scenario]]
+feature = "strong"
+id = "level12"
+args = ["-12", "-c", "{input}"]
+input = "NEWS"
+
+[[feature]]
+id = "fast"
+name = "Compress faster, less tightly"
+
+[[scenario]]
+feature = "fast"
+id = "fast5"
+args = ["--fast=5", "-c", "{input}"]
+input = "NEWS"
+
+[[feature]]
+id = "options"
+name = "Change how the output is framed"
+
+# Small blocks that depend on each other.
+[[scenario]]
+feature = "options"
+id = "blocks"
+args = ["-B4", "-BD", "-c", "{input}"]
+input = "NEWS"
+
+# No checksum, and the original size written in the header.
+[[scenario]]
+feature = "options"
+id = "header"
+args = ["--no-frame-crc", "--content-size", "-c", "{input}"]
+input = "NEWS"
+
+[[feature]]
+id = "legacy"
+name = "Write the old lz4 format"
+
+[[scenario]]
+feature = "legacy"
+id = "text"
+args = ["-l", "-c", "{input}"]
+input = "NEWS"
+
+[[feature]]
+id = "decompress"
+name = "Decompress a file"
+
+# The only lz4 file the project ships: a frame the decoder must skip over.
+[[scenario]]
+feature = "decompress"
+id = "skippable"
+args = ["-d", "-c", "{input}"]
+input = "tests/goldenSamples/skip.bin"
+
+# An ordinary lz4 file (the project's NEWS, compressed by the C program).
+[[scenario]]
+feature = "decompress"
+id = "file"
+args = ["-d", "-c", "{input}"]
+input = "tests/goldenSamples/news.lz4"
+
+# The same text compressed hard, in small blocks that lean on each other:
+# the decoder must carry what it has read from one block to the next.
+[[scenario]]
+feature = "decompress"
+id = "linked"
+args = ["-d", "-c", "{input}"]
+input = "tests/goldenSamples/news-linked.lz4"
+
+[[feature]]
+id = "refuse"
+name = "Say so when a file is not lz4, or is not there"
+
+# A text file is not an lz4 file: testing it must fail with a message.
+[[scenario]]
+feature = "refuse"
+id = "not-lz4"
+args = ["-t", "{input}"]
+input = "sample:text"
+
+[[scenario]]
+feature = "refuse"
+id = "missing"
+args = ["-c", "nofile.txt"]
+
+[[feature]]
+id = "about"
+name = "Say what it is"
+
+[[scenario]]
+feature = "about"
+id = "version"
+args = ["-V"]

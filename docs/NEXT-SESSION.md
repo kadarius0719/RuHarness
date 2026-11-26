@@ -173,6 +173,13 @@ no spike edits. The live walk on a fresh copy moved u-checksum, u-encode and u-v
    program, the card says `LZ4HC_hexOut` was left out). The person found the piece card a wall
    of text; it now comes in titled groups (DECISIONS 2026-11-21). The file card and the function
    card can follow once the person has seen it. Still next: u-lz4hc's test program, then its Rust.
+   **2026-11-25:** the outer loop is proven on a copy (DECISIONS 2026-11-25): the whole-program
+   check and docs/lz4-features.toml's 15 scenarios pass with the three accepted pieces, after a
+   ninth wall in `features map` was fixed. The person's steps: rebuild; turn the check on in
+   t-lz4cli's harness.toml; verify u-lz4; make the two lz4 samples from NEWS; save the features
+   file; map; verify the three pieces. Then u-lz4hc as before. The map's finding to design
+   from: the program runs 9 of u-lz4's 49 functions, so the project's own library tests are the
+   next source of real use.
 6. **Then the briefing's next milestone (M5, the extension proof)**, or what the scale run shows,
    as the person decides.
 
@@ -337,7 +344,7 @@ makes a verdict stale.
 
 What it changes, in the order to take them (each is a decision for the person first):
 
-1. **A piece's green is the inner loop only; turn the outer loop on now.** lz4 has three pieces
+1. **(Done on a copy 2026-11-25; the person's steps are in item 5 of the work.)** **A piece's green is the inner loop only; turn the outer loop on now.** lz4 has three pieces
    accepted on a test program a model wrote, with the whole-program check not set up and no
    features. That is the post's "98% of tests": set up the whole-program check and the features
    on lz4 before more pieces, from what the project already holds (its `tests/` folder and its
