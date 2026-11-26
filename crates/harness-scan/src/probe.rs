@@ -56,7 +56,9 @@ type Insert = (usize, String, Option<(String, u32, usize, usize, bool)>);
 /// it). `index_of(canonical id)` is the note's number: the index of the
 /// definition's `(file, id)` pair among the facts' distinct pairs. A
 /// definition whose id `index_of` does not know is an error — the facts are
-/// stale — never a guessed number.
+/// stale — never a guessed number. A definition the facts know only by its
+/// file-qualified id takes that id, since the scan can make a function
+/// file-private by a project-wide rule one file's parse cannot see.
 pub fn probe_source(
     rel_path: &str,
     source: &[u8],
@@ -72,6 +74,17 @@ pub fn probe_source(
         .ok_or_else(|| Error::parse(rel_path, "tree-sitter parse failed"))?;
     let mut defs: Vec<FnDef> = Vec::new();
     collect_functions(tree.root_node(), source, rel_path, &mut defs);
+    // The scan decides some functions are file-private project-wide (a
+    // specifier macro every definition spells as `static`,
+    // docs/HEADER-FUNCTIONS-DESIGN.md §2), which one file's parse cannot
+    // see. So the facts' id wins: a definition read as not static that the
+    // facts know only under its file-qualified id is static here too.
+    for def in defs.iter_mut().filter(|d| !d.is_static) {
+        if index_of(&def.name).is_none() && index_of(&format!("{rel_path}::{}", def.name)).is_some()
+        {
+            def.is_static = true;
+        }
+    }
     let mut inserts: Vec<Insert> = Vec::new();
     let mut unwatched: Vec<(String, NoNote)> = Vec::new();
     for def in &defs {
@@ -1254,6 +1267,47 @@ mod tests {
         )
         .expect_err("stale facts");
         assert!(err.to_string().contains("the facts are stale"), "{err}");
+    }
+
+    /// A function made file-private by a specifier macro defined as
+    /// `static`: one file's parse reads it as public, the scan does not.
+    const STATIC_MACRO_SRC: &str = "#define MY_INLINE static inline\n\
+        MY_INLINE int helper(int x) { return x; }\n\
+        int api(void) { return helper(1); }\n";
+
+    fn note_id(p: &Probed, name: &str) -> String {
+        p.notes
+            .iter()
+            .find(|n| n.id.ends_with(name))
+            .map(|n| n.id.clone())
+            .unwrap_or_else(|| panic!("no note for {name}: {p:?}"))
+    }
+
+    #[test]
+    fn the_facts_file_qualified_id_wins_over_one_files_parse() {
+        let p = probe(STATIC_MACRO_SRC, &["src/a.c::helper", "api"]);
+        assert_eq!(note_id(&p, "helper"), "src/a.c::helper");
+        assert_eq!(note_id(&p, "api"), "api");
+        assert!(p.unwatched.is_empty(), "{p:?}");
+    }
+
+    #[test]
+    fn a_helper_known_under_neither_id_is_still_stale_facts() {
+        let known = ["api"];
+        let err = probe_source(
+            "src/a.c",
+            STATIC_MACRO_SRC.as_bytes(),
+            &ids(&known),
+            ProbeOptions::default(),
+        )
+        .expect_err("stale facts");
+        assert!(err.to_string().contains("is not in the facts"), "{err}");
+    }
+
+    #[test]
+    fn a_helper_known_under_its_bare_id_keeps_it() {
+        let p = probe(STATIC_MACRO_SRC, &["helper", "api"]);
+        assert_eq!(note_id(&p, "helper"), "helper");
     }
 
     #[test]
