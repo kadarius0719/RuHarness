@@ -461,6 +461,12 @@ Added the same day, on what a stopped run may do by itself:
   compare it).
 - A test in crates/harness-tui/src/view.rs pins a made-up "all 8 checks passed" idle line.
 
+- **While the chat answers a hand-off, the piece's card still says to answer it by hand**
+  (the person's screen, 2026-11-27, u-lz4hc): the title and state read "waiting for your answer"
+  and the Next step says "write the reply there, then run the same migrate command again", with
+  a path to a response file, while the status row says "answering turn 1 for u-lz4hc". The card
+  should say the chat is answering it and name no file. Small; one Opus task.
+
 ## Once per checkout
 
 The adoption tokens are not committed, so a fresh checkout or worktree asks once:
