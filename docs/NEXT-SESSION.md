@@ -347,6 +347,30 @@ The shape, to brief as one Opus task:
   judges the edit before it counts. Decide with the person whether a window editor may be the
   hand edit's editor too (it needs the editor's wait flag, `code -w`).
 
+## The harness inside editors, and a wider Rust tool (the person, 2026-11-27): direction, not yet work
+
+The person: Rust keeps growing; could a wrapper make this a plugin for VS Code, Zed and other
+IDEs; a harness purely about Rust that helps with migrations and optimisations, and teaches Rust
+while one works in it. What was answered, to design from when its turn comes:
+
+- **The editor-neutral layer is already here**: `harness-mcp` (eleven tools) and every command's
+  `--json` events. Editors with an agent of their own (VS Code, Zed, Cursor, Claude Code) can be
+  given the MCP server; that is the cheap first step, and it is the agent-first `harness setup`
+  the person chose to wait on (2026-11-17). Before it: the tools cover reading and the review
+  acts, not the whole journey (map, test program, features, re-check); close that first.
+- **A native extension is a second product**, one per editor: a sidebar of pieces and features,
+  C beside Rust, buttons that run the CLI. VS Code first if ever (its forks inherit it); check
+  what Zed's extensions may draw before promising anything there. Only when users ask.
+- **What generalises is the judge, not the translator.** (1) Optimise: Rust against the same
+  Rust made faster, proven to behave the same, with the speed measurement already built; no C
+  seam, so the simplest new mode. (2) Learn: the person writes a piece's Rust and the judge marks
+  it (the hand-edit path does this today); C beside Rust with "explain this". (3) Other source
+  languages: the briefing's Phase 2, the largest.
+- **Order.** Finish lz4; the line before Accept that says what the compiler cannot check
+  (u-lz4hc, 2026-11-27); "Do it All"; then MCP in editors with "Open in my editor"; then a spike
+  of the optimise mode. Packaging before the product has finished one real program would be the
+  wrong way round.
+
 ## From Anthropic's Messages API port (read 2026-11-25), to take one at a time
 
 The post: https://www.anthropic.com/research/migrating-api-to-rust. They moved a live Python
