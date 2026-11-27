@@ -327,6 +327,26 @@ ideas, the first two the ones that matter most to us:
   and listed with the rest kept; files a piece writes compared as output (for `lz4io.c`); the
   report's headline says how much runs in Rust, not only that nothing mismatches.
 
+## "Open in my editor" (the person, 2026-11-27): a small cockpit item, after u-lz4hc's result
+
+The person: some people like to work in code editors; let them open things from the cockpit in
+VS Code, Zed or whatever is installed. Today the cockpit opens an editor in two places only (the
+features and workloads files; a hand edit of a piece's Rust), through `$VISUAL`/`$EDITOR`, and
+falls back to `vi`, which a newcomer cannot leave.
+
+The shape, to brief as one Opus task:
+- One action, "Open in <editor>", on every row that is a file or sits in one: a C file, a
+  function (at its line), a piece (its C, its Rust in use, its test program), the features file.
+- The editor: `[editor] command` in cockpit.toml, else `$VISUAL`/`$EDITOR`, else the first found
+  of VS Code (`code -g file:line`), Zed (`zed file:line`) and the like on PATH or in
+  /Applications; the choice is said in the item's words. A window editor is started and left
+  (the cockpit keeps running); a terminal editor takes the screen as the hand edit does today.
+- **Reading is free; changing goes through the judge.** A changed C file already makes its
+  verdicts stale ("the C changed since — re-check"). A piece's Rust in use must not be changed
+  behind the judge: opening it says so, and "Change this Rust" stays the hand-edit path, which
+  judges the edit before it counts. Decide with the person whether a window editor may be the
+  hand edit's editor too (it needs the editor's wait flag, `code -w`).
+
 ## From Anthropic's Messages API port (read 2026-11-25), to take one at a time
 
 The post: https://www.anthropic.com/research/migrating-api-to-rust. They moved a live Python
