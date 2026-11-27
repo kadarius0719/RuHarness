@@ -384,6 +384,18 @@ What it changes, in the order to take them (each is a decision for the person fi
    (generated, or from the fuzz drivers), and a second model at high effort reading the Rust
    against the C for shortcuts (special-casing the test inputs, a branch left as a stub), its
    finding on the card in one line.
+   **First evidence, 2026-11-27 (u-lz4hc, try a-d493, green on turn 1, 23 checks, 15 scenarios):**
+   `logic.rs` holds no `unsafe`, and takes memory addresses as plain numbers (97 `usize`
+   parameters). It reaches the memory through a table of eight small functions in `ffi.rs`
+   (`view`, `out`, `ctx_mut`, …) whose signatures are safe and whose bodies turn any number into
+   a `&'static` reference: about 38 calls, mostly for the stream state that lives in the
+   caller's memory. By the letter the unsafe is at the boundary; in fact the compiler protects
+   none of those accesses. The judge says nothing of it; the chat's own closing note did. Much of
+   it is the price of keeping lz4's C interface (item 7), but the card should say it before
+   Accept, counted by a deterministic read of the crate (unsafe blocks in `ffi.rs`; safe
+   functions there that hand out references made from numbers; calls to them from the logic),
+   and the contract should say when such a helper is allowed. u-lz4's accepted Rust has no such
+   table (49 `unsafe` in a 513-line `ffi.rs`): read it the same way before designing.
 5. **One fingerprint per failure** (check, failure class, function, first labelled line): the
    try list can say "the same failure as try 2", and "Do it All" stops for a new kind only, not
    for each occurrence. Small now; the base of the stop policy later.
