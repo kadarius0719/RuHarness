@@ -331,6 +331,42 @@ ideas, the first two the ones that matter most to us:
   and listed with the rest kept; files a piece writes compared as output (for `lz4io.c`); the
   report's headline says how much runs in Rust, not only that nothing mismatches.
 
+## Guards while a question is open (the person, 2026-11-27): being built, in two tasks
+
+The person, after being told what to avoid while the chat answers: "we need to put guards in
+place, if we haven't already, to stop a user from breaking things." What exists: one command at
+a time (the others greyed), the ledger's writer lock, the chat's next step queued behind the
+person's command, a Re-check only of code the harness knows, a verdict stale when the C changes.
+Nothing is silently corrupted; what can happen is lost model work and a piece left "waiting"
+with no way out in the cockpit (the eighth wall, 2026-11-11).
+
+**Task 1, the guards (cockpit).** A piece has a *question open* when a try of it is in progress
+with a request and no response.
+- While any question is open: the acts that change what a question is posed against are greyed
+  with the reason and the way out. Scan and Refresh the plan for certain; the builder decides the
+  rest by reading what the prompt's digest covers (Detect, the project's Map and Accept). Words:
+  "u-lz4frame has a question open (the chat is answering it) — this would leave its answer
+  without a home; wait, or stop the chat (Esc in the chat)", and for one nobody is answering,
+  "answer it, or drop the waiting try".
+- While the chat is answering a piece: every act on that same piece that starts a command is
+  greyed ("the chat is answering this piece's question — wait, or Esc in the chat stops it").
+  A piece waiting for the person keeps today's menu (Continue, answer in chat).
+- Quit, New chat and closing the chat while it answers: the confirm says what is lost ("The chat
+  is answering u-lz4frame's question, 4 min so far; this stops it and the question stays open"),
+  the safe choice first.
+- Allowed, on purpose: Re-check and Accept of *other* pieces (an accept changes the program the
+  open try will be judged on, which is the judge's normal case), reading anything, editing the
+  features file (it changes what an answer is judged on, not the question; an earlier "avoid"
+  said to the person was too strong).
+
+**Task 2, the way out: "Drop the waiting try".** Designed 2026-11-11 (item 5 above, the eighth
+wall), never built: on a piece whose question is open and that nobody is answering, remove the
+in-progress try and its unanswered request after a confirm, through a harness command (the
+cockpit writes nothing itself); and read "waiting" from the try's record, not from "newest
+request without a response". Every refusal of task 1 then has its way out.
+
+**Later.** The same warning from the command line (`harness scan`/`plan` with a question open).
+
 ## "Open in my editor" (the person, 2026-11-27): a small cockpit item, after u-lz4hc's result
 
 The person: some people like to work in code editors; let them open things from the cockpit in
@@ -507,6 +543,12 @@ Added the same day, on what a stopped run may do by itself:
   (`App::chat_answering`, `UnitState::ChatAnswering`). Not seen on a real run yet. Left: when
   the chat's answer sits in the review dialog the piece says "waiting for your answer", where
   "review the chat's answer" would be exact.
+
+- **A possible defect in lz4's own C, found by the chat while writing u-lz4frame's test program
+  (2026-11-27, unverified):** when an allocation fails inside `LZ4F_compressBegin` (custom
+  allocator), the C leaves its internal context NULL and the next `compressBegin` on the same
+  context dereferences it. The test program now stops using a context after a failed begin
+  (match, not right). To check against lz4's source and, if real, report upstream.
 
 ## Once per checkout
 
