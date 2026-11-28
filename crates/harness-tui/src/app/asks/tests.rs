@@ -656,9 +656,11 @@ fn continue_needs_the_key_held_and_read() {
         Mode::Dialog(_) => {}
         other => panic!("no dialog: {other:?}"),
     }
-    // The tree's word.
+    // The tree's word: the chat's answer waits in the person's dialog, so
+    // the try is the person's to act on, not the chat's.
     let (_, word) = a.node_label(&Selection::Attempt("u-lib".into(), RED.into()));
-    assert!(word.starts_with("waiting for the chat"), "{word}");
+    assert!(word.starts_with("waiting for your answer"), "{word}");
+    assert!(!a.chat_answering("u-lib"), "a request waits for the person");
 }
 
 /// Mutation-checked rules (§3.4): the continuation permission — granted by

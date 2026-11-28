@@ -3904,7 +3904,7 @@ Press one key at a time, and check the screen after each:
 
 1. Wait one second, then press `Enter`. **You should see** the review dialog `The chat asks: Migrate u-version?`, laid out as in Step 4.6.
 2. When the dialog says `ready`, press `→` and then `Enter` (the two-key confirm of Step 4.7). **You should see** the dialog close and the line under the panes change to ``Turn 1: asking the model (`<model>`) for a translation``.
-3. Press nothing until the run is over. **You should see** the messages of Step 4.8 pass under the panes.
+3. Press nothing until the run is over. **You should see** the messages of Step 4.8 pass under the panes. While the chat answers the run's question, `u-version` reads `⚑ u-version the chat is answering` and its Next step `The chat is answering — nothing to do; Esc in the chat stops it`: nothing is yours to do.
 
 **You should see**, when the run is over, in the chat:
 

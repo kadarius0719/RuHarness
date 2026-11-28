@@ -1397,8 +1397,12 @@ fn unit_record(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
         Some(a) => {
             let r = &a.record;
             // In words a person follows (fix pass, item 10).
+            let chat = r.outcome == "in-progress"
+                && app.asks.table.contains_key(&r.id)
+                && app.chat_answering(&unit.unit.id);
             let outcome = match r.outcome.as_str() {
                 "in-progress" if app.running => "running".to_string(),
+                "in-progress" if chat => "the chat is answering".to_string(),
                 "in-progress" => "waiting for your answer".to_string(),
                 other => other.to_string(),
             };
@@ -1413,7 +1417,11 @@ fn unit_record(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> {
                 &format!(
                     "A try is one go at this piece's Rust; {}: {}.",
                     r.outcome,
-                    outcome_gloss(&r.outcome)
+                    if chat {
+                        "it stopped at a question the chat is answering"
+                    } else {
+                        outcome_gloss(&r.outcome)
+                    }
                 ),
                 width,
                 notice(),
@@ -4550,7 +4558,11 @@ const HELP_LEGEND: &[(&str, &str)] = &[
         "Rust green — accept it: a try passed every check and waits for you",
     ),
     ("◐", "Rust tried: tries exist, none green"),
-    ("⚑", "waiting for your answer: a try stopped at a question for a model"),
+    (
+        "⚑",
+        "waiting for your answer: a try stopped at a question for a model (the chat is \
+         answering: the chat answers it now, nothing to do)",
+    ),
     ("◈", "test program ready: its Rust is next"),
     (
         "◇",
@@ -5770,6 +5782,9 @@ fn apart(r: Rect, left: bool, right: bool) -> Rect {
 /// Draw the whole cockpit, recording the layout and the clickable regions.
 pub fn draw(frame: &mut Frame, app: &mut App) {
     theme::set(app.palette);
+    // The chat's turn moves without a read: every place that names a
+    // waiting piece says the chat answers it, from this frame on.
+    app.sync_chat_answering();
     app.hits.clear();
     let area = frame.area();
     app.layout.frame = area;
@@ -11991,6 +12006,126 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
             .join(if driver { "driver-traces" } else { "traces" });
         std::fs::create_dir_all(&traces).unwrap();
         std::fs::write(traces.join("0badf00d.request.json"), "{}").unwrap();
+    }
+
+    /// The screens of the person's run (u-lz4frame, both kinds of try):
+    /// while the cockpit's chat answers a piece's open hand-off, every
+    /// place that names the piece says the chat is answering — the tree
+    /// row, the View's title, the state line, the Next step, the hint line
+    /// and the chat's About line — and the View names no answer file and no
+    /// command; once the chat's turn is over (or a Stop is ending it), the
+    /// question is the person's again and today's words come back.
+    #[test]
+    fn a_piece_the_chat_answers_says_so_everywhere() {
+        for (driver, id) in [(false, "a-0000000000c1"), (true, "d-0000000000c1")] {
+            let tag = if driver {
+                "chat-answers-d"
+            } else {
+                "chat-answers-a"
+            };
+            let tmp = crate::testutil::TmpDir::new(tag);
+            let mut app = app_of("targets/zopfli", tag);
+            waiting_try(&app, "u-cache", id, driver);
+            assert!(app.reload(true));
+            app.chat_on = true;
+            app.chat_column = true;
+            app.chat.test_live(&tmp.0, "claude-opus-5-5");
+            let gen = app.chat.gen;
+            app.asks.table.insert(
+                id.into(),
+                crate::app::asks::HandOff {
+                    key: "0badf00d".into(),
+                    gen,
+                    act: "Make u-cache's test program".into(),
+                    turn: Some(1),
+                    unit: "u-cache".into(),
+                },
+            );
+            app.select(Selection::Unit("u-cache".into()));
+            let kind = if driver { "test program" } else { "Rust" };
+            // The chat is in its turn: the chat's words, everywhere.
+            assert!(app.chat_answering("u-cache"), "{kind}");
+            let screen = text(&render(&mut app, 200, 50));
+            for want in [
+                "⚑ u-cache",
+                "u-cache · the chat is answering",
+                "⚑ u-cache the chat is answering",
+                "Next: The chat is answering — nothing to do; Esc in the chat stops it",
+                "the chat is answering its question.",
+                "About: the piece u-cache (the chat is answering)",
+            ] {
+                assert!(screen.contains(want), "{kind}: {want}:\n{screen}");
+            }
+            assert!(
+                !screen.contains("waiting for your answer"),
+                "{kind}:\n{screen}"
+            );
+            // The View alone (the chat's own column folded: its greeting
+            // names "migrate this" as an example).
+            app.chat_column = false;
+            let alone = text(&render(&mut app, 200, 50));
+            app.chat_column = true;
+            assert!(!alone.contains("Chat —"), "{kind}:\n{alone}");
+            let view = app.pane_next(&app.selection).unwrap().text;
+            for never in [".response.json", "gen-driver", "migrate"] {
+                assert!(!view.contains(never), "{kind}: {never}: {view}");
+                assert!(!alone.contains(never), "{kind}: {never}:\n{alone}");
+            }
+            // The project's Next step never sends the person to it, nor to
+            // a new try beside it.
+            let root = app.next_step().unwrap().text;
+            assert!(
+                root.starts_with("the chat is answering u-cache's question — nothing to do"),
+                "{kind}: {root}"
+            );
+            // The try's own row says the same (a test program's try has no
+            // row of its own in the tree).
+            let (_, word) = app.node_label(&Selection::Attempt("u-cache".into(), id.into()));
+            if !driver {
+                assert!(word.starts_with("the chat is answering"), "{word}");
+            }
+            // A Stop on its way: no longer the chat's to promise.
+            app.chat.stop();
+            assert!(!app.chat_answering("u-cache"), "{kind}: stopping");
+            // The turn over, the question still open: the person's again,
+            // with today's words.
+            app.chat.turn = false;
+            assert!(!app.chat_answering("u-cache"), "{kind}: turn over");
+            let screen = text(&render(&mut app, 200, 50));
+            assert!(
+                !screen.contains("the chat is answering"),
+                "{kind}:\n{screen}"
+            );
+            assert!(
+                screen.contains("⚑ u-cache waiting for your answer"),
+                "{kind}:\n{screen}"
+            );
+            assert!(
+                screen.contains("a try stopped to wait for your answer."),
+                "{kind}:\n{screen}"
+            );
+            assert!(
+                screen.contains("About: the piece u-cache (waiting for your answer)"),
+                "{kind}:\n{screen}"
+            );
+            let next = app.pane_next(&app.selection).unwrap().text;
+            let command = if driver { "gen-driver" } else { "migrate" };
+            assert!(
+                next.starts_with("waiting for your answer: ")
+                    && next.contains("0badf00d.response.json")
+                    && next.ends_with(&format!("then run the same {command} command again")),
+                "{kind}: {next}"
+            );
+            let (_, word) = app.node_label(&Selection::Attempt("u-cache".into(), id.into()));
+            if !driver {
+                assert!(word.starts_with("waiting for your answer"), "{word}");
+            }
+            let root = app.next_step().unwrap().text;
+            assert!(
+                root.starts_with("u-cache waits for your answer"),
+                "{kind}: {root}"
+            );
+        }
     }
 
     /// The whole-journey check, item 7: a test program waiting for its

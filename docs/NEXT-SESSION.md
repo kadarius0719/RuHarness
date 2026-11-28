@@ -501,11 +501,12 @@ Added the same day, on what a stopped run may do by itself:
   compare it).
 - A test in crates/harness-tui/src/view.rs pins a made-up "all 8 checks passed" idle line.
 
-- **While the chat answers a hand-off, the piece's card still says to answer it by hand**
-  (the person's screen, 2026-11-27, u-lz4hc): the title and state read "waiting for your answer"
-  and the Next step says "write the reply there, then run the same migrate command again", with
-  a path to a response file, while the status row says "answering turn 1 for u-lz4hc". The card
-  should say the chat is answering it and name no file. Small; one Opus task.
+- **Fixed 2026-11-27 (it cost the person a real question on u-lz4frame): while the chat answers a
+  hand-off, the piece says "the chat is answering"** on its row, title, card, Next step, hint and
+  About line, and names no file or command; the old words return when the chat's turn is over
+  (`App::chat_answering`, `UnitState::ChatAnswering`). Not seen on a real run yet. Left: when
+  the chat's answer sits in the review dialog the piece says "waiting for your answer", where
+  "review the chat's answer" would be exact.
 
 ## Once per checkout
 

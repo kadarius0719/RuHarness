@@ -345,6 +345,12 @@ pub enum UnitState {
     /// stopped at a hand-off (a run of the command line's, or the
     /// cockpit's).
     Waiting,
+    /// `⚑ the chat is answering`: a [`UnitState::Waiting`] piece whose open
+    /// hand-off the cockpit's chat is answering right now — nothing for the
+    /// person to do. Never made by [`unit_state`] (it reads the ledger
+    /// only): the app sets it over `Waiting` from the chat's state
+    /// (`App::chat_answering`) and back when the chat's turn ends.
+    ChatAnswering,
     /// `· holds main`: pending, the piece defines the program's `main`
     /// (its plan symbols name it) — it stays C in this version, its test
     /// program would have to replace `main` (docs/BEYOND-LEAVES-DESIGN.md
@@ -376,7 +382,7 @@ impl UnitState {
             UnitState::Migrated(_) | UnitState::OriginUnknown => "✓",
             UnitState::RustGreen => "✓?",
             UnitState::RustTried => "◐",
-            UnitState::Waiting => "⚑",
+            UnitState::Waiting | UnitState::ChatAnswering => "⚑",
             UnitState::HoldsMain => "·",
             UnitState::TestProgramReady => "◈",
             UnitState::TestProgramStale | UnitState::NoTestProgram => "◇",
@@ -397,6 +403,7 @@ impl UnitState {
             UnitState::Migrated(Origin::Human) => "done (by hand)".into(),
             UnitState::OriginUnknown => "done".into(),
             UnitState::Waiting => "waiting for your answer".into(),
+            UnitState::ChatAnswering => "the chat is answering".into(),
             // Why it stays C is said on its card and in the greyed items,
             // not in the row (the row stays short).
             UnitState::HoldsMain => "holds main".into(),
@@ -422,6 +429,7 @@ impl UnitState {
             UnitState::Attention(_) => "attention".into(),
             UnitState::Migrated(_) | UnitState::OriginUnknown => "done".into(),
             UnitState::Waiting => "waiting".into(),
+            UnitState::ChatAnswering => "in chat".into(),
             // Its whole word, "holds main", does not fit beside six
             // letters of its name; what it means does.
             UnitState::HoldsMain => "stays C".into(),

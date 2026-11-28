@@ -11,6 +11,12 @@ use crate::files::{Cause, FileState, UnitState};
 use crate::menu::Action;
 use crate::tree::Selection;
 
+/// The Next step of a piece (or its try) whose question the cockpit's chat
+/// is answering right now ([`App::chat_answering`]): nothing to do, and the
+/// chat's key that stops its turn (`Esc`, while the chat has the keys).
+pub const CHAT_ANSWERING_NEXT: &str = "the chat is answering — nothing to do; Esc in the chat \
+                                       stops it";
+
 /// What to do now, in words, and the menu item that does it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Advice {
@@ -137,7 +143,7 @@ impl App {
             ),
             // Why is the line above it on the card.
             UnitState::HoldsMain => advice("nothing to do on it in this version", None),
-            UnitState::Waiting => self.waiting_advice(unit),
+            UnitState::Waiting | UnitState::ChatAnswering => self.waiting_advice(unit),
             UnitState::RustGreen
             | UnitState::RustTried
             | UnitState::TestProgramReady
@@ -279,12 +285,17 @@ impl App {
         found.into_iter().max().map(|(_, p)| p)
     }
 
-    /// A waiting piece's Next step — its row, its tries' rows and their
+    /// A waiting piece's Next step (while the chat answers it, that it
+    /// does and how to stop it) — its row, its tries' rows and their
     /// cards say the same (the whole-journey check, items 6 and 7): a try of
     /// this session's is resumed; one the command line left names its
     /// answer file and the command to run again (`gen-driver` for a test
     /// program's, `migrate` for its Rust's).
     pub fn waiting_advice(&self, unit: &crate::model::UnitView) -> Advice {
+        // The chat answers it now: nothing is the person's, no file named.
+        if self.chat_answering(&unit.unit.id) {
+            return advice(CHAT_ANSWERING_NEXT, None);
+        }
         let ours = |id: &str| {
             unit.attempts.iter().any(|a| a.record.id == id)
                 || unit.driver_attempts.iter().any(|a| a.id == id)

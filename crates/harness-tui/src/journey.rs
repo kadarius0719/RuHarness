@@ -235,8 +235,11 @@ pub fn unit_stage(unit: &UnitView, state: &UnitState) -> Option<usize> {
         UnitState::RustGreen => 8,
         UnitState::NoTestProgram | UnitState::TestProgramStale => 6,
         // A test program's try that waits is still at the test program.
-        UnitState::Waiting if crate::files::driver_waiting(unit) => 6,
-        UnitState::TestProgramReady | UnitState::RustTried | UnitState::Waiting => 7,
+        UnitState::Waiting | UnitState::ChatAnswering if crate::files::driver_waiting(unit) => 6,
+        UnitState::TestProgramReady
+        | UnitState::RustTried
+        | UnitState::Waiting
+        | UnitState::ChatAnswering => 7,
         // A verdict to make again, or one that went red: the stage the unit
         // was in, from what it holds.
         _ if verified => 8,

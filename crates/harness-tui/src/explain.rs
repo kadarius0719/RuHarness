@@ -676,6 +676,7 @@ fn unit_state_clause(s: &UnitState) -> String {
             "its Rust is done and passed the judge's check".into()
         }
         UnitState::Waiting => "a try stopped to wait for your answer".into(),
+        UnitState::ChatAnswering => "the chat is answering its question".into(),
         UnitState::HoldsMain => "it holds main — stays C in this version".into(),
         UnitState::RustGreen => "a try passed every check and waits for your Accept".into(),
         UnitState::RustTried => "a model tried its Rust; no try has passed every check".into(),

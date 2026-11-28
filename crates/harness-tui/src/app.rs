@@ -1521,6 +1521,7 @@ impl App {
         self.migrate_model = read.migrate_model;
         self.migrate_turns = read.migrate_turns;
         self.files = files::build(&self.snapshot, &self.walk);
+        self.sync_chat_answering();
         self.features = featmap::build(
             &self.snapshot,
             &self.files,
@@ -4553,6 +4554,14 @@ impl App {
                 Some(Action::OpenUnit(id.to_string())),
             );
         }
+        // One the chat answers now is not the person's, but no new try
+        // starts beside it either: said, with the way to look.
+        if let Some((id, _)) = states.iter().find(|(_, s)| **s == UnitState::ChatAnswering) {
+            return say(
+                format!("the chat is answering {id}'s question — nothing to do; Esc in the chat stops it"),
+                Some(Action::OpenUnit(id.to_string())),
+            );
+        }
         let movable = |(_, s): &&(&str, &UnitState)| no_rust(s);
         // The one count about moving: the pieces that can move are the
         // denominator (the whole-journey check, item 4).
@@ -6204,10 +6213,16 @@ impl App {
                     if waiting {
                         word = "waiting for your answer".into();
                     }
+                    // The chat's own try: the chat's while it answers, the
+                    // person's again once its turn is over.
                     if at.record.outcome == "in-progress"
                         && self.asks.table.contains_key(a.as_str())
                     {
-                        word = "waiting for the chat".into();
+                        word = if self.chat_answering(u) {
+                            "the chat is answering".into()
+                        } else {
+                            "waiting for your answer".into()
+                        };
                     }
                     let tags = attempt_tags(unit, at);
                     if !tags.is_empty() {
@@ -6404,6 +6419,48 @@ pub fn awaiting_file(lines: &[RunLine]) -> Option<String> {
 }
 
 impl App {
+    /// The one fact every place that names a waiting piece reads: the
+    /// piece `unit`'s open hand-off is being answered by the cockpit's chat
+    /// right now, so nothing is the person's to do.
+    ///
+    /// Read from the chat's state: the chat hand-off table
+    /// ([`asks::Asks::table`]) holds a try of this piece, posed by the live
+    /// chat's generation, and that chat is in a turn (`chat.turn`) that no
+    /// Stop is ending, with no request of the chat's waiting for the
+    /// person's review. A turn that ended (or was stopped) with the
+    /// question still open, a chat that ended, and a try the command line
+    /// started are all the person's again: false — the safe side.
+    pub fn chat_answering(&self, unit: &str) -> bool {
+        self.chat_on
+            && self.chat.alive()
+            && self.chat.turn
+            && !self.chat.stopping()
+            && self.asks.requests.is_empty()
+            && self
+                .asks
+                .table
+                .values()
+                .any(|h| h.unit == unit && h.gen == self.chat.gen)
+    }
+
+    /// Set each waiting piece's state from [`App::chat_answering`]:
+    /// `Waiting` becomes `ChatAnswering` while the chat answers it, and
+    /// back once it does not (the ledger's read only ever says `Waiting`).
+    /// Run after every read and before every frame.
+    pub fn sync_chat_answering(&mut self) {
+        for (u, unit) in self.snapshot.units.iter().enumerate() {
+            let answering = self.chat_answering(&unit.unit.id);
+            let Some(info) = self.files.units.get_mut(u) else {
+                continue;
+            };
+            match info.state {
+                UnitState::Waiting if answering => info.state = UnitState::ChatAnswering,
+                UnitState::ChatAnswering if !answering => info.state = UnitState::Waiting,
+                _ => {}
+            }
+        }
+    }
+
     /// The project is in a git checkout (its folder or one above holds
     /// `.git`): a `git diff` is a way to look at a change.
     pub fn in_git(&self) -> bool {

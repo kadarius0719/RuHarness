@@ -465,7 +465,7 @@ In the chat, letters are text. `Enter` sends (or, on an empty input, reviews a w
 | `✓` | done: its Rust is accepted and checked (steered / by hand when a note or an edit made it; the card says when the cockpit does not know which try made it) |
 | `✓?` | Rust green — accept it: a try passed every check and waits for you |
 | `◐` | Rust tried: tries exist, none green |
-| `⚑` | waiting for your answer: a try stopped at a question for a model |
+| `⚑` | waiting for your answer: a try stopped at a question for a model (the chat is answering: the chat answers it now, nothing to do) |
 | `◈` | test program ready: its Rust is next |
 | `◇` | no test program (or out of date): make its test program first |
 | `·` | holds main: the piece with the program's `main()` stays C in this version; also a header |
