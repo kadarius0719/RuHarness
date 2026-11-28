@@ -2168,11 +2168,18 @@ fn function_name(def: tree_sitter::Node, src: &[u8]) -> Option<String> {
                     continue;
                 }
                 // A parenthesized name stays unread (the hidden-variant check).
-                return if decl.kind() == "identifier" {
-                    Some(text(decl, src).to_string())
-                } else {
-                    None
-                };
+                if decl.kind() != "identifier" {
+                    return None;
+                }
+                // A typedef'd return type after a macro, and a space before
+                // the parameters (xxhash.c, the lz4 run of 2026-11-27:
+                // `XXH_PUBLIC_API XXH_errorcode XXH32_update (…)`): the
+                // parser takes the return type for the name and folds the
+                // real name into a parse error right before the parameters.
+                return Some(
+                    name_before_parameters(node, decl, src)
+                        .unwrap_or_else(|| text(decl, src).to_string()),
+                );
             }
             "pointer_declarator" | "parenthesized_declarator" | "attributed_declarator" => {
                 let next = match node.child_by_field_name("declarator") {
@@ -2188,6 +2195,39 @@ fn function_name(def: tree_sitter::Node, src: &[u8]) -> Option<String> {
             _ => return None,
         }
     }
+}
+
+/// The real name of a function whose declarator `function` (a function
+/// declarator) holds, between its identifier `decl` and its parameter list,
+/// one parse error that is a single identifier: `TYPE name (params)` with a
+/// typedef'd `TYPE` after a macro, which the parser reads as `TYPE` named,
+/// then a stray `name`. `None` for every other shape.
+fn name_before_parameters(
+    function: tree_sitter::Node,
+    decl: tree_sitter::Node,
+    src: &[u8],
+) -> Option<String> {
+    let parameters = function.child_by_field_name("parameters")?;
+    let mut cursor = function.walk();
+    let between: Vec<tree_sitter::Node> = function
+        .children(&mut cursor)
+        .filter(|n| n.start_byte() >= decl.end_byte() && n.end_byte() <= parameters.start_byte())
+        .filter(|n| n.kind() != "comment")
+        .collect();
+    let [error] = between.as_slice() else {
+        return None;
+    };
+    if !error.is_error() {
+        return None;
+    }
+    let mut c = error.walk();
+    let inside: Vec<tree_sitter::Node> = error.named_children(&mut c).collect();
+    let [name] = inside.as_slice() else {
+        return None;
+    };
+    let word = text(*name, src);
+    (name.kind() == "identifier" && text(*error, src).trim() == word && !C_KEYWORDS.contains(&word))
+        .then(|| word.to_string())
 }
 
 /// Collect names appearing as direct (identifier) callees below `node`,
@@ -3547,5 +3587,48 @@ mod tests {
             );
         }
         assert!(fresh(&ctx, &facts));
+    }
+
+    /// xxhash.c's two `_update` heads (the lz4 run of 2026-11-27): a
+    /// typedef'd return type after a macro, then a space before the
+    /// parameters. The parser took `XXH_errorcode` for the name, so the facts
+    /// held one function by that name and neither `XXH32_update` nor
+    /// `XXH64_update`. The same head without the space was always read right.
+    #[test]
+    fn a_typedefd_return_type_before_a_spaced_head_is_not_the_name() {
+        let t = TempTarget::new("spaced-head", "[]");
+        t.write(
+            "src/xxhash.c",
+            "#define XXH_PUBLIC_API\ntypedef enum { XXH_OK=0, XXH_ERROR } XXH_errorcode;\n\
+             typedef struct s32 XXH32_state_t;\ntypedef struct s64 XXH64_state_t;\n\
+             XXH_PUBLIC_API XXH_errorcode XXH32_reset(XXH32_state_t* statePtr, unsigned int seed)\n\
+             {\n    return XXH_OK;\n}\n\n\
+             XXH_PUBLIC_API XXH_errorcode XXH32_update (XXH32_state_t* state_in, const void* input, size_t len)\n\
+             {\n    return XXH32_reset(state_in, 0);\n}\n\n\
+             XXH_PUBLIC_API XXH_errorcode XXH64_update (XXH64_state_t* state_in, const void* input, size_t len)\n\
+             {\n    return XXH_OK;\n}\n",
+        );
+        let target = TargetContext::load(&t.0).expect("target loads");
+        let (facts, _) = CFrontend.scan_reporting(&target).expect("scan");
+        let names: Vec<&str> = facts.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["XXH32_reset", "XXH32_update", "XXH64_update"]);
+        let update = facts
+            .symbols
+            .iter()
+            .find(|s| s.name == "XXH32_update")
+            .expect("XXH32_update");
+        assert_eq!(update.visibility, "public");
+        assert_eq!(
+            update.signature,
+            "XXH_PUBLIC_API XXH_errorcode XXH32_update (XXH32_state_t* state_in, const void* \
+             input, size_t len)"
+        );
+        assert!(facts
+            .refs
+            .iter()
+            .any(|r| r.from == "XXH32_update" && r.to == "XXH32_reset" && r.resolved));
+        // The shape in general: the word right before the parameters names it.
+        let ff = file_facts(b"int A B (void) { return 0; }\n").expect("parses");
+        assert_eq!(ff.functions, ["B"]);
     }
 }
