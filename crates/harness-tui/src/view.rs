@@ -6061,6 +6061,8 @@ pub(crate) mod tests {
     mod log_waits;
     /// The Project view (pass 3 of the 2026-10-18 critique).
     mod project;
+    /// The guards while a question is open (2026-11-27).
+    mod question_guards;
     use crate::app::{Act, Command, Purpose, RunLine, RunPanel};
     use crate::files::{Cause, FileInfo, FunctionInfo, Origin};
     use crate::narrate::Narrator;

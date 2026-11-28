@@ -755,6 +755,16 @@ Focus order: Files → View → Chat → Files. In the chat, letters are text.
   "Quit? The chat's conversation is not kept." (Stay / Quit); while a command runs, the wrapper's
   three-button Quit dialog with that line added. New chat asks the same way ("Start a new chat?
   The chat forgets this conversation.").
+  *2026-11-27, while the chat answers a piece's question* (`App::chat_answering`): the words say
+  what is lost and the safe button keeps it running. Quit: "Quit while the chat is answering?" —
+  "The chat is answering u-lz4frame's question (4 min so far). Quitting stops it and its work so
+  far is lost; the question stays open." (Keep it running / Quit anyway; while a command runs,
+  that sentence replaces the conversation line of the three-button dialog). New chat: "Start a new
+  chat while this one is answering?" (Keep it running / Start a new chat anyway). Leaving for
+  another screen (Open tool, Back to the project view), which ends the chat: "Close the chat while
+  it is answering?" (Keep it running / Close it and go on). The column's `[×]` only folds the
+  column — the chat answers on, nothing is lost — and asks nothing. An idle or merely talking
+  chat keeps the words above.
 - Text keys in the chat do not clear notices.
 - The activity row names the keys that work in the focused pane: in the chat `[Cancel Ctrl-X]`;
   clicked in the chat, `[Details]` opens the details and `[Try again]` its dialog directly (no

@@ -2503,6 +2503,10 @@ impl App {
         if self.running {
             return Err("a command is running (x cancels it)".into());
         }
+        // A question open (`confirm_gate` applies the same guard again).
+        if let Some(why) = self.question_guard(act, unit, false) {
+            return Err(why);
+        }
         self.act_argv_unchecked(act, unit, attempt, note)
     }
 
@@ -2805,6 +2809,9 @@ impl App {
         }
         self.harness_argv(&[])?;
         let unit = self.unit_view().ok_or("no piece")?;
+        if self.chat_answering(&unit.unit.id) {
+            return Err(crate::menu::CHAT_ANSWERS_PIECE.into());
+        }
         let dir = self
             .shown_crate()
             .ok_or("nothing to edit: the crate does not exist")?;
@@ -3455,6 +3462,14 @@ impl App {
                 };
                 (kind, title, body)
             }
+            // The chat answers a piece's question: quitting loses its work.
+            Purpose::Quit if !self.running && self.chat_answering_now().is_some() => (
+                Kind::QuitIdle,
+                "Quit while the chat is answering?".into(),
+                self.chat_answering_body("Quitting stops it")
+                    .into_iter()
+                    .collect(),
+            ),
             // Nothing running: a click, or a conversation to lose, asks.
             Purpose::Quit if !self.running => (
                 Kind::QuitIdle,
@@ -3477,16 +3492,40 @@ impl App {
                     "Quit, let it finish: it runs on to its end on its own.".into(),
                     "Stop it and quit: it is interrupted (SIGINT) first.".into(),
                 ];
-                if self.chat.has_conversation() {
+                if let Some(lost) = self.chat_answering_body("Quitting stops it") {
+                    body.push(lost);
+                } else if self.chat.has_conversation() {
                     body.push("The chat's conversation is not kept.".into());
                 }
                 body
             }),
-            Purpose::NewChat => (
-                Kind::NewChat,
-                "Start a new chat?".into(),
-                vec!["The chat forgets this conversation.".into()],
-            ),
+            Purpose::NewChat => match self.chat_answering_body("A new chat stops it") {
+                Some(lost) => (
+                    Kind::NewChat,
+                    "Start a new chat while this one is answering?".into(),
+                    vec![lost],
+                ),
+                None => (
+                    Kind::NewChat,
+                    "Start a new chat?".into(),
+                    vec!["The chat forgets this conversation.".into()],
+                ),
+            },
+            // Leaving for another screen ends the chat: while it answers, the
+            // confirm is the chat's closing.
+            Purpose::Switch(action) if self.chat_answering_now().is_some() => {
+                let there = match action {
+                    Action::OpenTool(id) => format!("Opening tool {id}"),
+                    _ => "Going back to the project view".into(),
+                };
+                (
+                    Kind::Switch,
+                    "Close the chat while it is answering?".into(),
+                    self.chat_answering_body(&format!("{there} closes the chat, which stops it"))
+                        .into_iter()
+                        .collect(),
+                )
+            }
             Purpose::Switch(action) => {
                 let (title, there) = match action {
                     Action::OpenTool(id) => (format!("Open tool {id}?"), "the tool"),
@@ -3532,6 +3571,20 @@ impl App {
         {
             if let Some(b) = dialog.buttons.get_mut(1) {
                 b.label = "Accept".into();
+            }
+        }
+        // A confirm that would stop the chat while it answers: the safe
+        // button keeps it running, the other says it goes on anyway.
+        let anyway = match &purpose {
+            Purpose::Quit if !self.running => Some("Quit anyway"),
+            Purpose::NewChat => Some("Start a new chat anyway"),
+            Purpose::Switch(_) => Some("Close it and go on"),
+            _ => None,
+        };
+        if let Some(anyway) = anyway.filter(|_| self.chat_answering_now().is_some()) {
+            if let [safe, go, ..] = dialog.buttons.as_mut_slice() {
+                safe.label = "Keep it running".into();
+                go.label = anyway.into();
             }
         }
         // The walk-through opens from the chat too, and its Check again
@@ -3603,6 +3656,13 @@ impl App {
             return Err("a command is running (one at a time)".into());
         }
         if let Some(why) = self.busy() {
+            return Err(why);
+        }
+        // Every act's start comes through here (the menu, a key, a Next
+        // step, a dialog opened earlier, the chat's reviewed requests; the
+        // chat's permitted Continue is the answer itself): a question open
+        // refuses again, on the state as it is now.
+        if let Some(why) = self.question_guard(p.act, p.unit.as_deref(), p.chat.is_some()) {
             return Err(why);
         }
         let target = self.config.target.clone();
@@ -6638,6 +6698,44 @@ impl App {
                 .table
                 .values()
                 .any(|h| h.unit == unit && h.gen == self.chat.gen)
+    }
+
+    /// The first piece (in plan order) whose question the chat is answering
+    /// now, and for how long: since the command paused for the chat's
+    /// answer, else since the chat's turn started.
+    pub fn chat_answering_now(&self) -> Option<(String, Duration)> {
+        let id = self
+            .snapshot
+            .units
+            .iter()
+            .map(|u| &u.unit.id)
+            .find(|id| self.chat_answering(id))?;
+        let since = self
+            .chat_pause
+            .as_ref()
+            .filter(|p| p.piece.as_deref() == Some(id.as_str()))
+            .map(|p| p.since)
+            .or_else(|| self.chat.turn_since());
+        let now = self.now.max(Instant::now());
+        let took = since.map_or(Duration::ZERO, |s| now.saturating_duration_since(s));
+        Some((id.clone(), took))
+    }
+
+    /// The words of a confirm that would stop the chat while it answers a
+    /// piece's question (quit, a new chat, leaving for another screen):
+    /// what is lost, and that the question stays open. `stops` says how
+    /// the act stops the chat ("Quitting stops it").
+    fn chat_answering_body(&self, stops: &str) -> Option<String> {
+        let (id, took) = self.chat_answering_now()?;
+        let took = if took.as_secs() < 60 {
+            format!("{} s", took.as_secs())
+        } else {
+            format!("{} min", took.as_secs() / 60)
+        };
+        Some(format!(
+            "The chat is answering {id}'s question ({took} so far). {stops} and its work so \
+             far is lost; the question stays open."
+        ))
     }
 
     /// Set each waiting piece's state from [`App::chat_answering`]:

@@ -186,6 +186,43 @@ pub fn recheck_behind_label(n: usize) -> String {
     }
 }
 
+/// Why an act on the piece the chat is answering cannot start now.
+pub const CHAT_ANSWERS_PIECE: &str =
+    "the chat is answering this piece's question — wait for it, or stop the chat with Esc in the \
+     chat pane";
+
+/// The acts that change what a piece's question is posed against: the
+/// prompt is built from the plan's unit, the facts (the C source, its
+/// signatures, its callees) and the observer's confirmed findings
+/// (harness-llm's `migrate.rs`, `driver_gen.rs`, `trajectory.rs`). Scan
+/// rewrites the facts, Refresh the plan the plan, Find risky patterns the
+/// findings. Not on the list: Map the features and the features file (they
+/// change what an answer is judged on, not the question), the speed acts
+/// and the Re-checks (they read the Rust in use), `project map` (it writes
+/// only the project's map, never a tool's facts or plan); `project accept`
+/// has its own guard ([`App::question_guard`]).
+pub fn changes_questions(act: Act) -> bool {
+    matches!(act, Act::Scan | Act::Plan | Act::Detect)
+}
+
+/// The acts that start a harness command on one piece (the chat's
+/// Continue, the answer itself, left out).
+fn on_a_piece(act: Act) -> bool {
+    matches!(
+        act,
+        Act::Verify
+            | Act::Accept
+            | Act::Modify
+            | Act::HandEdit
+            | Act::Retry
+            | Act::Resume
+            | Act::Migrate
+            | Act::GenDriver
+            | Act::Measure
+            | Act::MeasureMore
+    )
+}
+
 /// A Next step's reason: its words up to the first " — ".
 pub fn reason_of(text: &str) -> String {
     text.split(" — ")
@@ -224,6 +261,116 @@ impl App {
         self.holder
             .as_ref()
             .map(|h| format!("busy: `{}` (checked just now)", h.command))
+    }
+
+    /// The pieces with a question open (a try in progress stopped at a
+    /// hand-off: `Waiting`, or `ChatAnswering`), in plan order, each with
+    /// whether the cockpit's chat is answering it right now.
+    pub fn open_questions(&self) -> Vec<(String, bool)> {
+        self.snapshot
+            .units
+            .iter()
+            .enumerate()
+            .filter_map(|(u, unit)| {
+                let id = &unit.unit.id;
+                let answering = self.chat_answering(id);
+                let open = answering
+                    || self.files.units.get(u).is_some_and(|i| {
+                        matches!(i.state, UnitState::Waiting | UnitState::ChatAnswering)
+                    });
+                open.then(|| (id.clone(), answering))
+            })
+            .collect()
+    }
+
+    /// Why an act that changes what a question is posed against (the facts,
+    /// the plan, the observer's findings: [`changes_questions`]) cannot
+    /// start now: a piece has a question open, and its answer, when it
+    /// comes, would have no home. The way out is said by case.
+    pub fn question_open_refusal(&self) -> Option<String> {
+        let open = self.open_questions();
+        let (first, answering) = open.first()?;
+        let way = if *answering {
+            "wait for it, or stop the chat with Esc in the chat pane"
+        } else {
+            // Task 2 ("Drop the waiting try", docs/NEXT-SESSION.md) adds
+            // its way out here: "…, or drop the waiting try".
+            "answer it first (open the piece)"
+        };
+        let chat = if *answering {
+            " (the chat is answering it)"
+        } else {
+            ""
+        };
+        Some(match open.len() - 1 {
+            0 => format!(
+                "{first} has a question open{chat} — this would leave its answer without a \
+                 home; {way}"
+            ),
+            more => format!(
+                "{first} has a question open{chat}, and {more} more — this would leave their \
+                 answers without a home; {way}"
+            ),
+        })
+    }
+
+    /// The one guard of a question open (docs/NEXT-SESSION.md, "Guards
+    /// while a question is open"): why `act` on `unit` cannot start now, if
+    /// so. The menu greys with it ([`App::act_argv`]) and confirm refuses
+    /// with it again (`confirm_gate`), so a key, a Next step or a dialog
+    /// opened before the question was posed refuse alike.
+    ///
+    /// - An act that changes what a question is posed against, while any
+    ///   question is open ([`App::question_open_refusal`]).
+    /// - An act on the very piece the chat is answering (`chat`: a request
+    ///   of the chat's own is the answerer's, not refused here) — except the
+    ///   chat's Continue, which is the answer.
+    /// - `project accept` of a tool accepted before while a piece of it has
+    ///   a question open: it rewrites the tool's `harness.toml`, which sets
+    ///   the sources that question reads.
+    pub fn question_guard(&self, act: Act, unit: Option<&str>, chat: bool) -> Option<String> {
+        if changes_questions(act) {
+            return self.question_open_refusal();
+        }
+        if act == Act::ProjectAccept {
+            let id = unit?;
+            let answer = self
+                .project
+                .as_ref()
+                .and_then(|p| p.progress.get(id))
+                .map_or(0, |p| p.answer);
+            return (answer > 0).then(|| {
+                format!(
+                    "tool {id} has a question open — accepting it again would leave its answer \
+                     without a home; open the tool and answer it first"
+                )
+            });
+        }
+        // Re-check every piece behind (`RecheckBehind`) has no unit: it
+        // re-checks only pieces whose Rust is in use, and a piece with a
+        // question open has none in use (its try is still in progress) —
+        // allowed on purpose.
+        let unit = unit?;
+        (!chat && on_a_piece(act) && self.chat_answering(unit)).then(|| CHAT_ANSWERS_PIECE.into())
+    }
+
+    /// Why the person's action `action` on a row of piece `u` cannot start
+    /// now because the chat is answering that piece's question (items that
+    /// are not acts: Accept's jump to a try, the hand edit, Modify's note,
+    /// the chat's Migrate and Make the test program, the kept hand edit).
+    fn chat_answers_item(&self, u: usize, action: &Action) -> Option<String> {
+        let unit = self.snapshot.units.get(u)?;
+        let starts = match action {
+            Action::Act(act) => on_a_piece(*act),
+            Action::ChooseAttempt(_)
+            | Action::HandEdit
+            | Action::Modify
+            | Action::ContinueKept
+            | Action::Migrate
+            | Action::GenDriver => true,
+            _ => false,
+        };
+        (starts && self.chat_answering(&unit.unit.id)).then(|| CHAT_ANSWERS_PIECE.into())
     }
 
     /// Why the project's facts cannot feed `plan`/`detect`, if so.
@@ -786,6 +933,15 @@ impl App {
                 Action::Cancel,
                 Some("x"),
             ));
+        }
+        // The chat answers this piece's question: what would start a
+        // command (or an editor) on it waits; reading stays free.
+        if let Some(u) = owner {
+            for it in &mut items {
+                if let Some(why) = self.chat_answers_item(u, &it.action) {
+                    it.greyed = Some(why);
+                }
+            }
         }
         // Model-backed items last, under the separator.
         items.sort_by_key(|i| i.model);

@@ -745,6 +745,11 @@ impl Chat {
         now.saturating_duration_since(self.last_out)
     }
 
+    /// When the turn under way started (`None` between turns).
+    pub fn turn_since(&self) -> Option<Instant> {
+        self.turn_started.filter(|_| self.turn)
+    }
+
     /// Start a new process (the first message, or the first after an end).
     fn start(&mut self, now: Instant) -> Result<(), String> {
         let bins = self.bins.clone()?;

@@ -850,7 +850,9 @@ impl App {
                             },
                             None,
                         );
-                        it.greyed = why.clone();
+                        it.greyed = why
+                            .clone()
+                            .or_else(|| self.question_guard(Act::ProjectAccept, Some(id), false));
                         items.push(it);
                     }
                 }

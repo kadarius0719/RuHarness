@@ -1467,6 +1467,24 @@ fn the_project_view_after_an_accept() {
         choose(&mut app, "Open tool t-lzg"),
         Command::OpenTool("t-lzg".into())
     );
+    // A piece of the tool has a question open: accepting it again (a new
+    // harness.toml, the sources that question reads) waits, saying why.
+    let progress = |app: &mut App, n: usize| {
+        let p = app.project.as_mut().unwrap();
+        p.progress.entry("t-lzg".into()).or_default().answer = n;
+    };
+    progress(&mut app, 1);
+    code(&mut app, KeyCode::Enter);
+    let again = menu(&app).items.iter().find(|i| i.label == "Accept again…");
+    assert_eq!(
+        again.and_then(|i| i.greyed.as_deref()),
+        Some(
+            "tool t-lzg has a question open — accepting it again would leave its answer without \
+             a home; open the tool and answer it first"
+        )
+    );
+    code(&mut app, KeyCode::Esc);
+    progress(&mut app, 0);
     // Not while a command runs.
     app.running = true;
     code(&mut app, KeyCode::Enter);

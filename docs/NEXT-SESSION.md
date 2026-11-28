@@ -331,7 +331,7 @@ ideas, the first two the ones that matter most to us:
   and listed with the rest kept; files a piece writes compared as output (for `lz4io.c`); the
   report's headline says how much runs in Rust, not only that nothing mismatches.
 
-## Guards while a question is open (the person, 2026-11-27): being built, in two tasks
+## Guards while a question is open (the person, 2026-11-27): task 1 built, task 2 next
 
 The person, after being told what to avoid while the chat answers: "we need to put guards in
 place, if we haven't already, to stop a user from breaking things." What exists: one command at
@@ -358,6 +358,16 @@ with a request and no response.
   open try will be judged on, which is the judge's normal case), reading anything, editing the
   features file (it changes what an answer is judged on, not the question; an earlier "avoid"
   said to the person was too strong).
+
+**Task 1 as built (2026-11-27).** Guarded while any question is open: Scan, Refresh the plan
+and Find risky patterns (its confirmed findings go into the prompt), and Accept again of a tool
+with a question open. Guarded on the piece the chat is answering: every act that starts a
+command on it or opens an editor on its code. Not guarded: Map the project, the features and
+workloads files, speed, the Re-checks of other pieces. Quit, New chat and leaving for another
+screen say what is lost and put "Keep it running" first; the chat column's `[×]` only folds the
+column, so it asks nothing. One guard (`App::question_guard`) serves the menu and the confirm.
+Not covered: a verified piece with a new try waiting does not count as a question open; the
+command line does not warn.
 
 **Task 2, the way out: "Drop the waiting try".** Designed 2026-11-11 (item 5 above, the eighth
 wall), never built: on a piece whose question is open and that nobody is answering, remove the
