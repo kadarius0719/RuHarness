@@ -107,6 +107,12 @@ pub struct Event {
     pub raw: Option<String>,
     /// How to draw it.
     pub tone: Tone,
+    /// Shown under the raw toggle only: a line the harness printed for a
+    /// pause the plain view says in one row of its own (the hand-off for
+    /// the chat, docs/RUN-LOG-DESIGN.md §B 2026-11-27). Set in memory when
+    /// the pause is recognised, after the line was written: the file keeps
+    /// every line as it was.
+    pub raw_only: bool,
 }
 
 #[derive(Serialize)]
@@ -170,6 +176,9 @@ pub struct RunLog {
     /// The local clock's offset from UTC in seconds, once asked
     /// (`None`: not asked; `Some(None)`: unknown, shown in UTC).
     offset: Option<Option<i32>>,
+    /// Tests and the goldens: the wall clock the Log view's live row
+    /// shows (`None`: the system's).
+    wall: Option<SystemTime>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -278,6 +287,7 @@ impl RunLog {
             failure: Arc::new(Mutex::new(None)),
             unsaid: None,
             offset: None,
+            wall: None,
         };
         log.try_open();
         log
@@ -386,6 +396,7 @@ impl RunLog {
             words,
             raw,
             tone,
+            raw_only: false,
         });
         while self.events.len() > MAX_EVENTS {
             self.events.pop_front();
@@ -456,6 +467,20 @@ impl RunLog {
         self.try_open();
     }
 
+    /// The number of events pushed this session (the dropped ones
+    /// counted): an event's serial is this number at its push.
+    pub fn serial(&self) -> usize {
+        self.dropped + self.events.len()
+    }
+
+    /// The events pushed at or after `from` (a [`RunLog::serial`]) still
+    /// in memory, oldest first: the rows of one command, for the fold of
+    /// its pause.
+    pub fn since_mut(&mut self, from: usize) -> impl Iterator<Item = &mut Event> {
+        let skip = from.saturating_sub(self.dropped);
+        self.events.iter_mut().skip(skip)
+    }
+
     /// The file is being written.
     pub fn writing(&self) -> bool {
         matches!(self.sink, Sink::Open { .. })
@@ -493,6 +518,16 @@ impl RunLog {
     /// Tests and the view's goldens: a fixed offset.
     pub fn set_offset(&mut self, offset: Option<i32>) {
         self.offset = Some(offset);
+    }
+
+    /// The wall clock now: the system's, or the one a test fixed.
+    pub fn wall_now(&self) -> SystemTime {
+        self.wall.unwrap_or_else(SystemTime::now)
+    }
+
+    /// Tests and the view's goldens: a fixed wall clock for the live row.
+    pub fn set_wall_clock(&mut self, t: Option<SystemTime>) {
+        self.wall = t;
     }
 
     /// `t` as `HH:MM:SS` in the local zone (UTC when it is not known).

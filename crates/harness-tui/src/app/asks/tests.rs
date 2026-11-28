@@ -454,16 +454,22 @@ fn the_outcome_waits_for_the_read_after_the_reap() {
     // row's heartbeat knows the pause is the chat's (§4).
     a.log_pass();
     let rows: Vec<&crate::runlog::Event> = a.runlog.events.iter().collect();
+    // In plain words how it ended; the message sent is the row's raw.
     let told = rows
         .iter()
-        .find(|e| e.words.starts_with("told the chat: "))
+        .find(|e| e.words.starts_with("told the chat how it ended: "))
         .unwrap();
-    assert_eq!(told.words, format!("told the chat: {m}"));
+    assert_eq!(
+        told.words,
+        "told the chat how it ended: waiting for its answer"
+    );
+    assert_eq!(told.raw, Some(format!("told the chat: {m}")));
     assert_eq!(told.piece.as_deref(), Some("u-cache"));
+    // The permission names the act; its attempt's id is the raw.
     assert!(
         rows.iter().any(|e| e.words
-            == "the chat may continue Migrate u-cache (asked in chat) without asking \
-                (a-0123456789ab)"),
+            == "the chat may continue Migrate u-cache (asked in chat) without asking"
+            && e.raw.as_deref() == Some("a-0123456789ab")),
         "{:#?}",
         rows.iter().map(|e| &e.words).collect::<Vec<_>>()
     );
@@ -2202,4 +2208,77 @@ fn a_driver_attempts_hand_off_is_answered_with_gen_driver() {
             .contains("resumes the making of u-lib's test program"),
         "{body:?}"
     );
+}
+
+/// The log's plain row of what the chat was told (docs/RUN-LOG-DESIGN.md
+/// §B, 2026-11-27): how it ended in a few words — waiting, green, red with
+/// the failed check's name, an error in its own first words; the message
+/// sent stays the row's raw.
+#[test]
+fn told_the_chat_says_how_it_ended_in_plain_words() {
+    let tag = ChatTag {
+        gen: 1,
+        request_id: "r1".into(),
+        tool: "harness_migrate".into(),
+        model: MODEL.into(),
+        grant: false,
+        answer: None,
+        key: None,
+        permitted: false,
+        attempt: None,
+        epoch: 0,
+    };
+    let owed = |exit: Option<i32>, collect: Collected| Owed {
+        tag: tag.clone(),
+        unit: Some("u-cache".into()),
+        label: "Migrate u-cache (asked in chat)".into(),
+        collect,
+        exit,
+        signal: None,
+        response: None,
+    };
+    let waiting = Collected {
+        awaiting: Some((Some("a-1".into()), Some("k".into()))),
+        error: Some((
+            "awaiting".into(),
+            "awaiting response: /x.response.json".into(),
+        )),
+        ..Collected::default()
+    };
+    assert_eq!(
+        told_words(&owed(Some(1), waiting)),
+        "waiting for its answer"
+    );
+    let green = Collected {
+        outcome: Some("green".into()),
+        ..Collected::default()
+    };
+    assert_eq!(told_words(&owed(Some(0), green)), "green");
+    let red = Collected {
+        outcome: Some("red".into()),
+        failed: vec!["differential-driver".into(), "symbol-set".into()],
+        ..Collected::default()
+    };
+    assert_eq!(
+        told_words(&owed(Some(10), red)),
+        "red — differential-driver"
+    );
+    let refused = Collected {
+        error: Some((
+            "locked".into(),
+            "the ledger is held by another command\nsecond line".into(),
+        )),
+        ..Collected::default()
+    };
+    assert_eq!(
+        told_words(&owed(Some(1), refused)),
+        "refused — the ledger is held by another command"
+    );
+    assert_eq!(
+        told_words(&owed(Some(3), Collected::default())),
+        "failed (exit 3)"
+    );
+    let mut stopped = owed(None, Collected::default());
+    stopped.signal = Some("SIGINT".into());
+    assert_eq!(told_words(&stopped), "stopped");
 }

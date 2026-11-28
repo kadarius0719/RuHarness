@@ -1457,10 +1457,19 @@ impl Chat {
                 }
                 let ended = words.join(" · ");
                 self.say_quiet(Tone::Dim, format!("— {ended}"));
+                // The log says the time in the words people use ("16 min
+                // 52 s"); the seconds to the tenth are its raw.
+                let mut said = words.clone();
+                if let Some(s) = secs {
+                    let tenths = format!("{s:.1} s");
+                    if let Some(w) = said.iter_mut().find(|w| **w == tenths) {
+                        *w = crate::narrate::elapsed_words(Duration::from_secs_f64(s));
+                    }
+                }
                 self.transcript.log_raw(
                     Tone::Dim,
-                    format!("the chat's reply ended — {ended}"),
-                    None,
+                    format!("the chat's reply ended — {}", said.join(" · ")),
+                    secs.map(|s| format!("{s:.1} s")),
                 );
             }
             In::RateLimit {
@@ -1681,6 +1690,12 @@ impl Chat {
 
 #[cfg(test)]
 impl Chat {
+    /// Tests: Claude Code was last heard from at `t` (the heartbeat's
+    /// "heard N s ago" on a fixed clock).
+    pub(crate) fn heard_at(&mut self, t: Instant) {
+        self.last_out = t;
+    }
+
     /// A live chat whose runtime appends what the cockpit writes to
     /// `dir/sent.jsonl` (a `cat`), its `init` seen with `model`: the app's
     /// tests drive the chat's side through it. Returns the log's path.

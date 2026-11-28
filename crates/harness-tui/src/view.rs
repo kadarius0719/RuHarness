@@ -3919,6 +3919,12 @@ fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
                 _ if reason.is_some() => reason.map(|(first, _)| first).unwrap_or_default(),
                 // A command paused for the chat: the chat's clocks, first
                 // (docs/RUN-LOG-DESIGN.md §4).
+                // A person's command that ended while the pause stayed
+                // open: its `Last:` is read first, then the wait comes back.
+                (_, Some(last)) if heartbeat.is_some() && last_fresh(app) => {
+                    style = last_style(app);
+                    format!("Ready. Last: {last}")
+                }
                 _ if heartbeat.is_some() => {
                     style = notice();
                     heartbeat.unwrap_or_default()
@@ -3964,38 +3970,185 @@ fn activity_row(app: &mut App, area: Rect) -> Line<'static> {
     ])
 }
 
+/// A command ended after the pause for the chat began, within
+/// [`crate::app::LAST_SHOWN_FOR`] of the screen's clock: the status row
+/// shows its `Last:` before the chat's heartbeat comes back.
+fn last_fresh(app: &App) -> bool {
+    let (Some(ended), Some(p)) = (app.last_ended, app.chat_pause.as_ref()) else {
+        return false;
+    };
+    ended > p.since
+        && app.screen_now().saturating_duration_since(ended) < crate::app::LAST_SHOWN_FOR
+}
+
 /// The status row while the last command paused for the chat's answer
 /// (docs/RUN-LOG-DESIGN.md §4): the chat's clocks first — how long the
 /// reply has been thinking and when Claude Code was last heard from; a
 /// reply that ended without the command being asked again; a chat that
 /// ended, with the way out.
 fn chat_heartbeat(app: &App) -> Option<String> {
-    let p = app.chat_pause.as_ref()?;
-    let now = app.now;
-    let turn = p
-        .turn
-        .map_or_else(|| "its turn".to_string(), |t| format!("turn {t}"));
-    let piece = p
+    let w = chat_wait(app)?;
+    let turn = &w.turn;
+    let piece = w
         .piece
         .as_deref()
         .map(|u| format!(" for {u}"))
         .unwrap_or_default();
-    Some(if !app.chat.alive() {
-        format!("Chat ended — {turn} waits; Ctrl-N for a new chat")
-    } else if let Some(d) = app.chat.thinking_for(now) {
-        format!(
+    Some(match w.state {
+        WaitState::Ended => format!("Chat ended — {turn} waits; Ctrl-N for a new chat"),
+        WaitState::Thinking { for_, heard } => format!(
             "Chat thinking {} · heard {} ago — answering {turn}{piece}",
-            elapsed_words(d),
-            elapsed_words(app.chat.heard_ago(now))
-        )
-    } else if app.chat.turn {
-        format!("Chat is told the outcome, then answers {turn}{piece}")
-    } else {
-        format!(
+            elapsed_words(for_),
+            elapsed_words(heard)
+        ),
+        WaitState::Told => format!("Chat is told the outcome, then answers {turn}{piece}"),
+        WaitState::Quiet { heard } => format!(
             "Chat quiet {} — its reply ended; the command has not been asked again",
-            elapsed_words(app.chat.heard_ago(now))
-        )
+            elapsed_words(heard)
+        ),
     })
+}
+
+/// Where the chat stands while a command waits on its answer: the facts
+/// both the status row ([`chat_heartbeat`]) and the Log view's live row
+/// ([`log_now_row`]) say, read once so the two never disagree.
+struct ChatWait {
+    /// "turn 1" ("its turn" when the stream named none).
+    turn: String,
+    /// The paused piece.
+    piece: Option<String>,
+    /// What the chat is doing.
+    state: WaitState,
+}
+
+/// The chat's state during a pause for its answer (docs/RUN-LOG-DESIGN.md §4).
+enum WaitState {
+    /// The chat ended with the turn open.
+    Ended,
+    /// A reply runs: for how long, and when Claude Code was last heard.
+    Thinking {
+        /// Since the reply began.
+        for_: std::time::Duration,
+        /// Since Claude Code last printed anything.
+        heard: std::time::Duration,
+    },
+    /// The cockpit holds a request of the chat's: it is told the outcome.
+    Told,
+    /// No reply runs and the command was not asked again.
+    Quiet {
+        /// Since Claude Code last printed anything.
+        heard: std::time::Duration,
+    },
+}
+
+/// The pause for the chat, read at the screen's clock; `None` when no
+/// command waits on the chat.
+fn chat_wait(app: &App) -> Option<ChatWait> {
+    let p = app.chat_pause.as_ref()?;
+    let now = app.screen_now();
+    let turn = p
+        .turn
+        .map_or_else(|| "its turn".to_string(), |t| format!("turn {t}"));
+    let state = if !app.chat.alive() {
+        WaitState::Ended
+    } else if let Some(d) = app.chat.thinking_for(now) {
+        WaitState::Thinking {
+            for_: d,
+            heard: app.chat.heard_ago(now),
+        }
+    } else if app.chat.turn {
+        WaitState::Told
+    } else {
+        WaitState::Quiet {
+            heard: app.chat.heard_ago(now),
+        }
+    };
+    Some(ChatWait {
+        turn,
+        piece: p.piece.clone(),
+        state,
+    })
+}
+
+/// The Log view's live row (docs/RUN-LOG-DESIGN.md §B, 2026-11-27): what
+/// the cockpit waits for right now — a command running, the chat's answer,
+/// the person — from the facts the status row says; drawn, never logged.
+/// `None` when nothing is in progress.
+fn log_now_row(app: &App) -> Option<(Option<String>, String)> {
+    if let (Some(run), true) = (&app.run, app.running) {
+        return Some((
+            run.pending.unit.clone(),
+            format!(
+                "running — {} · {}",
+                run.narrator.label,
+                elapsed_words(run.started.elapsed())
+            ),
+        ));
+    }
+    // A request of the chat's read behind the overlay is the person's.
+    if app.asks.shown().is_some() {
+        return Some((None, "waiting for you — Esc to see".to_string()));
+    }
+    if let Some(w) = chat_wait(app) {
+        let turn = &w.turn;
+        return Some((
+            w.piece.clone(),
+            match w.state {
+                WaitState::Thinking { for_, heard } => format!(
+                    "waiting for the chat to answer {turn} — thinking {} · heard {} ago",
+                    elapsed_words(for_),
+                    elapsed_words(heard)
+                ),
+                WaitState::Told => {
+                    format!(
+                        "waiting for the chat to answer {turn} — it is told how the command ended"
+                    )
+                }
+                WaitState::Quiet { heard } => format!(
+                "waiting — the chat's reply ended and the command has not been asked again ({})",
+                elapsed_words(heard)
+            ),
+                WaitState::Ended => {
+                    format!("waiting — the chat ended and {turn} is still open; Ctrl-N starts a new chat")
+                }
+            },
+        ));
+    }
+    // The person's own hand-off: theirs to answer.
+    if app.last_waiting {
+        let piece = app.run.as_ref().and_then(|r| r.pending.unit.clone());
+        return Some((piece, "waiting for you — Esc to see".to_string()));
+    }
+    None
+}
+
+/// The live row drawn: the time now in the time column, the piece, the
+/// words in the notice tone, cut to one row (it stays pinned at the
+/// bottom of the Log view).
+fn log_now_line(app: &mut App, width: usize) -> Option<Line<'static>> {
+    let (piece, words) = log_now_row(app)?;
+    let pw = log_piece_width(app);
+    let time = crate::runlog::hms(app.runlog.wall_now(), app.runlog.offset());
+    let piece = display::line(piece.as_deref().unwrap_or(""));
+    let lead = if pw > 0 {
+        format!("{time}  {piece:<pw$}  ")
+    } else {
+        format!("{time}  ")
+    };
+    Some(Line::from(Span::styled(
+        safe(&format!("{lead}{words}"), width),
+        notice(),
+    )))
+}
+
+/// The Log view's piece column: as wide as the plan's longest unit id.
+fn log_piece_width(app: &App) -> usize {
+    app.snapshot
+        .units
+        .iter()
+        .map(|u| width_of(&u.unit.id))
+        .max()
+        .unwrap_or(0)
 }
 
 /// A log row's style (the screen's tones; docs/RUN-LOG-DESIGN.md §3).
@@ -4039,18 +4192,14 @@ fn log_title(app: &App, raw: bool, utc: bool) -> String {
 /// line under every row that has one, in the dim tone.
 fn log_rows(app: &mut App, width: usize, raw: bool) -> Vec<Line<'static>> {
     let offset = app.runlog.offset();
-    let pw = app
-        .snapshot
-        .units
-        .iter()
-        .map(|u| width_of(&u.unit.id))
-        .max()
-        .unwrap_or(0);
+    let pw = log_piece_width(app);
     let lead_w = 8 + 2 + if pw > 0 { pw + 2 } else { 0 };
     let body_w = width.saturating_sub(lead_w).max(8);
     let blank = " ".repeat(lead_w);
     let mut lines = Vec::new();
-    for e in &app.runlog.events {
+    // The plain view leaves out what only the raw says (the harness's own
+    // lines of a pause the plain view says in one row).
+    for e in app.runlog.events.iter().filter(|e| raw || !e.raw_only) {
         let time = crate::runlog::hms(e.t, offset);
         let piece = display::line(e.piece.as_deref().unwrap_or(""));
         let lead = if pw > 0 {
@@ -5421,12 +5570,26 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
                 return;
             }
             let inner = rect.width.saturating_sub(2) as usize;
-            let rows = log_rows(app, inner, raw);
+            let mut rows = log_rows(app, inner, raw);
             let utc = app.runlog.offset().is_none();
             let page = rect.height.saturating_sub(2) as usize;
-            let max = rows.len().saturating_sub(page);
+            // The live row takes the page's last row: the events scroll in
+            // the rows above it, and it is put right after the window
+            // shown, so it stays at the bottom when scrolled up (and the
+            // "↓ more below — End: newest" hint stays true).
+            let now = log_now_line(app, inner);
+            let events_page = if now.is_some() && page > 1 {
+                page - 1
+            } else {
+                page
+            };
+            let max = rows.len().saturating_sub(events_page);
             let shown = if follow { max } else { scroll.min(max) };
             let follow = follow || shown >= max;
+            if let Some(line) = now.filter(|_| page > 1) {
+                let at = (shown + events_page).min(rows.len());
+                rows.insert(at, line);
+            }
             let title = log_title(app, raw, utc);
             let footer = app.runlog.footer_words();
             overlay(
@@ -5893,6 +6056,9 @@ pub(crate) mod tests {
 
     /// The chat's connection, and the Project view's model work in chat.
     mod connection;
+    /// The run log while the cockpit waits (docs/RUN-LOG-DESIGN.md §B,
+    /// 2026-11-27).
+    mod log_waits;
     /// The Project view (pass 3 of the 2026-10-18 critique).
     mod project;
     use crate::app::{Act, Command, Purpose, RunLine, RunPanel};
@@ -7201,6 +7367,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
             plan_changes: 0,
             pending,
             collect: Default::default(),
+            log_from: 0,
         });
     }
 
@@ -12528,16 +12695,16 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
                 41,
                 Kind::Command,
                 Some("u-lib"),
-                "paused: waiting for the chat's answer to turn 1 (the reply goes to …/bec63844.response.json) (41 s)",
-                Some("exit 1"),
+                "waiting for the chat's answer to turn 1",
+                Some("exit 1 · paused: waiting for the chat's answer to turn 1 (the reply goes to …/bec63844.response.json) (41 s)"),
                 L::Notice,
             ),
             (
                 42,
                 Kind::Chat,
                 Some("u-lib"),
-                "told the chat: Ran by the cockpit after the person confirmed it: {\"outcome\":\"awaiting\"}",
-                None,
+                "told the chat how it ended: waiting for its answer",
+                Some("told the chat: Ran by the cockpit after the person confirmed it: {\"outcome\":\"awaiting\"}"),
                 L::Dim,
             ),
             (

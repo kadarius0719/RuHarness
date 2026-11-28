@@ -242,9 +242,22 @@ fn a_recorded_round_is_played_through() {
             if cell.text.starts_with("· read ") && cell.text.contains(" and ") {
                 continue;
             }
-            // The reply's end: its row says so in words.
+            // The reply's end: its row says so in words, the time as people
+            // say it ("16 min 52 s", "6 s"); the seconds to the tenth are
+            // its raw.
             if let Some(rest) = cell.text.strip_prefix("— ") {
-                assert_eq!(*ended[0], format!("the chat's reply ended — {rest}"));
+                let raw = log
+                    .iter()
+                    .find(|(w, _)| w == *ended[0])
+                    .and_then(|(_, r)| r.clone())
+                    .unwrap_or_else(|| panic!("{:?} has no raw", ended[0]));
+                let secs: f64 = raw.strip_suffix(" s").unwrap().parse().unwrap();
+                let said = crate::narrate::elapsed_words(Duration::from_secs_f64(secs));
+                assert!(rest.starts_with(&raw), "{rest} / {raw}");
+                assert_eq!(
+                    *ended[0],
+                    format!("the chat's reply ended — {}", rest.replacen(&raw, &said, 1))
+                );
                 continue;
             }
             assert!(

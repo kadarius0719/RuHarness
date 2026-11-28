@@ -7,16 +7,16 @@
 │                   }                                                                                                  │
 │17:13:13  u-lib  turn 1 generate → …  (d-8378804af048)                                                                │
 │                   {"k":"turn-start","unit":"u-lib","attempt":"d-8378804af048","index":1,"kind":"generate"}           │
-│17:13:14  u-lib  paused: waiting for the chat's answer to turn 1 (the reply goes to …/bec63844.response.json) (41 s)  │
-│                   exit 1                                                                                             │
-│17:13:15  u-lib  told the chat: Ran by the cockpit after the person confirmed it: {"outcome":"awaiting"}              │
+│17:13:14  u-lib  waiting for the chat's answer to turn 1                                                              │
+│                   exit 1 · paused: waiting for the chat's answer to turn 1 (the reply goes to …/bec63844.response.jso│
+│                   n) (41 s)                                                                                          │
+│17:13:15  u-lib  told the chat how it ended: waiting for its answer                                                   │
+│                   told the chat: Ran by the cockpit after the person confirmed it: {"outcome":"awaiting"}            │
 │17:13:28  u-lib  · read the request of d-8378804a… (page 1)                                                           │
 │                   harness_request {"attempt":"d-8378804af048","page":1}                                              │
 │17:13:29  u-lib  · read the request of d-8378804a… (page 1) — done                                                    │
 │17:19:13  u-lib  Claude Code says: the reply hit the output limit; the chat goes on from where it was cut             │
 │17:19:14         a notice the row showed, with a ?[31mcontrol?[0m in it                                               │
-│                                                                                                                      │
-│                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │

@@ -644,6 +644,9 @@ pub struct RunPanel {
     pub pending: Pending,
     /// What it reported, for the chat's outcome.
     pub collect: asks::Collected,
+    /// The run log's serial at its start ([`RunLog::serial`]): its rows
+    /// are the ones from here on (a pause for the chat folds them).
+    pub log_from: usize,
 }
 
 /// An `external` hand-off waiting for its response file.
@@ -837,7 +840,19 @@ pub struct ChatPause {
     pub turn: Option<u64>,
     /// The piece it is about.
     pub piece: Option<String>,
+    /// The "still waiting" rows logged so far, one per
+    /// [`STILL_WAITING_EVERY`] of the wait ([`App::log_waits`]).
+    pub logged: u32,
 }
+
+/// How often one continuous wait on the chat is written into the run log
+/// ("still waiting for the chat's answer to turn 1 — 5 min, …").
+pub const STILL_WAITING_EVERY: Duration = Duration::from_secs(5 * 60);
+
+/// How long the status row shows a person's command that ended while a
+/// pause for the chat stayed open, before it says the chat's heartbeat
+/// again (`Ready. Last: …` is read, then the wait is said).
+pub const LAST_SHOWN_FOR: Duration = Duration::from_secs(5);
 
 /// The cockpit.
 #[derive(Debug)]
@@ -1012,6 +1027,14 @@ pub struct App {
     /// The last command paused for the chat's answer (§4 of the log's
     /// design): the status row's heartbeat.
     pub chat_pause: Option<ChatPause>,
+    /// When the last command ended: a person's command that ended while a
+    /// pause for the chat stayed open has its `Last:` on the status row
+    /// for [`LAST_SHOWN_FOR`], then the chat's heartbeat comes back.
+    pub last_ended: Option<Instant>,
+    /// The clock of the frame being drawn, set by the event loop each pass
+    /// ([`App::set_frame_clock`]); `now` alone is the last input's time and
+    /// stands still while nobody types. `None` in tests: `now` is the clock.
+    pub frame_now: Option<Instant>,
     /// The notice row's text as last logged (a change is a `notice` row).
     last_logged_notice: Option<String>,
     last_load_error: Option<String>,
@@ -1254,6 +1277,8 @@ impl App {
             project: None,
             runlog,
             chat_pause: None,
+            last_ended: None,
+            frame_now: None,
             last_logged_notice: None,
             last_load_error: None,
             pairs_key: None,
@@ -2057,6 +2082,7 @@ impl App {
             plan_changes: 0,
             pending: pending.clone(),
             collect: asks::Collected::default(),
+            log_from: self.runlog.serial(),
         });
         self.notice = None;
         // Who allowed it (docs/RUN-LOG-DESIGN.md §2): a dialog's button, or
@@ -2073,7 +2099,7 @@ impl App {
             Some(&shell_line(&pending.argv)),
             runlog::Tone::Plain,
         );
-        self.chat_pause = None;
+        self.end_chat_pause_for(pending);
         self.chat_spawned(pending);
     }
 
@@ -2250,20 +2276,52 @@ impl App {
             } else {
                 runlog::Tone::Warn
             };
+            // A pause for the chat is one plain row: the harness's own lines
+            // of it (the file it waits on, the command to run again, its
+            // `error: awaiting …` and `exit 1`) go under the raw toggle,
+            // and the exit row says the wait (docs/RUN-LOG-DESIGN.md §B,
+            // 2026-11-27). The file keeps every line as it was.
+            let chat_paused = paused.is_some() && run.pending.chat.is_some();
+            let awaited = chat_paused
+                .then(|| {
+                    run.narrator
+                        .awaited_path()
+                        .map(str::to_string)
+                        .or_else(|| awaiting_file(&run.lines))
+                })
+                .flatten();
+            if let Some(file) = &awaited {
+                fold_chat_pause(&mut self.runlog, run.log_from, file);
+            }
+            let (words, raw) = match &awaited {
+                Some(_) => (
+                    format!(
+                        "waiting for the chat's answer to {}",
+                        run.collect
+                            .turn
+                            .map_or_else(|| "its turn".to_string(), |t| format!("turn {t}"))
+                    ),
+                    format!("{exit_raw} · {text} ({took})"),
+                ),
+                None => (format!("{text} ({took})"), exit_raw),
+            };
             self.runlog.push(
                 runlog::Kind::Command,
                 run.pending.unit.as_deref(),
-                format!("{text} ({took})"),
-                Some(&exit_raw),
+                words,
+                Some(&raw),
                 exit_tone,
             );
-            if paused.is_some() && run.pending.chat.is_some() {
+            let ended = self.now.max(Instant::now());
+            if chat_paused {
                 self.chat_pause = Some(ChatPause {
-                    since: Instant::now(),
+                    since: ended,
                     turn: run.collect.turn,
                     piece: run.pending.unit.clone(),
+                    logged: 0,
                 });
             }
+            self.last_ended = Some(ended);
             run.exit = Some(text);
             self.last = Some(run.narrator.last(
                 status.code(),
@@ -3902,7 +3960,7 @@ impl App {
                 chat_tone(l.tone),
             );
         }
-        for (attempt, words) in std::mem::take(&mut self.asks.pending_log) {
+        for (attempt, words, raw) in std::mem::take(&mut self.asks.pending_log) {
             let of = attempt
                 .as_deref()
                 .and_then(|a| self.asks.table.get(a).map(|h| h.unit.clone()))
@@ -3911,7 +3969,7 @@ impl App {
                 runlog::Kind::Chat,
                 of.as_deref(),
                 words,
-                None,
+                raw.as_deref(),
                 runlog::Tone::Dim,
             );
         }
@@ -3932,6 +3990,94 @@ impl App {
             );
         }
         self.last_logged_notice = now_text;
+    }
+
+    /// The event loop's clock for this pass (the heartbeat, the Log view's
+    /// live row and the "still waiting" rows tick with it).
+    pub fn set_frame_clock(&mut self, now: Instant) {
+        self.frame_now = Some(now);
+    }
+
+    /// The time the screen says: the frame's clock, never before the last
+    /// input's.
+    pub fn screen_now(&self) -> Instant {
+        self.frame_now.map_or(self.now, |f| f.max(self.now))
+    }
+
+    /// A command starts: the pause for the chat ends when it is the chat's
+    /// next command, or the person's own on the paused piece (they took
+    /// it over). A person's command on another piece leaves it open: the
+    /// chat is still answering, and the status row says so again once that
+    /// command ends. The chat's answer going on is a row of its own: "the
+    /// chat answered turn 1 after 14 min 42 s".
+    fn end_chat_pause_for(&mut self, pending: &Pending) {
+        let Some(p) = &self.chat_pause else {
+            return;
+        };
+        let same_piece = p.piece.is_some() && p.piece == pending.unit;
+        let Some(tag) = pending.chat.as_deref() else {
+            if same_piece {
+                self.chat_pause = None;
+            }
+            return;
+        };
+        if tag.answer.is_some() && same_piece {
+            let turn = p
+                .turn
+                .map_or_else(|| "its turn".to_string(), |t| format!("turn {t}"));
+            let waited = self.screen_now().saturating_duration_since(p.since);
+            self.runlog.push(
+                runlog::Kind::Chat,
+                pending.unit.as_deref(),
+                format!(
+                    "the chat answered {turn} after {}",
+                    crate::narrate::elapsed_words(waited)
+                ),
+                None,
+                runlog::Tone::Notice,
+            );
+        }
+        self.chat_pause = None;
+    }
+
+    /// Each loop pass at `now`: one continuous wait on the chat is written
+    /// into the run log every [`STILL_WAITING_EVERY`] — "still waiting for
+    /// the chat's answer to turn 1 — 5 min, heard 2 s ago" — from the
+    /// heartbeat's clocks (the pause's start, Claude Code last heard
+    /// from). Never more often: a pass that comes late writes the mark it
+    /// reached, once. Only while the chat lives and nothing of the chat's
+    /// waits for the person.
+    pub fn log_waits(&mut self, now: Instant) {
+        if !self.chat.alive() || self.asks.shown().is_some() {
+            return;
+        }
+        let heard = self.chat.heard_ago(now);
+        let Some(p) = self.chat_pause.as_mut() else {
+            return;
+        };
+        let every = STILL_WAITING_EVERY.as_secs();
+        let marks = now.saturating_duration_since(p.since).as_secs() / every;
+        let marks = u32::try_from(marks).unwrap_or(u32::MAX);
+        if marks <= p.logged {
+            return;
+        }
+        p.logged = marks;
+        let turn = p
+            .turn
+            .map_or_else(|| "its turn".to_string(), |t| format!("turn {t}"));
+        let words = format!(
+            "still waiting for the chat's answer to {turn} — {} min, heard {} ago",
+            u64::from(marks) * every / 60,
+            crate::narrate::elapsed_words(heard)
+        );
+        let piece = p.piece.clone();
+        self.runlog.push(
+            runlog::Kind::Chat,
+            piece.as_deref(),
+            words,
+            None,
+            runlog::Tone::Notice,
+        );
     }
 
     /// `L` / `Ctrl-L`: the Log view, following the newest row.
@@ -6403,6 +6549,57 @@ fn rust_files(crate_dir: &Path) -> Vec<String> {
     walk(&crate_dir.join("src"), "src", &mut out);
     out.sort();
     out
+}
+
+/// A command paused for the chat's answer on `file`: the rows of it from
+/// `from` on that are the harness saying that pause in its own words go
+/// under the raw toggle ([`runlog::Event::raw_only`]) — the file it waits
+/// on (`awaiting response: <file>`, from the stream and from stderr), the
+/// command to run again (`  hint: …`, the row the cockpit writes right
+/// after the awaiting event's), the `<cmd>: external provider mode — …`
+/// line naming the file's folder, `error: awaiting response: <file>`,
+/// `awaiting: awaiting response: <file>` and `result: exit 1`. Only a line
+/// recognised whole as one of these folds; anything else stays in the
+/// plain view (a real error, a failed check).
+pub fn fold_chat_pause(log: &mut RunLog, from: usize, file: &str) {
+    let said = format!("awaiting response: {file}");
+    let folder = Path::new(file)
+        .parent()
+        .map(|p| p.display().to_string())
+        .filter(|p| !p.is_empty());
+    let provider_line = |w: &str| {
+        let Some((cmd, rest)) = w.split_once(": external provider mode — ") else {
+            return false;
+        };
+        let named = !cmd.is_empty()
+            && cmd
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c == '-' || c == ' ');
+        named
+            && folder
+                .as_deref()
+                .is_some_and(|f| rest.contains(&format!("{f} ")) || rest.ends_with(f))
+    };
+    let mut after_awaiting = false;
+    for e in log.since_mut(from) {
+        let w = e.words.as_str();
+        let fold = w == said
+            || w.strip_prefix("error: ").is_some_and(|r| r == said)
+            || w.strip_prefix("Error: ").is_some_and(|r| r == said)
+            || w.strip_prefix("awaiting: ").is_some_and(|r| r == said)
+            || (after_awaiting && w.starts_with("  hint: "))
+            || w == "result: exit 1"
+            || provider_line(w);
+        // The awaiting event's row comes from the stream (its raw is the
+        // event record); the hint the cockpit writes is the row after it.
+        after_awaiting = w == said
+            && e.raw
+                .as_deref()
+                .is_some_and(|r| r.starts_with("{\"k\":\"awaiting\""));
+        if fold {
+            e.raw_only = true;
+        }
+    }
 }
 
 /// The file a hand-off waits on, from the command's own words: its

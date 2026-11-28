@@ -67,12 +67,12 @@ both use it). The CLI's conventions: `k` is the kind; a header line opens each s
 {"k":"dialog","t":"2026-11-07T17:12:51.002Z","pid":13792,"piece":"u-lz4","words":"Make u-lz4's test program — ask in chat"}
 {"k":"command","t":"2026-11-07T17:12:51.130Z","pid":13792,"piece":"u-lz4","words":"Make u-lz4's test program — started (allowed by you)","raw":"harness --json gen-driver u-lz4 --target=/Users/b/lz4-map --tool=t-lz4cli --provider=external --model=claude-opus-5-5 --requester=chat"}
 {"k":"command","t":"2026-11-07T17:12:51.400Z","pid":13792,"piece":"u-lz4","words":"turn 1 generate → …","raw":"{\"k\":\"turn-start\",\"unit\":\"u-lz4\",\"attempt\":\"d-8378804af048\",\"index\":1,\"kind\":\"generate\"}"}
-{"k":"command","t":"2026-11-07T17:12:51.610Z","pid":13792,"piece":"u-lz4","words":"paused: waiting for the chat's answer to turn 1 (0 s)","raw":"exit 1"}
-{"k":"chat","t":"2026-11-07T17:12:51.700Z","pid":13792,"piece":"u-lz4","words":"told the chat: Make u-lz4's test program paused — turn 1 waits for your answer in …/bec63844.response.json"}
+{"k":"command","t":"2026-11-07T17:12:51.610Z","pid":13792,"piece":"u-lz4","words":"waiting for the chat's answer to turn 1","raw":"exit 1 · paused: waiting for the chat's answer to turn 1 (the reply goes to …/bec63844.response.json) (0 s)"}
+{"k":"chat","t":"2026-11-07T17:12:51.700Z","pid":13792,"piece":"u-lz4","words":"told the chat how it ended: waiting for its answer","raw":"told the chat: Ran by the cockpit after the person confirmed it: {\"act\":\"gen-driver\",\"outcome\":\"awaiting\",…}"}
 {"k":"chat","t":"2026-11-07T17:13:04.220Z","pid":13792,"piece":"u-lz4","words":"read the request of d-8378804a… (page 1)","raw":"harness_read_request {\"attempt\":\"d-8378804af048\",\"page\":1}"}
 {"k":"chat","t":"2026-11-07T17:13:04.900Z","pid":13792,"piece":"u-lz4","words":"read the request of d-8378804a… (page 1) — done"}
 {"k":"chat","t":"2026-11-07T17:19:40.900Z","pid":13792,"piece":"u-lz4","words":"Claude Code says: the reply hit the output limit; the chat goes on from where it was cut"}
-{"k":"chat","t":"2026-11-07T17:24:11.031Z","pid":13792,"piece":"u-lz4","words":"the chat's reply ended — 439.0 s · $1.774 of plan usage"}
+{"k":"chat","t":"2026-11-07T17:24:11.031Z","pid":13792,"piece":"u-lz4","words":"the chat's reply ended — 7 min 19 s · $1.774 of plan usage","raw":"439.0 s"}
 ```
 
 Fields: `k` (`header`, `cockpit`, `command`, `chat`, `dialog`, `notice`; an open set), `t`
@@ -168,11 +168,15 @@ the chat transcript's rule). One event is one row:
 ```
 17:12:51  u-lz4   Make u-lz4's test program — started (allowed by you)
 17:12:51  u-lz4   turn 1 generate → …
-17:12:51  u-lz4   paused: waiting for the chat's answer to turn 1
+17:12:51  u-lz4   waiting for the chat's answer to turn 1
+17:12:51  u-lz4   told the chat how it ended: waiting for its answer
 17:13:04  u-lz4   read the request of d-8378804a… (page 1)
 17:13:04  u-lz4   read the request of d-8378804a… (page 1) — done
 17:19:40  u-lz4   Claude Code says: the reply hit the output limit; the chat goes on
+17:20:12  u-lz4   waiting for the chat to answer turn 1 — thinking 7 min 8 s · heard 1 s ago
 ```
+
+(The last row is the live row of §B 2026-11-27: drawn, not logged.)
 
 The time is local wall-clock, `HH:MM:SS`; the piece column is the width of the longest piece
 id in the plan (blank for an event of none); the words wrap under their own column. Tones are
@@ -380,6 +384,71 @@ The build followed §9's order; the code is `crates/harness-tui/src/runlog.rs`, 
 - Tests as §8 lists them, 17 new: eight on `runlog`, the hooks, the adoption, the chat's
   funnel, the permissions and "told the chat", three goldens of the view and its keys, the
   heartbeat's four states, the notice row under the log, the Details pause row.
+
+## B. As built — waiting, said in the log (2026-11-27)
+
+The person opened the Log view while the chat's model wrote a long answer and saw it go
+silent for many minutes, its plain view full of paths, a command line, a JSON blob and
+"error" / "exit 1" lines for a normal pause: *it would be great to give status in terms of
+waiting for things to happen in the logs too.* What was added (`runlog.rs`, `app.rs`,
+`app/asks.rs`, `chat/mod.rs`, `view.rs`; tests in `view/tests/log_waits.rs`):
+
+- **A live row.** While anything is in progress, the Log view's last row says what the
+  cockpit waits for right now, in the notice tone, the time now in the time column, ticking
+  with the screen: `running — Re-check u-lz4 · 12 s`; `waiting for the chat to answer turn
+  1 — thinking 3 min 3 s · heard 0 s ago`; `waiting for the chat to answer turn 1 — it is
+  told how the command ended` (§B's fourth heartbeat state); `waiting — the chat's reply
+  ended and the command has not been asked again (40 s)`; `waiting — the chat ended and
+  turn 1 is still open; Ctrl-N starts a new chat`; `waiting for you — Esc to see` (a
+  request of the chat's read behind the overlay, or a hand-off that is the person's own).
+  Nothing in progress: no row. It is drawn, never logged. It reads the same facts as the
+  status row's heartbeat (one function, `chat_wait`, for both). It takes the page's last
+  row: following, it sits right under the newest event; scrolled up, it is put right after
+  the rows shown, so it stays at the bottom and `↓ more below — End: newest` stays true.
+  One row, cut to the width.
+- **One clock for the screen.** `App::now` is the last input's time and stands still while
+  nobody types (the heartbeat's "heard 0 s ago" was that clock, not the chat). The loop sets
+  `frame_now` each pass; `screen_now()` (never before `now`) drives the heartbeat, the chat
+  header, the live row and the rows below. Tests leave `frame_now` unset and fix `now`.
+- **Still waiting, written sparsely.** Every 5 minutes of one continuous wait on the chat
+  (from the pause's start, `ChatPause::since`), one `chat` row in the notice tone: `still
+  waiting for the chat's answer to turn 1 — 5 min, heard 2 s ago`, then `10 min`, … Never
+  more often: a pass that comes late writes the mark it reached once
+  (`ChatPause::logged`). Only while the chat lives and no request of it waits for the
+  person. `App::log_waits(now)`, called by the loop each pass; the tests drive the clock.
+- **The wait's end.** When the chat's answer goes on (its Continue on the paused piece
+  starts), one row: `the chat answered turn 1 after 14 min 42 s`.
+- **The reply's end in words.** `the chat's reply ended — 16 min 52 s · $8.165 of plan usage`
+  (`elapsed_words`, the status row's helper); the seconds to the tenth are the row's raw.
+  The chat pane's own `— 1012.2 s · …` line is unchanged.
+- **A pause for the chat is one plain row.** At the exit of a command paused for the chat,
+  the exit row's words are `waiting for the chat's answer to turn 1` (notice tone) and its
+  raw is `exit 1 · paused: … (the reply goes to <file>) (0 s)`. The same pause said by the
+  harness in its own words is folded: `Event::raw_only`, set in memory on the run's rows
+  (`RunPanel::log_from`, the log's serial at the spawn) once the pause is recognised, by
+  `fold_chat_pause` — `awaiting response: <file>` (stderr and the awaiting event), the
+  cockpit's `  hint: …` row right after the awaiting event's, `<cmd>: external provider
+  mode — …` naming the file's folder (migrate's and gen-driver's alike), `error:` /
+  `Error: awaiting response: <file>`, `awaiting: awaiting response: <file>`, `result: exit
+  1`. Only a line recognised whole folds; a real error or a failed check is never folded and
+  keeps its warn tone. The plain view leaves the folded rows out; `r` shows them all. The
+  file format is unchanged: the lines were written before the pause was known, and they are
+  all there. A hand-off that is the person's own folds nothing: its row names the file.
+- **What the chat was told, in plain words.** `told the chat how it ended: waiting for its
+  answer` (or `green`, `red — <the first failed check>`, `refused — <the error's first
+  words>`, `failed (exit N)`, `stopped`, `done`); the message sent is the row's raw.
+- **The permission row** reads `the chat may continue Migrate u-lz4frame (asked in chat)
+  without asking`; the attempt's id is its raw.
+- **The status row's heartbeat comes back.** Seen the same day: while the chat answered one
+  piece, the person ran a Re-check on another, and the row said `Ready. Last: …` for the
+  rest of the wait — every spawn ended the pause. Now a command ends the pause only when it
+  is the chat's next command, or the person's own on the paused piece (they took it over).
+  A person's command on another piece leaves the pause open; when it ends, its `Ready.
+  Last: …` shows for five seconds (`LAST_SHOWN_FOR`; the row is one line, so a few seconds
+  rather than a second half), then the heartbeat again. The live row says the wait
+  meanwhile.
+- No new event kind and no new field in the file: the new rows are `chat` and `command`
+  rows; `raw_only` lives in memory only.
 
 ## R. Design review — nine findings, resolved (2026-11-07)
 

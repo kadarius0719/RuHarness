@@ -203,7 +203,7 @@ pub fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect, column: bool, str
     let title_room = (right.saturating_sub(area.x + 2 + strip_w + buttons_w)) as usize;
     // While a reply runs, how long it has been thinking (the heartbeat,
     // docs/RUN-LOG-DESIGN.md §4).
-    let state = match app.chat.thinking_for(app.now) {
+    let state = match app.chat.thinking_for(app.screen_now()) {
         Some(d) if state_word(app) == "thinking…" => {
             format!("thinking {}", crate::narrate::elapsed_words(d))
         }
@@ -894,6 +894,7 @@ mod tests {
             since: now,
             turn: Some(1),
             piece: Some("u-lib".into()),
+            logged: 0,
         });
         a.focus = Focus::Chat;
         a.chat_column = true;

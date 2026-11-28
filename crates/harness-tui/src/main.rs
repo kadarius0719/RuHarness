@@ -853,9 +853,13 @@ fn run(
             // The signal path owns the terminal now.
             park();
         }
+        // The frame's clock: the heartbeat and the Log view's live row
+        // tick with the screen, not with the last key.
+        app.set_frame_clock(Instant::now());
         pump_loads(app, loader, &mut whys);
         app.chat_pump(Instant::now());
         app.expire_notice(Instant::now());
+        app.log_waits(Instant::now());
         app.log_pass();
         // Under the guard: a frame in flight when a signal restores the
         // terminal finishes before the second restore (PROC-5).

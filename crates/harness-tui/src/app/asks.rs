@@ -250,9 +250,10 @@ pub struct Asks {
     /// the chat answers turn 1", updated in place through its turns until
     /// its outcome.
     pub act_line: Option<u64>,
-    /// Rows for the run log (a permission granted or ended, with the
-    /// attempt it names), drained each loop pass (docs/RUN-LOG-DESIGN.md §2).
-    pub pending_log: Vec<(Option<String>, String)>,
+    /// Rows for the run log (a permission granted or ended): the attempt
+    /// it names, the words, the raw (the attempt's id when the words leave
+    /// it out); drained each loop pass (docs/RUN-LOG-DESIGN.md §2).
+    pub pending_log: Vec<(Option<String>, String, Option<String>)>,
     /// The piece of the chat act last run: the log's piece for the chat's
     /// rows (the selection moves freely while the chat works).
     pub last_piece: Option<String>,
@@ -321,6 +322,7 @@ impl Asks {
                 log.push((
                     Some(a.clone()),
                     format!("the chat's permission to continue {a} ended: {why}"),
+                    None,
                 ));
             }
             keep
@@ -338,6 +340,7 @@ impl Asks {
             self.pending_log.push((
                 Some(attempt.to_string()),
                 format!("the chat's permission to continue {attempt} ended: {why}"),
+                None,
             ));
         }
     }
@@ -1419,12 +1422,14 @@ impl App {
         };
         if let Some(t) = tag.filter(|t| t.grant && !self.config.allow_unsandboxed && live(t)) {
             self.asks.ended.remove(&attempt);
+            // The id is the raw: the plain view names the act alone.
             self.asks.pending_log.push((
                 Some(attempt.clone()),
                 format!(
-                    "the chat may continue {} without asking ({attempt})",
+                    "the chat may continue {} without asking",
                     self.asks.table.get(&attempt).map_or("", |h| h.act.as_str())
                 ),
+                Some(attempt.clone()),
             ));
             self.asks.permits.insert(
                 attempt,
@@ -1486,9 +1491,12 @@ impl App {
         let (text, line, tone) = outcome_message(&owed, failed);
         // What the model is told differs from the pane's line: the log
         // keeps it (docs/RUN-LOG-DESIGN.md §2).
-        self.chat
-            .transcript
-            .log_raw(T::Dim, format!("told the chat: {text}"), None);
+        // In plain words how it ended; the message sent is the raw.
+        self.chat.transcript.log_raw(
+            T::Dim,
+            format!("told the chat how it ended: {}", told_words(&owed)),
+            Some(format!("told the chat: {text}")),
+        );
         // The act's line ends in its outcome — or, paused for the chat's
         // answer, says which turn it answers (§9.5).
         let paused = outcome_word(&owed) == "awaiting";
@@ -2195,6 +2203,40 @@ fn no_key_held(r: &AttemptRecord) -> String {
 }
 
 /// The closed outcome word of a run (§3.3).
+/// How a chat act ended, in the words the log's plain view gives the
+/// outcome the cockpit sent the chat: waiting for its answer, green, red
+/// with the first failed check's name, an error in its own first words.
+/// The untrusted parts are made one safe line and kept short (the view's
+/// display filter renders them again).
+fn told_words(o: &Owed) -> String {
+    let short = |t: &str| {
+        let first = harness_core::text::safe_line(t.lines().next().unwrap_or(""));
+        let mut cut: String = first.chars().take(80).collect();
+        if cut.len() < first.len() {
+            cut.push('…');
+        }
+        cut
+    };
+    let c = &o.collect;
+    match outcome_word(o) {
+        "awaiting" => "waiting for its answer".to_string(),
+        "green" => "green".to_string(),
+        "red" => match c.failed.first() {
+            Some(check) => format!("red — {}", short(check)),
+            None => "red".to_string(),
+        },
+        "interrupted" => "stopped".to_string(),
+        "done" => "done".to_string(),
+        word => match &c.error {
+            Some((_, message)) => format!("{word} — {}", short(message)),
+            None => match o.exit {
+                Some(code) => format!("{word} (exit {code})"),
+                None => word.to_string(),
+            },
+        },
+    }
+}
+
 fn outcome_word(o: &Owed) -> &'static str {
     let c = &o.collect;
     if o.signal.is_some() || c.error.as_ref().is_some_and(|(k, _)| k == "interrupted") {
