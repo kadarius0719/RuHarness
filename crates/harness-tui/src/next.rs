@@ -417,6 +417,11 @@ impl App {
                 },
                 Some(Action::Act(Act::MapFeatures)),
             ),
+            // Every piece behind, in one Re-check (`verify --behind`).
+            featmap::Group::Valid if !self.behind_pieces().is_empty() => advice(
+                crate::app::recheck_behind_next(self.behind_pieces().len()),
+                Some(Action::Act(Act::RecheckBehind)),
+            ),
             featmap::Group::Valid => match model.recheck.first() {
                 Some(u) => advice(
                     format!("Re-check {u} — your features are not checked on it"),

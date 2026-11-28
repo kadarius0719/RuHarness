@@ -73,9 +73,10 @@ fn status() -> Style {
 }
 
 /// The "Last: …" words: the status line's, or a state that wants the person
-/// when the last command paused on a hand-off.
+/// when the last command paused on a hand-off or a Re-check of the pieces
+/// behind stopped at one.
 fn last_style(app: &App) -> Style {
-    if app.last_waiting {
+    if app.last_waiting || app.last_stopped {
         attention()
     } else {
         status()
@@ -11700,17 +11701,66 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         write_current_map(&app);
         app = crate::app::tests::app_of_path(&app.config.target);
         assert!(app.features.map.current());
+        // The tool's Next step: every piece behind, in one Re-check.
         let next = app.next_step().expect("a next step");
-        assert!(
-            next.text
-                .starts_with("open u001-katajainen (under Pieces), then Re-check"),
-            "{}",
-            next.text
-        );
         assert_eq!(
-            next.action,
-            Some(crate::menu::Action::OpenUnit("u001-katajainen".into()))
+            next.text,
+            "Re-check 1 piece on the program as it stands — Enter"
         );
+        let behind = Some(crate::menu::Action::Act(crate::app::Act::RecheckBehind));
+        assert_eq!(next.action, behind);
+        assert_eq!(app.behind_pieces(), ["u001-katajainen"]);
+        // Its item, on the tool's row and the Features row, recommended.
+        let label = "Re-check the 1 piece not yet checked on the program as it stands";
+        for sel in [Selection::Project, Selection::Features] {
+            app.select(sel.clone());
+            let next = app.advice(&sel).expect("a next step");
+            assert_eq!(next.action, behind, "{sel:?}: {}", next.text);
+            let mut items = app.menu_items();
+            let it = items
+                .iter()
+                .find(|i| i.label == label)
+                .unwrap_or_else(|| panic!("{sel:?}: {items:#?}"));
+            assert!(it.greyed.is_none(), "{:?}", it.greyed);
+            let pending = it.pending.as_ref().unwrap();
+            assert_eq!(pending.label, "Re-check 1 piece");
+            assert_eq!(
+                crate::app::tests::strs(&pending.argv),
+                [
+                    crate::app::tests::HARNESS,
+                    "--json",
+                    "verify",
+                    "--behind",
+                    &format!("--target={}", app.config.target.display())
+                ]
+            );
+            assert_eq!(
+                crate::menu::recommend(&mut items, Some(&next)).as_deref(),
+                Some("Re-check 1 piece on the program as it stands")
+            );
+            assert_eq!(items[0].label, label);
+        }
+        // Not on a feature's own row.
+        app.select(Selection::Feature("help".into()));
+        assert!(!app.menu_items().iter().any(|i| i.label == label));
+        // Enter on the tool's row: the menu opens on it; Enter again opens
+        // its dialog.
+        app.select(Selection::Project);
+        crate::app::tests::code(&mut app, KeyCode::Enter);
+        let crate::app::Mode::Menu(m) = &app.mode else {
+            panic!("{:?}", app.mode)
+        };
+        assert_eq!(m.items[m.focus].label, label);
+        crate::app::tests::code(&mut app, KeyCode::Enter);
+        let crate::app::Mode::Dialog(c) = &app.mode else {
+            panic!("{:?}", app.mode)
+        };
+        assert_eq!(c.title, "Re-check 1 piece on the program as it stands?");
+        assert!(
+            matches!(&c.purpose, crate::app::Purpose::Act(p) if p.act == crate::app::Act::RecheckBehind)
+        );
+        crate::app::tests::code(&mut app, KeyCode::Esc);
+        app.mode = crate::app::Mode::Normal;
         // The unit's screen: the marker on its verdict line, the features line.
         app.select(Selection::Unit("u001-katajainen".into()));
         let screen = text(&render(&mut app, 220, 40));
@@ -12012,10 +12062,7 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
         let mut app = crate::app::tests::app_of_path(&app.config.target);
         app.select(Selection::Project);
         let next = app.next_step().unwrap().text;
-        assert!(
-            next.starts_with("open u001-katajainen (under Pieces)"),
-            "{next}"
-        );
+        assert_eq!(next, "Re-check 1 piece on the program as it stands — Enter");
         assert!(
             app.journey()
                 .short()

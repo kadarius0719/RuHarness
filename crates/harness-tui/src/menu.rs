@@ -176,6 +176,16 @@ pub fn recommend(items: &mut Vec<Item>, advice: Option<&crate::next::Advice>) ->
     )
 }
 
+/// The menu item that re-checks the `n` pieces behind the program as it
+/// stands.
+pub fn recheck_behind_label(n: usize) -> String {
+    if n == 1 {
+        "Re-check the 1 piece not yet checked on the program as it stands".into()
+    } else {
+        format!("Re-check the {n} pieces not yet checked on the program as it stands")
+    }
+}
+
 /// A Next step's reason: its words up to the first " — ".
 pub fn reason_of(text: &str) -> String {
     text.split(" — ")
@@ -615,6 +625,14 @@ impl App {
                 });
             }
             items.push(it);
+        }
+        // Every piece the program as it stands has left behind, in one go:
+        // offered only while there is one (`harness verify --behind`).
+        if project || *sel == Selection::Features {
+            let n = self.behind_pieces().len();
+            if n > 0 {
+                items.push(self.act_item(recheck_behind_label(n), Act::RecheckBehind, None, None));
+            }
         }
         if matches!(sel, Selection::Speed) {
             self.speed_items(&mut items);
@@ -1100,6 +1118,37 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("a command is running"));
+    }
+
+    /// With no piece behind the program as it stands (here: no features
+    /// file), the one Re-check of them all is not offered, and its argv is
+    /// refused; its words say the count, singular and plural.
+    #[test]
+    fn the_recheck_of_the_pieces_behind_is_offered_only_when_one_is() {
+        let mut app = app("nobehind");
+        assert!(app.behind_pieces().is_empty());
+        let behind = Action::Act(Act::RecheckBehind);
+        for sel in [Selection::Project, Selection::Features] {
+            app.select(sel.clone());
+            assert!(
+                !app.menu_items().iter().any(|i| i.action == behind),
+                "{sel:?}: {:?}",
+                labels(&app.menu_items())
+            );
+        }
+        assert!(app.act_argv(Act::RecheckBehind, None, None, None).is_err());
+        assert_eq!(
+            recheck_behind_label(1),
+            "Re-check the 1 piece not yet checked on the program as it stands"
+        );
+        assert_eq!(
+            recheck_behind_label(3),
+            "Re-check the 3 pieces not yet checked on the program as it stands"
+        );
+        assert_eq!(
+            crate::app::recheck_behind_next(3),
+            "Re-check 3 pieces on the program as it stands — Enter"
+        );
     }
 
     fn find(app: &App, action: &Action) -> Item {

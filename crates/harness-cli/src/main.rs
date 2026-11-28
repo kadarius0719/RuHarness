@@ -225,8 +225,14 @@ enum Cmd {
     },
     /// Run a unit's oracle and record the verdict
     Verify {
-        /// Unit id from plan.toml
-        unit: String,
+        /// Unit id from plan.toml (or --behind, for every piece not yet
+        /// checked on the program as it stands)
+        unit: Option<String>,
+        /// Verify, in plan order, every piece in Rust whose verdict is not
+        /// yet checked against your features on the program as it stands;
+        /// stop at the first that is not green
+        #[arg(long)]
+        behind: bool,
         #[command(flatten)]
         target: TargetArg,
         /// Run target/model-derived code even though no sandbox is available
@@ -682,6 +688,12 @@ fn install_signal_handler() {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if let Some(why) = verify_usage(&cli.cmd) {
+        // A usage error, as clap's own are: said, exit 2, nothing run.
+        <Cli as clap::CommandFactory>::command()
+            .error(clap::error::ErrorKind::ArgumentConflict, why)
+            .exit();
+    }
     install_signal_handler();
     // `--adopt` is the person's word for this run only: never carried into
     // a resume command.
@@ -764,10 +776,19 @@ fn run(cmd: Cmd) -> Result<u8> {
         Cmd::Scan { target } => cmd_scan(target),
         Cmd::Plan { target } => cmd_plan(target),
         Cmd::Verify {
-            unit,
+            unit: Some(unit),
+            behind: false,
             target,
             allow_unsandboxed,
         } => cmd_verify(unit, target, allow_unsandboxed),
+        Cmd::Verify {
+            unit: None,
+            behind: true,
+            target,
+            allow_unsandboxed,
+        } => cmd_verify_behind(target, allow_unsandboxed),
+        // Refused in `main` before anything runs (`verify_usage`).
+        Cmd::Verify { .. } => bail!("say which piece to verify, or --behind"),
         Cmd::State {
             cmd: StateCmd::Status { target },
         } => cmd_status(target),
@@ -1227,6 +1248,102 @@ pub(crate) fn safe_ledger_dir(ctx: &TargetContext, components: &[&str]) -> Resul
         }
     }
     Ok(cur)
+}
+
+/// `verify` takes a piece or `--behind`, exactly one: the refusal's words
+/// when it was given both or neither.
+fn verify_usage(cmd: &Cmd) -> Option<&'static str> {
+    match cmd {
+        Cmd::Verify {
+            unit: Some(_),
+            behind: true,
+            ..
+        } => Some(
+            "give one piece to verify, or --behind for every piece not yet checked on the \
+             program as it stands — not both",
+        ),
+        Cmd::Verify {
+            unit: None,
+            behind: false,
+            ..
+        } => Some(
+            "say which piece to verify (harness verify <UNIT>), or --behind for every piece \
+             not yet checked on the program as it stands",
+        ),
+        _ => None,
+    }
+}
+
+/// "1 piece", "3 pieces".
+fn pieces(n: usize) -> String {
+    format!("{n} piece{}", if n == 1 { "" } else { "s" })
+}
+
+/// The pieces `verify --behind` re-checks, in plan order: each one
+/// [`harness_core::status::needs_features_recheck`] picks — the rule the
+/// cockpit counts with. None without a features file.
+fn behind_units(target: &TargetArg) -> Result<Vec<String>> {
+    let ctx = target.load()?;
+    let ledger = Ledger::of(&ctx);
+    let plan_doc = Plan::load(&ledger.plan_path())?;
+    plan_doc
+        .execution_order()
+        .context("plan.toml is structurally invalid; fix it before verifying")?;
+    let facts = crate::load_facts(&ctx, &ledger)?;
+    let Some(now) = harness_core::features::FeaturesNow::compute(
+        &ctx,
+        &facts,
+        &harness_core::features::FeatureSnapshot::load(&ctx),
+    ) else {
+        return Ok(Vec::new());
+    };
+    let mut picked = Vec::new();
+    for unit in &plan_doc.units {
+        let r = harness_core::status::unit_report(&ctx, &ledger, &facts, unit, Some(&now))?;
+        if harness_core::status::needs_features_recheck(&ledger, unit, &r) {
+            picked.push(unit.id.clone());
+        }
+    }
+    Ok(picked)
+}
+
+/// `harness verify --behind`: [`cmd_verify`] on each piece
+/// [`behind_units`] picks, one after the other, each preceded by its
+/// "(1 of 3)" line; it stops at the first that does not end green, with
+/// that verify's own exit (or error).
+fn cmd_verify_behind(target: TargetArg, allow_unsandboxed: bool) -> Result<u8> {
+    require_sandbox(allow_unsandboxed, "harness verify")?;
+    let picked = behind_units(&target)?;
+    let n = picked.len();
+    if n == 0 {
+        out(
+            "verify: every piece in Rust is checked on the program as it stands — nothing to do"
+                .to_string(),
+        );
+        return Ok(0);
+    }
+    for (i, unit) in picked.iter().enumerate() {
+        out(format!("verify: {unit} ({} of {n})", i + 1));
+        let ended = cmd_verify(unit.clone(), target.clone(), allow_unsandboxed);
+        if !matches!(ended, Ok(0)) {
+            let left = n - i - 1;
+            out(if left == 0 {
+                format!("verify: stopped at {unit} — it was the last piece to re-check")
+            } else {
+                format!(
+                    "verify: stopped at {unit} — {} not re-checked",
+                    pieces(left)
+                )
+            });
+            return ended;
+        }
+    }
+    out(format!(
+        "verify: {} re-checked on the program as it stands — {}",
+        pieces(n),
+        if n == 1 { "green" } else { "all green" }
+    ));
+    Ok(0)
 }
 
 fn cmd_verify(unit_id: String, target: TargetArg, allow_unsandboxed: bool) -> Result<u8> {

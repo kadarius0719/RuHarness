@@ -259,7 +259,10 @@ impl App {
             Action::Act(Act::Plan) => 5,
             Action::GenDriver => 6,
             Action::Migrate | Action::Modify | Action::Act(Act::Retry) => 7,
-            Action::ChooseAttempt(_) | Action::Act(Act::Accept) | Action::Act(Act::Verify) => 8,
+            Action::ChooseAttempt(_)
+            | Action::Act(Act::Accept)
+            | Action::Act(Act::Verify)
+            | Action::Act(Act::RecheckBehind) => 8,
             Action::OpenUnit(id) => {
                 let i = self.snapshot.units.iter().position(|u| &u.unit.id == id)?;
                 return self.unit_journey_stage(i);

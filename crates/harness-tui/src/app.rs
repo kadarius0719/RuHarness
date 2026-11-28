@@ -202,6 +202,9 @@ pub enum Act {
     Detect,
     /// `verify <unit>`: Re-check with the judge.
     Verify,
+    /// `verify --behind`: Re-check, one after the other, every piece in
+    /// Rust not yet checked on the program as it stands.
+    RecheckBehind,
     /// `a`: promote a green attempt.
     Accept,
     /// `m`: a steer attempt seeded from an attempt.
@@ -255,6 +258,7 @@ impl Act {
             Act::Plan => "Refresh the plan",
             Act::Detect => "Find risky patterns",
             Act::Verify => "Re-check",
+            Act::RecheckBehind => "Re-check the pieces not yet checked",
             Act::Accept => "Accept",
             Act::Modify => "Modify",
             Act::HandEdit => "Hand edit",
@@ -287,6 +291,7 @@ impl Act {
             | Act::Plan
             | Act::Detect
             | Act::Verify
+            | Act::RecheckBehind
             | Act::Migrate
             | Act::GenDriver
             | Act::Continue
@@ -894,6 +899,9 @@ pub struct App {
     /// The last command paused on a hand-off: the idle line is a state that
     /// wants the person (the attention role), never a failure.
     pub last_waiting: bool,
+    /// The last command was a Re-check of the pieces behind that stopped
+    /// at one: its "Last: …" wants a look, as a pause does.
+    pub last_stopped: bool,
     /// A Project view act that paused on a hand-off: the act to run again
     /// and the words the Next step says.
     pub project_waiting: Option<(crate::project::Act, String)>,
@@ -1212,6 +1220,7 @@ impl App {
             theme_chosen: crate::theme::Chosen::default(),
             files_width: None,
             last_waiting: false,
+            last_stopped: false,
             project_waiting: None,
             harness_own_build,
             tree_follow: true,
@@ -2260,6 +2269,7 @@ impl App {
                 signal.as_deref(),
                 run.started.elapsed(),
             ));
+            self.last_stopped = run.narrator.sweep_stopped(status.code(), signal.as_deref());
             if let Some(w) = &waiting {
                 self.last = Some(format!("{} — {w}", run.narrator.label));
             }
@@ -2511,6 +2521,23 @@ impl App {
                     self.target_arg(),
                 ])?);
                 Ok(pending(argv, act.label().to_string(), None, None))
+            }
+            Act::RecheckBehind => {
+                let n = self.behind_pieces().len();
+                if n == 0 {
+                    return Err("every piece in Rust is checked on the program as it stands".into());
+                }
+                let argv = self.with_sandbox_flag(self.harness_argv(&[
+                    os("verify"),
+                    os("--behind"),
+                    self.target_arg(),
+                ])?);
+                Ok(pending(
+                    argv,
+                    format!("Re-check {}", pieces_words(n)),
+                    None,
+                    None,
+                ))
             }
             Act::Verify => {
                 let u = find_unit()?;
@@ -2931,6 +2958,10 @@ impl App {
                     .into(),
                 format!("Writes: {ledger}/features/map.json; your C is not changed."),
             ],
+            Act::RecheckBehind => vec![
+                full.first().cloned().unwrap_or_default(),
+                "Writes: each piece's check and its status in the plan; changes no code.".into(),
+            ],
             Act::Verify => vec![
                 full.first().cloned().unwrap_or_default(),
                 format!(
@@ -3142,6 +3173,27 @@ impl App {
                             self.snapshot.ledger_rel()
                         ),
                         "It changes no check result and no code.".into(),
+                    ],
+                )
+            }
+            Act::RecheckBehind => {
+                let behind = self.behind_pieces();
+                (
+                    format!(
+                        "Re-check {} on the program as it stands?",
+                        pieces_words(behind.len())
+                    ),
+                    vec![
+                        format!(
+                            "Runs the judge on {}, one after the other, as Re-check does on \
+                             each: its checks, then your features on the program as it stands.",
+                            behind.join(", ")
+                        ),
+                        "Stops at the first piece that does not pass; the ones after it are \
+                         left as they are."
+                            .into(),
+                        "Writes: each piece's check and its status in the plan; changes no code."
+                            .into(),
                     ],
                 )
             }
@@ -3500,7 +3552,10 @@ impl App {
         // crate holds no link (review SAFE-2). The other acts read nothing
         // here — a broken file never refuses the Scan that could repair it
         // (review NEW-6).
-        if matches!(p.act, Act::Verify | Act::Accept | Act::Retry | Act::Resume) || p.chat.is_some()
+        if matches!(
+            p.act,
+            Act::Verify | Act::RecheckBehind | Act::Accept | Act::Retry | Act::Resume
+        ) || p.chat.is_some()
         {
             crate::preflight::preflight_tool(&target, self.config.tool.as_deref())
                 .map_err(|why| format!("the project cannot be read safely: {why}"))?;
@@ -3514,6 +3569,21 @@ impl App {
             AttemptRecord::load(&dir).map_err(|e| format!("try {attempt} could not be read: {e}"))
         };
         match p.act {
+            // Each piece's Rust is code the harness knows, as Re-check asks
+            // of one piece, checked on the crate as it is now.
+            Act::RecheckBehind => {
+                for id in self.behind_pieces() {
+                    let Some(dir) = self.snapshot.unit(&id).and_then(|u| u.crate_dir.clone())
+                    else {
+                        return Err(format!("{id} has no crate — press g and look again"));
+                    };
+                    let now = harness_core::hash::crate_content_hash(&dir)
+                        .map_err(|e| format!("{id}'s crate could not be read: {e}"))?;
+                    self.known_now(&id, &dir, &now)
+                        .map_err(|why| format!("{id}: {why}"))?;
+                }
+                Ok(())
+            }
             Act::Verify => {
                 let id = p.unit.as_deref().ok_or("no piece")?;
                 // The crate `verify` will judge: the one the plan names now.
@@ -3610,6 +3680,19 @@ impl App {
             }
             _ => Ok(()),
         }
+    }
+
+    /// The pieces in Rust not yet checked on the program as it stands, in
+    /// plan order: the ones `harness verify --behind` re-checks, by its own
+    /// rule ([`harness_core::status::needs_features_recheck`]).
+    pub fn behind_pieces(&self) -> Vec<String> {
+        let ledger = self.snapshot.ledger();
+        self.snapshot
+            .units
+            .iter()
+            .filter(|u| harness_core::status::needs_features_recheck(&ledger, &u.unit, &u.report))
+            .map(|u| u.unit.id.clone())
+            .collect()
     }
 
     /// Whether the unit crate at `dir`, whose content hash is `now`, is code
@@ -4414,8 +4497,17 @@ impl App {
                 Some(Action::Act(Act::MapFeatures)),
             );
         }
-        // 6. A unit with Rust whose verdict does not cover the features —
-        // the F3 rule's units (review C3).
+        // 6. Pieces with Rust whose verdict does not cover the features on
+        // the program as it stands: all of them in one Re-check
+        // (`verify --behind`); else a unit the F3 rule names that it would
+        // not pick (review C3), opened.
+        let behind = self.behind_pieces().len();
+        if behind > 0 {
+            return say(
+                recheck_behind_next(behind),
+                Some(Action::Act(Act::RecheckBehind)),
+            );
+        }
         if let Some(u) = self.features.recheck.first() {
             return say(
                 format!(
@@ -6493,6 +6585,19 @@ pub fn attempt_tags(unit: &UnitView, a: &AttemptView) -> Vec<String> {
 
 pub use crate::model::short_id;
 
+/// "1 piece", "3 pieces".
+pub(crate) fn pieces_words(n: usize) -> String {
+    format!("{n} piece{}", if n == 1 { "" } else { "s" })
+}
+
+/// The Next step when `n` pieces are behind the program as it stands.
+pub(crate) fn recheck_behind_next(n: usize) -> String {
+    format!(
+        "Re-check {} on the program as it stands — Enter",
+        pieces_words(n)
+    )
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -6612,6 +6717,7 @@ pub(crate) mod tests {
             Act::Plan,
             Act::Detect,
             Act::Verify,
+            Act::RecheckBehind,
             Act::Accept,
             Act::Modify,
             Act::HandEdit,
@@ -6637,6 +6743,7 @@ pub(crate) mod tests {
                 | Act::Plan
                 | Act::Detect
                 | Act::Verify
+                | Act::RecheckBehind
                 | Act::Accept
                 | Act::Modify
                 | Act::HandEdit

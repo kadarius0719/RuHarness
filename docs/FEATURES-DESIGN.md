@@ -967,6 +967,10 @@ act is enabled:
 6. a unit with Rust whose result for some feature is `not checked` or `absent` → "Re-check u-… — your
    features are not checked on it" (the project menu gains **Re-check u-…** for exactly this
    unit while the rule applies, so the Next step's act is where `recommended` looks).
+   Since 2026-11-27, when `harness verify --behind` would pick one or more pieces (Rust in
+   use, coverage behind for a reason other than a skip alone), the Next step is instead
+   "Re-check 3 pieces on the program as it stands — Enter", and the project and Features menus
+   offer **Re-check the 3 pieces not yet checked on the program as it stands**, which runs it.
 
 ### 8.5 The menu and the acts
 

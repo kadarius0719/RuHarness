@@ -520,6 +520,21 @@ fn compute(
     })
 }
 
+/// The piece is one `harness verify --behind` re-checks: its Rust is in use
+/// (accepted: verified or merged, its crate present — what the program as
+/// it stands links) and its verdict's coverage of today's features
+/// (`report.features`, what `state status` prints as `features=behind(…)`)
+/// is behind for a reason a re-check can clear
+/// ([`crate::features::Coverage::recheck_helps`]). The cockpit counts the
+/// same pieces with this same rule.
+pub fn needs_features_recheck(ledger: &Ledger, unit: &Unit, report: &UnitReport) -> bool {
+    report
+        .features
+        .as_ref()
+        .is_some_and(crate::features::Coverage::recheck_helps)
+        && crate::deps::accepted_crate(ledger, unit).is_some()
+}
+
 /// The line under the units (the live proof's third gap): how much of the
 /// program as it stands is Rust — "the program as it stands: 3 of 4 pieces
 /// in Rust (u-lzg holds main)". A piece is in Rust when its Rust is
@@ -963,6 +978,18 @@ mod tests {
         assert!(!serde_json::to_string(&r)
             .unwrap()
             .contains("made_elsewhere"));
+    }
+
+    #[test]
+    fn a_recheck_helps_unless_the_only_reason_is_a_skip() {
+        use crate::features::Coverage;
+        let behind = |rs: &[&str]| Coverage::Behind(rs.iter().map(|r| r.to_string()).collect());
+        assert!(!Coverage::Current.recheck_helps());
+        assert!(!behind(&["skipped"]).recheck_helps());
+        for r in ["not-yet", "changed", "invalid", "program"] {
+            assert!(behind(&[r]).recheck_helps(), "{r}");
+            assert!(behind(&[r, "skipped"]).recheck_helps(), "{r}");
+        }
     }
 
     #[test]

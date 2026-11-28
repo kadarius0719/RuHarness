@@ -108,6 +108,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-11-19 — **A function the build does not compile is left out of its piece: the compiler has the last word when it clearly agrees with the scan** — the plan step reads what each compiled file defines from the project map; `LZ4HC_hexOut` and `BufPool_releaseBuffer` go to `not_built`; xxhash.c's renamed functions are flagged in `build_only` and nothing is left out; preprocessing the scan rejected for now.
 - 2026-11-21 — **The piece card comes in titled groups** — This piece, Where it stands, Checks, Functions (n), Helpers (n): a blank line between groups, rows indented, the function names in columns with their lines of C; the headings take the section colour, body text stays plain so colour on words still means a state.
 - 2026-11-25 — **The outer loop turned on for lz4, and a ninth wall on the way** — Anthropic's Messages API port read; the whole-program check and 15 scenarios pass on a copy with the three accepted pieces; `features map` stopped on lz4's macro-static helpers and now takes a function's identity from the facts; the scenarios run 9 of u-lz4's 49 functions, which is what the program uses.
+- 2026-11-27 — **One Re-check for every piece the program has left behind** — an accept changes the program as it stands, so every other piece in Rust goes `features=behind(program)`; `harness verify --behind` and one cockpit action re-check them all, in plan order, stopping at the first that is not green; the rule itself is kept.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -4744,3 +4745,36 @@ their own, with their own `main`).
 
 **Built** by an Opus subagent from one brief (the probe fix), reviewed and gated here: the
 scanner's and the oracle's tests, the lints. The whole workspace was not rerun.
+
+## 2026-11-27 — One Re-check for every piece the program has left behind
+
+**Seen.** On lz4, the day the outer loop went on: the person accepted u-lz4hc and all eight
+features went back to "needs a re-check". Each of the three older pieces was last checked on
+the program with three Rust pieces; it now had four, so each was `features=behind(program)`.
+The only way out was to open each piece and Re-check it: three trips after that accept, eight
+after the last.
+
+**Decided.** The rule stays: a verdict covers the program it ran on, and the ledger keeps that
+per piece. What changes is the work. `harness verify --behind` re-checks, in plan order, every
+piece whose Rust is in use and whose coverage is behind for a reason a re-check can clear, each
+exactly as `harness verify <unit>` would, and stops at the first that does not end green. The
+cockpit runs it from one item on the tool's row and the Features row ("Re-check the 3 pieces
+not yet checked on the program as it stands"), which the Next step points to. One rule
+(`status::needs_features_recheck`) serves the command and the cockpit.
+
+**A refinement the builder made, kept.** A piece behind only because a scenario was skipped on
+it is not picked: the next verify would skip it again, and the cockpit would ask for a re-check
+for ever.
+
+**Rejected.** Letting one feature run count for every accepted piece (the scenarios run the same
+whole program whichever piece is being verified, so the re-checks repeat work). It would move
+coverage from the piece's verdict to a record of the program, a change to the ledger's shape for
+a saving of about fifteen seconds a piece. Revisit when a program has tens of pieces.
+
+**Proven.** On a copy of the person's lz4 project at 5 of 10 pieces: four pieces behind,
+re-checked in 69 seconds, all green, every `features=` current after, and a second run says
+there is nothing to do. Built by an Opus subagent from one brief; reviewed and gated here (the
+core's, the cockpit's and the new command-line test; the lints; the guide gate).
+
+**Left open.** The Accept itself could offer the re-check when it ends. Nothing tests that the
+stopped ending draws in the attention colour, or a verify that errors (not reds) mid-way.

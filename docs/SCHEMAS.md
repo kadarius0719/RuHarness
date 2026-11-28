@@ -212,6 +212,20 @@ Human stdout is NOT a contract — machine consumers read the ledger files.
 - `harness verify <UNIT> [--target DIR]` — run the unit's oracle; write verdict;
   update status. A crash or build failure of the migration candidate is a red
   verdict (evidence), not a harness error.
+- `harness verify --behind [--target DIR]` — `verify` on every piece in Rust whose features
+  coverage is behind (what `state status` prints as `features=behind(…)`), in plan order: a
+  piece whose Rust is accepted (verified or merged, its crate present) and whose reasons are
+  anything but `skipped` alone (a skip comes back on the next verify, so a re-check would never
+  clear it). Each piece's verify is exactly `harness verify <UNIT>`, preceded by
+  `verify: <unit> (1 of 3)`. At the first piece that does not end GREEN it stops, with that
+  verify's own exit code (or its error), after `verify: stopped at <unit> — 2 pieces not
+  re-checked` (`— it was the last piece to re-check` when none is left); all green ends with
+  `verify: 3 pieces re-checked on the program as it stands — all green` (`1 piece … — green`),
+  exit 0. Nothing behind (or no features file): `verify: every piece in Rust is checked on the
+  program as it stands — nothing to do`, exit 0. UNIT and `--behind` together, or neither, is a
+  usage error (exit 2). With `--json` the stream is each verify's usual events, one after the
+  other (their `check` and `verdict` events carry `unit`), between one header and one result;
+  the lines above are `message` events.
 - `harness state status [--target DIR]` — the staleness detector: recomputes file
   hashes vs facts.jsonl, unit `source_hash` vs tree, verdict input digests vs tree;
   prints per-unit fresh/verified-but-stale/contradiction.

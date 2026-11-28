@@ -180,6 +180,10 @@ no spike edits. The live walk on a fresh copy moved u-checksum, u-encode and u-v
    file; map; verify the three pieces. Then u-lz4hc as before. The map's finding to design
    from: the program runs 9 of u-lz4's 49 functions, so the project's own library tests are the
    next source of real use.
+   **2026-11-27:** the person turned the outer loop on in their project and moved u-lz4hc and
+   u-threadpool with it on: 5 of 9, every feature holding. Each accept left the older pieces
+   behind the program as it stands; one Re-check now does them all (DECISIONS 2026-11-27).
+   u-lz4frame's test program is being made. u-xxhash is skipped until the rename work.
 6. **Then the briefing's next milestone (M5, the extension proof)**, or what the scale run shows,
    as the person decides.
 

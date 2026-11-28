@@ -94,6 +94,15 @@ pub fn elapsed_words(d: Duration) -> String {
     }
 }
 
+/// The piece of a `verify --behind` line "verify: u-lorem (1 of 3)", and
+/// `None` for any other line.
+fn sweep_piece(line: &str) -> Option<&str> {
+    let (unit, count) = line.strip_prefix("verify: ")?.split_once(" (")?;
+    let (i, n) = count.strip_suffix(')')?.split_once(" of ")?;
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    (!unit.is_empty() && !unit.contains(' ') && digits(i) && digits(n)).then_some(unit)
+}
+
 /// How the run ended, for the idle line and the `[Try again]` offer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ending {
@@ -137,6 +146,11 @@ pub struct Narrator {
     locked_by: Option<String>,
     /// The perf rows this run wrote.
     perf_rows: usize,
+    /// A `verify --behind` run: one verdict per piece it re-checks.
+    sweep: bool,
+    /// The piece a `verify --behind` run is on (its "(1 of 3)" line), and
+    /// the one whose verdict was red.
+    sweep_on: Option<String>,
 }
 
 fn arg_value(argv: &[OsString], flag: &str) -> Option<String> {
@@ -165,7 +179,6 @@ impl Narrator {
         };
         Narrator {
             label: label.to_string(),
-            subcommand,
             model: arg_value(argv, "--model"),
             steer: argv
                 .iter()
@@ -182,6 +195,9 @@ impl Narrator {
             last_message: None,
             locked_by: None,
             perf_rows: 0,
+            sweep: subcommand == "verify" && argv.iter().any(|a| a == "--behind"),
+            sweep_on: None,
+            subcommand,
         }
     }
 
@@ -201,6 +217,12 @@ impl Narrator {
             Event::Header { .. } | Event::Result { .. } | Event::Other { .. } => {}
             Event::NotJson { line } => self.step = line.clone(),
             Event::Message { text } => {
+                if self.sweep {
+                    // "verify: u-lorem (1 of 3)": the piece it moves to.
+                    if let Some(unit) = sweep_piece(text) {
+                        self.sweep_on = Some(unit.to_string());
+                    }
+                }
                 self.step = text.clone();
                 self.last_message = Some(text.clone());
             }
@@ -274,6 +296,11 @@ impl Narrator {
                 };
                 self.step = format!("Verdict: {text}");
                 self.verdict = Some(text);
+                // Each piece of a sweep counts its own checks.
+                if self.sweep {
+                    self.checks.clear();
+                    self.not_run.clear();
+                }
             }
             Event::Attempt { id, outcome, .. } => {
                 self.step = format!("Recorded try {id}: {outcome}");
@@ -381,7 +408,37 @@ impl Narrator {
 
     /// The idle line's sentence for a reaped run.
     pub fn last(&self, code: Option<i32>, signal: Option<&str>, took: Duration) -> String {
-        let outcome = match self.ending(code, signal) {
+        let ending = self.ending(code, signal);
+        let outcome = match (ending, &self.sweep_on) {
+            // `verify --behind`: every piece green, or the one it stopped at.
+            (Ending::Done, _) if self.sweep => Some("GREEN".to_string()),
+            (Ending::Red, Some(unit)) if self.sweep => Some(format!(
+                "stopped at {unit}: {}",
+                self.verdict.as_deref().unwrap_or("RED")
+            )),
+            (Ending::Refused | Ending::Other, Some(unit)) if self.sweep => Some(format!(
+                "stopped at {unit}: {}",
+                self.outcome(ending, code, signal)
+            )),
+            _ => None,
+        }
+        .unwrap_or_else(|| self.outcome(ending, code, signal));
+        format!("{} — {outcome} ({})", self.label, elapsed_words(took))
+    }
+
+    /// A `verify --behind` run that stopped at a piece: it wants a look.
+    pub fn sweep_stopped(&self, code: Option<i32>, signal: Option<&str>) -> bool {
+        self.sweep
+            && self.sweep_on.is_some()
+            && matches!(
+                self.ending(code, signal),
+                Ending::Red | Ending::Refused | Ending::Other
+            )
+    }
+
+    /// How a run ended, in words (the idle line's, after the label).
+    fn outcome(&self, ending: Ending, code: Option<i32>, signal: Option<&str>) -> String {
+        match ending {
             Ending::Done => match (&self.verdict, self.subcommand.as_str()) {
                 (Some(v), _) => v.clone(),
                 // docs/PERF-DESIGN.md §3.11: "Measured 4 rows — see Speed".
@@ -422,8 +479,7 @@ impl Narrator {
                 Some(c) => format!("failed (exit {c})"),
                 None => "ended".into(),
             },
-        };
-        format!("{} — {outcome} ({})", self.label, elapsed_words(took))
+        }
     }
 }
 
@@ -456,6 +512,73 @@ mod tests {
                 n.step().to_string()
             })
             .collect()
+    }
+
+    fn sweep_events(red_second: bool) -> Vec<Event> {
+        let msg = |t: &str| Event::Message { text: t.into() };
+        let check = |unit: &str, passed| Event::Check {
+            unit: unit.into(),
+            name: "differential-driver".into(),
+            passed,
+            detail: String::new(),
+        };
+        let verdict = |unit: &str, green| Event::Verdict {
+            unit: unit.into(),
+            green,
+            path: format!("migration/units/{unit}/oracle-latest.json"),
+        };
+        let mut events = vec![
+            msg("verify: u-a (1 of 3)"),
+            check("u-a", true),
+            msg("verify: [PASS] feature:help/flag — exit 0 (same as C)"),
+            verdict("u-a", true),
+            msg("verify: u-b (2 of 3)"),
+            check("u-b", !red_second),
+            verdict("u-b", !red_second),
+        ];
+        if red_second {
+            events.push(msg("verify: stopped at u-b — 1 piece not re-checked"));
+        } else {
+            events.push(msg("verify: u-c (3 of 3)"));
+            events.push(check("u-c", true));
+            events.push(verdict("u-c", true));
+        }
+        events
+    }
+
+    /// `verify --behind`: GREEN when every piece passed; a red piece is the
+    /// one named, with its own checks only.
+    #[test]
+    fn a_recheck_of_the_pieces_behind_ends_green_or_names_where_it_stopped() {
+        let argv = argv(&["harness", "--json", "verify", "--behind", "--target=."]);
+        let mut n = Narrator::new("Re-check 3 pieces", &argv);
+        run(&mut n, &sweep_events(false));
+        let took = Duration::from_secs(45);
+        assert_eq!(
+            n.last(Some(0), None, took),
+            "Re-check 3 pieces — GREEN (45 s)"
+        );
+        assert!(!n.sweep_stopped(Some(0), None));
+        let mut n = Narrator::new("Re-check 3 pieces", &argv);
+        run(&mut n, &sweep_events(true));
+        assert_eq!(
+            n.last(Some(10), None, took),
+            "Re-check 3 pieces — stopped at u-b: RED — 1 of 1 checks failed: same outputs as \
+             C (45 s)"
+        );
+        assert!(n.sweep_stopped(Some(10), None));
+        // A plain verify is unchanged: never a sweep.
+        let n = Narrator::new(
+            "Re-check u-b",
+            &super::tests::argv(&["harness", "--json", "verify", "u-b"]),
+        );
+        assert!(!n.sweep_stopped(Some(10), None));
+        assert_eq!(sweep_piece("verify: u-a (1 of 3)"), Some("u-a"));
+        assert_eq!(sweep_piece("verify: [PASS] x — y (2 of 3)"), None);
+        assert_eq!(
+            sweep_piece("verify: u-a GREEN — status set to verified"),
+            None
+        );
     }
 
     #[test]

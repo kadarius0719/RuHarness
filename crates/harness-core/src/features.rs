@@ -2033,6 +2033,19 @@ pub enum Coverage {
     Behind(Vec<String>),
 }
 
+impl Coverage {
+    /// Behind for a reason a re-check can clear: any reason but `skipped`
+    /// alone. A scenario skipped on this piece (the C cannot run it the
+    /// same way twice, or the piece is outside the program) is skipped
+    /// again by the next verify, so a re-check never brings it current.
+    pub fn recheck_helps(&self) -> bool {
+        match self {
+            Coverage::Current => false,
+            Coverage::Behind(reasons) => reasons.iter().any(|r| r != "skipped"),
+        }
+    }
+}
+
 impl serde::Serialize for Coverage {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         match self {
