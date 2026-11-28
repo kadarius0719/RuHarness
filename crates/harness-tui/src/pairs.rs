@@ -97,11 +97,13 @@ pub fn pairs(
     crate_dir: Option<&Path>,
 ) -> Vec<FunctionPair> {
     let index = crate_dir.map(CrateIndex::build);
+    // The Rust exports each function under the name the link has: the
+    // built name when the build renames it (the plan's `link_names`).
     let exported: Vec<&str> = unit
         .symbols
         .iter()
         .filter(|s| !s.contains("::"))
-        .map(String::as_str)
+        .map(|s| unit.link_name(s))
         .collect();
     let mut ordered: Vec<&String> = unit.symbols.iter().filter(|s| !s.contains("::")).collect();
     ordered.extend(unit.symbols.iter().filter(|s| s.contains("::")));
@@ -117,7 +119,7 @@ pub fn pairs(
                     note: Some(RustNote::NoCrate),
                     ..RustSide::default()
                 },
-                Some(index) if public => index.public_side(symbol, &exported),
+                Some(index) if public => index.public_side(unit.link_name(symbol), &exported),
                 Some(index) => index.internal_side(symbol.rsplit("::").next().unwrap_or(symbol)),
             };
             FunctionPair {

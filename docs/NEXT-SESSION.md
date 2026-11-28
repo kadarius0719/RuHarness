@@ -184,6 +184,17 @@ no spike edits. The live walk on a fresh copy moved u-checksum, u-encode and u-v
    u-threadpool with it on: 5 of 9, every feature holding. Each accept left the older pieces
    behind the program as it stands; one Re-check now does them all (DECISIONS 2026-11-27).
    u-lz4frame's test program is being made. u-xxhash is skipped until the rename work.
+   **Later the same day, the tenth wall:** u-lz4frame's Rust was refused twice and blocked
+   (about $10 of model time): it calls xxhash, whose build renames every function
+   (`-DXXH_NAMESPACE=LZ4_`), and every piece still to move calls it. Fixed the same day
+   (DECISIONS 2026-11-27, "A build that puts a prefix in front of a piece's functions is
+   followed"): the plan records the rename (`link_names`), the judge and the prompts use the
+   built names, the scanner reads xxhash.c's two `_update` heads, and a piece whose build names
+   cannot be followed is refused before any question is posed. Proven on a copy: u-lz4frame's
+   test program stays valid and its Rust question now names `LZ4_XXH32`. The person's steps:
+   rebuild, Scan, Refresh the plan (one line for u-xxhash), the one-step Re-check, then ask the
+   chat to migrate u-lz4frame again; then u-xxhash, u-bench, u-lz4io. Not seen yet on a real
+   run: a renamed piece's own Rust through the whole judge (u-xxhash will be the first).
 6. **Then the briefing's next milestone (M5, the extension proof)**, or what the scale run shows,
    as the person decides.
 
