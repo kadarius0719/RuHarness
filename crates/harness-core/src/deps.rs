@@ -179,15 +179,57 @@ pub fn now_or_none(
     }
 }
 
-/// The symbols of every unit `unit` depends on, transitively: what its Rust
-/// may declare in an `extern "C"` block and import (docs/
-/// BEYOND-LEAVES-DESIGN.md §3). Sorted, without duplicates.
+/// The symbols of every unit `unit` depends on, transitively, as the
+/// linker names them ([`Unit::link_symbols`]): what its Rust may declare in
+/// an `extern "C"` block and import (docs/BEYOND-LEAVES-DESIGN.md §3).
+/// Sorted, without duplicates.
 pub fn symbols(plan: &Plan, unit: &Unit) -> Result<Vec<String>, Error> {
     let mut out: BTreeSet<String> = BTreeSet::new();
     for dep in transitive(plan, unit)? {
-        out.extend(dep.symbols.iter().cloned());
+        out.extend(dep.link_symbols());
     }
     Ok(out.into_iter().collect())
+}
+
+/// The first piece, `unit` itself or one it depends on (in execution
+/// order), whose build defines function names the harness could not match
+/// to its source's (`build_only`: a rename the plan step could not
+/// explain). No question about `unit` is posed while one exists: the model
+/// would be told names the link does not have (the lz4 run of 2026-11-27).
+pub fn unfollowed_names<'p>(plan: &'p Plan, unit: &'p Unit) -> Result<Option<&'p Unit>, Error> {
+    if !unit.build_only.is_empty() {
+        return Ok(Some(unit));
+    }
+    Ok(transitive(plan, unit)?
+        .into_iter()
+        .find(|dep| !dep.build_only.is_empty()))
+}
+
+/// The refusal for [`unfollowed_names`]: one plain sentence naming the
+/// piece, for `harness migrate` and `harness gen-driver`.
+pub fn unfollowed_names_refusal(unit: &Unit, blocked_by: &Unit) -> Error {
+    let n = blocked_by.build_only.len();
+    let names = if n == 1 { "name" } else { "names" };
+    let which = if blocked_by.id == unit.id {
+        format!("{}'s build", unit.id)
+    } else {
+        format!("{} calls {}, whose build", unit.id, blocked_by.id)
+    };
+    Error::InvalidPlan(format!(
+        "{which} gives its functions names the harness cannot follow yet ({n} {names} the \
+         source does not have), so no question is posed"
+    ))
+}
+
+/// Every renamed function of the plan, source name to built name
+/// (each unit's `link_names`): what the import rule needs to know a built
+/// name as the program's own.
+pub fn program_link_names(plan: &Plan) -> std::collections::BTreeMap<String, String> {
+    plan.units
+        .iter()
+        .flat_map(|u| u.link_names.iter())
+        .map(|(s, b)| (s.clone(), b.clone()))
+        .collect()
 }
 
 impl Unit {
@@ -286,6 +328,63 @@ mod tests {
         );
         assert!(p.unit("tool").expect("tool").holds_main());
         assert!(!p.unit("lib").expect("lib").holds_main());
+    }
+
+    /// A callee whose build renames its functions: the caller may declare
+    /// the built names, never the source's; the plan's symbols stay the
+    /// source's.
+    #[test]
+    fn a_caller_may_declare_its_callees_built_names() {
+        let p = plan(
+            "schema_version = 1\n\n[[unit]]\nid = \"frame\"\nstatus = \"pending\"\n\
+             symbols = [\"F_go\"]\ndepends_on = [\"xx\"]\n\n[[unit]]\nid = \"xx\"\n\
+             status = \"pending\"\nsymbols = [\"XXH32\", \"XXH_plain\"]\n\
+             link_names = { XXH32 = \"LZ4_XXH32\" }\n",
+        );
+        let frame = p.unit("frame").expect("frame");
+        assert_eq!(
+            symbols(&p, frame).expect("symbols"),
+            ["LZ4_XXH32", "XXH_plain"]
+        );
+        assert_eq!(p.unit("xx").expect("xx").symbols, ["XXH32", "XXH_plain"]);
+        assert_eq!(
+            program_link_names(&p).get("XXH32").map(String::as_str),
+            Some("LZ4_XXH32")
+        );
+    }
+
+    /// No question is posed about a piece whose build has names the plan
+    /// step could not explain, nor about one that calls such a piece.
+    #[test]
+    fn a_build_with_unfollowed_names_is_found_on_the_piece_and_its_callers() {
+        let p = plan(
+            "schema_version = 1\n\n[[unit]]\nid = \"top\"\nstatus = \"pending\"\n\
+             depends_on = [\"frame\"]\n\n[[unit]]\nid = \"frame\"\nstatus = \"pending\"\n\
+             depends_on = [\"xx\"]\n\n[[unit]]\nid = \"xx\"\nstatus = \"pending\"\n\
+             symbols = [\"XXH32\"]\nbuild_only = [\"NS_XXH32\", \"NS_other\"]\n\n\
+             [[unit]]\nid = \"alone\"\nstatus = \"pending\"\n",
+        );
+        let xx = p.unit("xx").expect("xx");
+        let top = p.unit("top").expect("top");
+        assert_eq!(
+            unfollowed_names(&p, xx).expect("read").map(|u| &u.id),
+            Some(&xx.id)
+        );
+        assert_eq!(
+            unfollowed_names(&p, top).expect("read").map(|u| &u.id),
+            Some(&xx.id)
+        );
+        assert!(unfollowed_names(&p, p.unit("alone").expect("alone"))
+            .expect("read")
+            .is_none());
+        assert_eq!(
+            unfollowed_names_refusal(top, xx).to_string(),
+            "invalid plan: top calls xx, whose build gives its functions names the harness \
+             cannot follow yet (2 names the source does not have), so no question is posed"
+        );
+        assert!(unfollowed_names_refusal(xx, xx)
+            .to_string()
+            .contains("xx's build gives its functions names"));
     }
 
     #[test]

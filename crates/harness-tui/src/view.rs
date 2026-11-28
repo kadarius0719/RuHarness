@@ -1662,6 +1662,23 @@ fn unit_summary(app: &App, unit: &UnitView, width: usize) -> Vec<Line<'static>> 
             Style::default(),
         ));
     }
+    // A rename the plan step made certain (`link_names`): the build puts a
+    // prefix in front of the functions' names, which the Rust exports.
+    let link_names = &unit.unit.link_names;
+    if let Some((source, built)) = link_names.iter().next() {
+        let which = match harness_core::plan::link_prefix(link_names) {
+            Some(prefix) if link_names.len() == unit.unit.symbols.len() => {
+                format!("{prefix} in front of each")
+            }
+            Some(prefix) => format!("{prefix} in front of {} of them", link_names.len()),
+            None => format!("{} of them", link_names.len()),
+        };
+        piece.extend(wrapped(
+            &format!("Built under other names: {which} ({source} is {built})"),
+            inner,
+            Style::default(),
+        ));
+    }
     // Helpers written `static` in headers it includes: private copies the
     // piece's Rust carries its own translation of
     // (docs/HEADER-FUNCTIONS-DESIGN.md §5). Their names are under Helpers.
@@ -9170,6 +9187,41 @@ args = [\"-c\", \"{input}\"]\ninput = \"sample:empty\"\n\n\
             "{renamed}"
         );
         assert!(!renamed.contains("Left out:"), "{renamed}");
+        assert!(!plain.contains("Built under other names"), "{plain}");
+
+        // A rename the plan step made certain: one row in words.
+        unit.unit.build_only.clear();
+        let all: Vec<(String, String)> = unit
+            .unit
+            .symbols
+            .iter()
+            .map(|s| (s.clone(), format!("LZ4_{s}")))
+            .collect();
+        let first = all[0].0.clone();
+        unit.unit.link_names = all.into_iter().collect();
+        let built = summary(&unit);
+        assert!(
+            built.contains(&format!(
+                "Built under other names: LZ4_ in front of each ({first} is LZ4_{first})"
+            )),
+            "{built}"
+        );
+        assert!(
+            !built.contains("names its functions differently"),
+            "{built}"
+        );
+        unit.unit.link_names = [(first.clone(), format!("NS_{first}"))]
+            .into_iter()
+            .collect();
+        if unit.unit.symbols.len() > 1 {
+            assert!(
+                summary(&unit).contains(&format!(
+                    "Built under other names: NS_ in front of 1 of them ({first} is NS_{first})"
+                )),
+                "{}",
+                summary(&unit)
+            );
+        }
     }
 
     /// A summary's lines as plain text, one string per line.

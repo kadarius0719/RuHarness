@@ -374,3 +374,93 @@ fn a_changed_accepted_rust_puts_the_other_pieces_features_behind() {
         Coverage::Behind(vec!["program".into()])
     );
 }
+
+/// A build that renames the callee's function (lz4's xxhash, 2026-11-27):
+/// its test program validates (the object calls the built name), its Rust
+/// is judged by the built name — exporting it is green through the whole
+/// program, exporting the source's name is a red `symbol-set` — and the
+/// caller's Rust that declares the built name goes green.
+#[test]
+fn a_renamed_piece_is_judged_by_the_names_its_build_has() {
+    let tmp = TempDir::new("two-renamed");
+    let target = two::lay_out(tmp.path());
+    two::rename_callee(tmp.path(), "pending", "pending");
+    let callee = two::unit(tmp.path(), "u-callee");
+    assert_eq!(callee.symbols, ["callee_mix"]);
+    assert_eq!(callee.link_symbols(), ["NS_callee_mix"]);
+
+    // The test program: written with the source's name, through the header.
+    let driver = tmp.path().join("migration/units/u-callee/driver.c");
+    let v = validate_driver(&target, &callee, &driver).expect("validation runs");
+    assert!(
+        v.green,
+        "{}",
+        v.checks
+            .iter()
+            .map(|c| format!("[{}] {} — {}", c.passed, c.name, c.detail))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+
+    // The callee's Rust under the source's name: the link has no such name.
+    two::write_crate(tmp.path(), "u-callee", "callee_rs", two::CALLEE_RS);
+    let verdict = CAbiDifferential
+        .verify(&target, &callee)
+        .expect("oracle runs");
+    let first = &verdict.checks[0];
+    assert_eq!(first.name, "symbol-set", "{}", describe(&verdict));
+    assert!(!first.passed, "{}", describe(&verdict));
+    assert!(first.detail.contains("NS_callee_mix"), "{}", first.detail);
+
+    // Under the built name: green, whole program included.
+    two::write_crate(tmp.path(), "u-callee", "callee_rs", two::CALLEE_RS_RENAMED);
+    let verdict = CAbiDifferential
+        .verify(&target, &callee)
+        .expect("oracle runs");
+    assert!(verdict.green, "{}", describe(&verdict));
+    assert!(verdict
+        .checks
+        .iter()
+        .any(|c| c.name == "whole-program:sample_text.txt" && c.passed));
+
+    // The caller declares the callee by its built name.
+    two::write_crate(tmp.path(), "u-caller", "caller_rs", two::CALLER_RS_RENAMED);
+    let caller = two::unit(tmp.path(), "u-caller");
+    let verdict = CAbiDifferential
+        .verify(&target, &caller)
+        .expect("oracle runs");
+    assert!(verdict.green, "{}", describe(&verdict));
+}
+
+/// The import rule knows a renamed function by its built name too: a
+/// piece that does not depend on the renamed one and imports it under the
+/// built name fails `capabilities`, by that name.
+#[test]
+fn an_import_of_a_renamed_function_outside_the_dependencies_fails_capabilities() {
+    let tmp = TempDir::new("two-renamed-import");
+    let target = two::lay_out(tmp.path());
+    two::rename_callee(tmp.path(), "pending", "pending");
+    // The callee's Rust is fine; the caller's plan entry loses its
+    // dependency, so its import of the built name is a foreign call.
+    let plan = std::fs::read_to_string(tmp.path().join("migration/plan.toml")).expect("plan");
+    std::fs::write(
+        tmp.path().join("migration/plan.toml"),
+        plan.replace("depends_on = [\"u-callee\"]", "depends_on = []"),
+    )
+    .expect("plan written");
+    two::write_crate(tmp.path(), "u-caller", "caller_rs", two::CALLER_RS_RENAMED);
+    let caller = two::unit(tmp.path(), "u-caller");
+    let verdict = CAbiDifferential
+        .verify(&target, &caller)
+        .expect("oracle runs");
+    let caps = verdict
+        .checks
+        .iter()
+        .find(|c| c.name == "capabilities")
+        .expect("capabilities ran");
+    assert!(!caps.passed, "{}", describe(&verdict));
+    assert_eq!(
+        caps.detail,
+        "calls NS_callee_mix, which belongs to a piece it does not depend on"
+    );
+}

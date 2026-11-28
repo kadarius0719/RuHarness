@@ -2085,6 +2085,24 @@ fn read_answer(file: &Path, key: &str, expected: Option<u64>) -> Result<(String,
     Ok((key.to_string(), text))
 }
 
+/// Refuse, before anything is written or asked, a unit whose build (or a
+/// callee's) has names the plan step could not match to the source's
+/// ([`harness_core::deps::unfollowed_names`]): the sentence alone, without
+/// "invalid plan:" (the plan is right; the harness cannot follow the build).
+/// `migrate` and `gen-driver` both ask; harness-llm refuses the same again
+/// for every other caller.
+pub(crate) fn unfollowed_names_first(plan: &Plan, unit: &harness_core::Unit) -> Result<()> {
+    if let Some(blocked_by) = harness_core::deps::unfollowed_names(plan, unit)? {
+        let refusal = harness_core::deps::unfollowed_names_refusal(unit, blocked_by);
+        let words = match refusal {
+            harness_core::Error::InvalidPlan(m) => m,
+            other => other.to_string(),
+        };
+        bail!(words);
+    }
+    Ok(())
+}
+
 fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
     let resume = args.resume_command();
     let MigrateArgs {
@@ -2120,6 +2138,7 @@ fn cmd_migrate(args: MigrateArgs) -> Result<u8> {
         .execution_order()
         .context("plan.toml is structurally invalid; fix it before migrating")?;
     let unit = plan_doc.unit(&unit_id)?;
+    unfollowed_names_first(&plan_doc, unit)?;
     promote::recover_promotion(&ctx, &ledger, unit)?;
 
     let facts = crate::load_facts(&ctx, &ledger)?;

@@ -67,11 +67,20 @@ pub struct Unit {
     /// `symbols`, so no driver is asked to call them.
     #[serde(default)]
     pub not_built: Vec<String>,
-    /// Function names the build defines that the scan does not know (a build
-    /// flag that renames them): when this is non-empty, nothing was left out
-    /// of `symbols`, since the build and the scan do not clearly agree.
+    /// Function names the build defines that the scan does not know and no
+    /// one prefix explains (a build flag that renames them some other way):
+    /// when this is non-empty, nothing was left out of `symbols`, since the
+    /// build and the scan do not clearly agree, and no question about the
+    /// unit or a unit calling it is posed ([`crate::deps::unfollowed_names`]).
     #[serde(default)]
     pub build_only: Vec<String>,
+    /// The functions this build compiles under another name than the
+    /// source's (a build flag that puts a prefix in front of each, lz4's
+    /// `-DXXH_NAMESPACE=LZ4_`): source name to built name, for the renamed
+    /// ones only. `symbols` keep the source's names; every place a name
+    /// meets the linker asks [`Unit::link_name`].
+    #[serde(default)]
+    pub link_names: BTreeMap<String, String>,
     /// Unit ids this unit's code depends on.
     #[serde(default)]
     pub depends_on: Vec<String>,
@@ -88,6 +97,22 @@ pub struct Unit {
 }
 
 impl Unit {
+    /// What the function the source calls `source` is called at the link:
+    /// its built name when this build renames it (`link_names`), else
+    /// `source` itself.
+    pub fn link_name<'a>(&'a self, source: &'a str) -> &'a str {
+        self.link_names.get(source).map_or(source, String::as_str)
+    }
+
+    /// The unit's `symbols` as the linker and the compiled objects see
+    /// them ([`Unit::link_name`] of each), in the plan's order.
+    pub fn link_symbols(&self) -> Vec<String> {
+        self.symbols
+            .iter()
+            .map(|s| self.link_name(s).to_string())
+            .collect()
+    }
+
     /// The configured oracle kind, if any.
     pub fn oracle_kind(&self) -> Option<&str> {
         self.oracle.as_ref()?.get("kind")?.as_str()
@@ -156,7 +181,8 @@ impl Plan {
     /// plan.toml is target-owned, hostile input (docs/SCHEMAS.md M3 trust
     /// boundaries): every field that becomes a path component is validated
     /// here, once, at load — `id` and `rust_crate` as single clean segments;
-    /// `files`, `driver`, `replaces` as clean relative paths.
+    /// `files`, `driver`, `replaces` as clean relative paths; and
+    /// `link_names`, whose names reach prompts, as pairs of C names.
     fn validate_paths(&self) -> Result<(), Error> {
         for u in &self.units {
             if !is_clean_segment(&u.id) {
@@ -186,6 +212,14 @@ impl Plan {
                     return Err(Error::InvalidPlan(format!(
                         "unit `{}`: driver {:?} is not a clean relative path",
                         u.id, d
+                    )));
+                }
+            }
+            for (source, built) in &u.link_names {
+                if !is_c_identifier(source) || !is_c_identifier(built) {
+                    return Err(Error::InvalidPlan(format!(
+                        "unit `{}`: link_names entry {:?} = {:?} is not a pair of C names",
+                        u.id, source, built
                     )));
                 }
             }
@@ -272,6 +306,79 @@ impl Plan {
     }
 }
 
+/// The prefix every entry of a `link_names` map puts in front of its source
+/// name, when they all put the same one; `None` for an empty map or any
+/// other shape (a hand-edited plan).
+pub fn link_prefix(link_names: &BTreeMap<String, String>) -> Option<&str> {
+    let mut prefix: Option<&str> = None;
+    for (source, built) in link_names {
+        let p = built
+            .strip_suffix(source.as_str())
+            .filter(|p| !p.is_empty())?;
+        match prefix {
+            Some(q) if q != p => return None,
+            _ => prefix = Some(p),
+        }
+    }
+    prefix
+}
+
+/// The plain words for a rename, `LZ4_ in front of its 19 function names
+/// (XXH32 is built as LZ4_XXH32)`: `of` is how many functions the unit has,
+/// so a partial rename reads `in front of 3 of its 5 function names`. The
+/// example is the first renamed name. `None` when the map has no one prefix
+/// ([`link_prefix`]).
+pub fn rename_words(link_names: &BTreeMap<String, String>, of: usize) -> Option<String> {
+    let prefix = link_prefix(link_names)?;
+    let (source, built) = link_names.iter().next()?;
+    let n = link_names.len();
+    let count = match (n == of, n) {
+        (true, 1) => "its one function name".to_string(),
+        (true, _) => format!("its {n} function names"),
+        (false, _) => format!("{n} of its {of} function names"),
+    };
+    Some(format!(
+        "{prefix} in front of {count} ({source} is built as {built})"
+    ))
+}
+
+/// A C signature with the declared function's name replaced: the first
+/// `source` that stands as a whole identifier right before a `(` (blanks
+/// between allowed) becomes `built`. A signature that is the bare name (the
+/// facts held none) becomes `built`; any other is returned as it was.
+pub fn link_signature(signature: &str, source: &str, built: &str) -> String {
+    if source.is_empty() {
+        return signature.to_string();
+    }
+    if signature.trim() == source {
+        return built.to_string();
+    }
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut from = 0;
+    while let Some(at) = signature[from..].find(source).map(|i| i + from) {
+        let end = at + source.len();
+        let before_ok = signature[..at]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !ident(c));
+        let after_ok = signature[end..].trim_start().starts_with('(');
+        if before_ok && after_ok {
+            return format!("{}{built}{}", &signature[..at], &signature[end..]);
+        }
+        from = end;
+    }
+    signature.to_string()
+}
+
+/// A C identifier of at most 255 bytes: what a `link_names` entry must be
+/// on both sides (plan.toml is hostile input; the names reach prompts).
+fn is_c_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && s.len() <= 255
+}
+
 /// A single clean path segment: `^[A-Za-z0-9][A-Za-z0-9._-]*$` (so no
 /// separators, no `..`, no leading dot, no control characters).
 pub fn is_clean_segment(s: &str) -> bool {
@@ -310,6 +417,9 @@ pub struct ComputedUnit {
     /// Function names the build defines that the scan does not know, sorted;
     /// when non-empty, nothing was left out.
     pub build_only: Vec<String>,
+    /// The functions the build compiles under a prefixed name, source name
+    /// to built name ([`crate::planner::keep_built`]'s rename rule).
+    pub link_names: BTreeMap<String, String>,
     /// Unit ids this cluster depends on.
     pub depends_on: Vec<String>,
     /// File-set hash of files + transitive includes.
@@ -410,6 +520,45 @@ fn build_fields(t: &mut toml_edit::Table, cu: &ComputedUnit, changes: &mut Vec<S
         }
         t[key] = toml_edit::value(str_array(now));
     }
+    link_names_field(t, cu, changes);
+}
+
+/// Write a unit's `link_names` (the functions the build compiles under a
+/// prefixed name): written when non-empty, the key removed when empty, so a
+/// plan without a rename stays byte for byte as it was. A rename recorded
+/// or changed gets a change line in words, and so does one that goes away.
+fn link_names_field(t: &mut toml_edit::Table, cu: &ComputedUnit, changes: &mut Vec<String>) {
+    let before: BTreeMap<String, String> = t
+        .get("link_names")
+        .and_then(|v| v.as_table_like())
+        .map(|tbl| {
+            tbl.iter()
+                .filter_map(|(k, v)| v.as_str().map(|v| (k.to_string(), v.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+    if cu.link_names.is_empty() {
+        if !before.is_empty() {
+            changes.push(format!(
+                "unit {}: the build no longer renames its functions",
+                cu.id
+            ));
+        }
+        t.remove("link_names");
+        return;
+    }
+    if before != cu.link_names {
+        let words = rename_words(&cu.link_names, cu.symbols.len()).map_or_else(
+            || format!("gives {} of its functions other names", cu.link_names.len()),
+            |w| format!("puts {w}"),
+        );
+        changes.push(format!("unit {}: this build {words} — recorded", cu.id));
+    }
+    let mut tbl = toml_edit::InlineTable::new();
+    for (source, built) in &cu.link_names {
+        tbl.insert(source, built.as_str().into());
+    }
+    t["link_names"] = toml_edit::value(tbl);
 }
 
 /// The comment pass 2 of [`reconcile`] leaves on a `status = "blocked"` it
@@ -653,4 +802,72 @@ pub enum OracleValue {
     Str(String),
     /// A list of strings.
     List(Vec<String>),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The declared name is replaced, never a longer name that starts with
+    /// it, a type that holds it, or a parameter.
+    #[test]
+    fn a_signature_takes_the_built_name_of_the_function_it_declares() {
+        let sig = "XXH_PUBLIC_API XXH_errorcode XXH32_update (XXH32_state_t* state_in, const \
+                   void* input, size_t len)";
+        assert_eq!(
+            link_signature(sig, "XXH32_update", "LZ4_XXH32_update"),
+            "XXH_PUBLIC_API XXH_errorcode LZ4_XXH32_update (XXH32_state_t* state_in, const \
+             void* input, size_t len)"
+        );
+        assert_eq!(
+            link_signature(
+                "unsigned int XXH32_digest(const XXH32_state_t* s)",
+                "XXH32",
+                "LZ4_XXH32"
+            ),
+            "unsigned int XXH32_digest(const XXH32_state_t* s)"
+        );
+        assert_eq!(
+            link_signature("unsigned int XXH32 (const void* p)", "XXH32", "LZ4_XXH32"),
+            "unsigned int LZ4_XXH32 (const void* p)"
+        );
+        assert_eq!(link_signature("XXH32", "XXH32", "LZ4_XXH32"), "LZ4_XXH32");
+        assert_eq!(
+            link_signature("int f(int XXH32)", "XXH32", "LZ4_XXH32"),
+            "int f(int XXH32)"
+        );
+    }
+
+    /// A hand-edited `link_names` that is not a pair of C names never loads.
+    #[test]
+    fn link_names_must_be_c_names() {
+        let text = |entry: &str| {
+            format!(
+                "schema_version = 1\n\n[[unit]]\nid = \"u\"\nstatus = \"pending\"\n\
+                 symbols = [\"a\"]\nlink_names = {{ {entry} }}\n"
+            )
+        };
+        let path = Path::new("plan.toml");
+        let ok = Plan::parse(path, &text("a = \"NS_a\"")).expect("loads");
+        assert_eq!(ok.units[0].link_name("a"), "NS_a");
+        let err = Plan::parse(path, &text("a = \"NS a</abi>\"")).expect_err("refused");
+        assert!(err.to_string().contains("not a pair of C names"), "{err}");
+    }
+
+    /// The words of a rename, for the change line and the piece card.
+    #[test]
+    fn a_rename_reads_in_words() {
+        let map: BTreeMap<String, String> = [("XXH32", "LZ4_XXH32"), ("XXH64", "LZ4_XXH64")]
+            .into_iter()
+            .map(|(s, b)| (s.to_string(), b.to_string()))
+            .collect();
+        assert_eq!(
+            rename_words(&map, 2).as_deref(),
+            Some("LZ4_ in front of its 2 function names (XXH32 is built as LZ4_XXH32)")
+        );
+        let mut odd = map.clone();
+        odd.insert("b".into(), "other".into());
+        assert_eq!(link_prefix(&odd), None);
+        assert_eq!(rename_words(&odd, 3), None);
+    }
 }

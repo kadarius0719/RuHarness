@@ -34,7 +34,8 @@ pub(crate) struct Planned {
     /// Its accepted crate (canonical folder, `target/` folder), when the
     /// stand links Rust and it has one.
     pub rust: Option<(PathBuf, PathBuf)>,
-    /// Its plan symbols: what the unit's Rust may import from it.
+    /// Its plan symbols as the linker names them (`Unit::link_symbols`):
+    /// what the unit's Rust may import from it.
     pub symbols: Vec<String>,
 }
 
@@ -125,10 +126,24 @@ pub(crate) fn plan(
             c_files,
             c_digest: core_deps::c_digest(target, facts, dep),
             rust,
-            symbols: dep.symbols.clone(),
+            symbols: dep.link_symbols(),
         });
     }
     Ok(Plan { planned })
+}
+
+/// Every renamed function of the program, source name to built name (each
+/// unit's `link_names`, [`core_deps::program_link_names`]): the import rule
+/// knows a built name as the program's own. Empty when the plan cannot be
+/// read, as [`accepted`] is.
+pub(crate) fn program_link_names(
+    target: &TargetContext,
+    root: &Path,
+) -> std::collections::BTreeMap<String, String> {
+    let ledger = Ledger::of_under(target, root.to_path_buf());
+    harness_core::Plan::load(&ledger.plan_path())
+        .map(|plan| core_deps::program_link_names(&plan))
+        .unwrap_or_default()
 }
 
 /// Every OTHER accepted piece of the program (verified or merged, its crate
@@ -174,7 +189,7 @@ pub(crate) fn accepted(
             c_files,
             c_digest: core_deps::c_digest(target, facts, other),
             rust: Some((crate_dir, target_dir)),
-            symbols: other.symbols.clone(),
+            symbols: other.link_symbols(),
         });
     }
     Ok(Plan { planned })

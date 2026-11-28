@@ -335,18 +335,19 @@ impl Ctx<'_> {
         let source = std::fs::read(self.driver).map_err(|e| Error::io(self.driver, e))?;
         let lint = harness_scan::lint_driver(
             &source,
-            &self.unit.symbols,
+            &crate::driver_lint_names(self.unit),
             &crate::unit_header_names(self.target, self.facts, self.unit),
         );
+        // The object names the unit's functions as the link does: under
+        // the built names when the build renames them.
+        let link_symbols = self.unit.link_symbols();
         gate!(shape::shape_check(
-            shape::object_violations(&syms, &self.unit.symbols),
+            shape::object_violations(&syms, &link_symbols),
             lint
         ));
 
         // 3. symbols-called: the object references every unit symbol.
-        let missing: Vec<&str> = self
-            .unit
-            .symbols
+        let missing: Vec<&str> = link_symbols
             .iter()
             .filter(|s| !syms.undefined.contains(*s))
             .map(String::as_str)

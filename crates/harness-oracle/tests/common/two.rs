@@ -200,6 +200,42 @@ pub fn lay_out(root: &Path) -> TargetContext {
     TargetContext::load(root).expect("target loads")
 }
 
+/// Make the callee's build rename its function, as lz4's
+/// `-DXXH_NAMESPACE=LZ4_` does xxhash's: its header turns `callee_mix` into
+/// `NS_callee_mix` for every file that includes it (the callee's own C, the
+/// caller's, the program's, both test programs), and the plan records the
+/// rename on `u-callee` as the plan step would (`link_names`).
+pub fn rename_callee(root: &Path, callee_status: &str, caller_status: &str) {
+    write(
+        &root.join("src/two/callee.h"),
+        &format!("#define callee_mix NS_callee_mix\n{CALLEE_H}"),
+    );
+    write(
+        &root.join("migration/plan.toml"),
+        &plan_toml(callee_status, caller_status, "\"u-callee\"").replace(
+            "symbols = [\"callee_mix\"]\n",
+            "symbols = [\"callee_mix\"]\nlink_names = { callee_mix = \"NS_callee_mix\" }\n",
+        ),
+    );
+}
+
+/// [`CALLEE_RS`] under the built name of [`rename_callee`].
+pub const CALLEE_RS_RENAMED: &str = "#[no_mangle]\n\
+pub extern \"C\" fn NS_callee_mix(a: i32) -> i32 {\n\
+    (a as u32).wrapping_mul(31).wrapping_add(7) as i32\n}\n";
+
+/// [`CALLER_RS`] calling the callee by the built name of [`rename_callee`].
+pub const CALLER_RS_RENAMED: &str = "extern \"C\" {\n    fn NS_callee_mix(a: i32) -> i32;\n}\n\
+#[no_mangle]\n\
+pub extern \"C\" fn caller_sum(n: i32) -> i32 {\n\
+    let mut s: u32 = 0;\n\
+    let mut i = 0;\n\
+    while i < n {\n\
+        s = s.wrapping_add((unsafe { NS_callee_mix(i) } as u32) ^ (i as u32));\n\
+        i += 1;\n\
+    }\n\
+    (s % 100000) as i32\n}\n";
+
 /// The unit `id` as the plan on disk holds it.
 pub fn unit(root: &Path, id: &str) -> Unit {
     let plan = Plan::load(&root.join("migration/plan.toml")).expect("plan loads");

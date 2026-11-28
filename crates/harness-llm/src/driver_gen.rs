@@ -283,6 +283,13 @@ fn preconditions(plan: &Plan, unit: &Unit) -> Result<(), Error> {
             unit.id
         )));
     }
+    // As migrate's: no question while the piece's build, or a callee's,
+    // has names the plan step could not match to the source's.
+    if let Some(blocked_by) = harness_core::deps::unfollowed_names(plan, unit)? {
+        return Err(harness_core::deps::unfollowed_names_refusal(
+            unit, blocked_by,
+        ));
+    }
     Ok(())
 }
 
@@ -1537,6 +1544,51 @@ return 0;\n}\n";
         assert_eq!(seen.borrow().len(), 1);
         assert!(!dir.join("candidate").exists());
         assert!(!dir.join("validation.json").exists());
+    }
+
+    /// A unit whose build renames its functions: the test program's
+    /// contract names the built names (what its compiled object calls,
+    /// through the unit's header) and says both names once.
+    #[test]
+    fn a_renamed_units_driver_contract_names_the_built_names() {
+        let mut fx = fixture("renamed");
+        fx.plan = plan("symbols = [\"add\"]\nlink_names = { add = \"NS_add\" }\n");
+        let (provider, seen) = scripted("anthropic", false, vec![good()]);
+        // Only the question matters here: the judge has nothing scripted.
+        let _ = run_with(&fx, &provider, &FakeJudge::default(), 0);
+        let user = seen.borrow()[0].user.clone();
+        let abi = section(&user, "ABI CONTRACT");
+        assert!(abi.contains("\n\"int NS_add(int a, int b)\"\n"), "{abi}");
+        assert!(abi.contains("every one, many times:\n<abi_"), "{abi}");
+        assert!(abi.contains("\n\"NS_add\"\n"), "{abi}");
+        assert!(
+            abi.ends_with(
+                "In this build these functions are named differently from the source; use the \
+                 built names: add is NS_add.\n"
+            ),
+            "{abi}"
+        );
+    }
+
+    /// No test-program question for a piece whose build has names the plan
+    /// step could not explain.
+    #[test]
+    fn unfollowed_build_names_refuse_the_driver_before_any_question() {
+        let mut fx = fixture("unfollowed");
+        fx.plan = plan("symbols = [\"add\"]\nbuild_only = [\"NS_add\", \"NS_more\"]\n");
+        let (provider, seen) = scripted("anthropic", false, vec![good()]);
+        let err = run_with(&fx, &provider, &FakeJudge::default(), 0)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.ends_with(&format!(
+                "{UNIT}'s build gives its functions names the harness cannot follow yet (2 \
+                 names the source does not have), so no question is posed"
+            )),
+            "{err}"
+        );
+        assert!(seen.borrow().is_empty());
+        assert!(!fx.driver_attempts_dir().exists());
     }
 
     #[test]

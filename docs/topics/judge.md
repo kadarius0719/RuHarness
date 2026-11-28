@@ -26,6 +26,8 @@ Every check passes: **GREEN**, and the command ends with exit code 0. Anything e
 
 **A piece that calls other pieces.** liblzg's `u-encode` calls `u-checksum`'s function. Every build the judge makes for it links the pieces it calls **as the program stands**: their Rust once you have accepted it, else their C. So `u-encode` is tested with the code the program really runs, and its verdict also records each piece it was tested with, in which form (`c` or `rust`), with its fingerprint (`jq '.inputs.dependencies' …/oracle-latest.json` shows them). When `u-checksum`'s accepted Rust changes, `u-encode` reads `out of date (a piece it calls changed)` until a re-check. Changing `checksum.c` once its Rust is accepted does not: the program runs the Rust, not that C. The guide's Part 7 walks it.
 
+**A piece the build renames.** lz4 builds `xxhash.c` with a flag that puts `LZ4_` in front of every function: the source says `XXH32`, the compiled program calls `LZ4_XXH32`. Refresh the plan says so (`this build puts LZ4_ in front of its 19 function names … — recorded`), and the piece card shows it under This piece. The plan keeps the source's names, but the judge holds the Rust, the test program and every caller to the built names, because those are the names the program links: a Rust that exports `XXH32` is a red `symbol-set`. When the plan cannot tell how a build renamed its functions, `migrate` and `gen-driver` refuse that piece, and every piece that calls it, before any model is asked.
+
 ## What GREEN means, and what it does not
 
 GREEN means: on every input the judge tried, the Rust did exactly what the C did. Nothing more.

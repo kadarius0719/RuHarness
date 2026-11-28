@@ -250,6 +250,7 @@ fn reconcile_preserves_human_state() {
         interface: vec!["int alpha(void)".into()],
         not_built: vec![],
         build_only: vec![],
+        link_names: Default::default(),
         depends_on: vec![],
         source_hash: "blake3:v1".into(),
     }];
@@ -276,6 +277,7 @@ fn reconcile_preserves_human_state() {
         interface: vec![],
         not_built: vec![],
         build_only: vec![],
+        link_names: Default::default(),
         depends_on: vec![],
         source_hash: "blake3:bb".into(),
     });
@@ -339,6 +341,7 @@ fn lz4hc_unit() -> ComputedUnit {
         interface: vec!["int LZ4_compressHC(void)".into()],
         not_built: vec![],
         build_only: vec![],
+        link_names: Default::default(),
         depends_on: vec![],
         source_hash: "blake3:v1".into(),
     }
@@ -411,6 +414,88 @@ fn reconcile_writes_and_clears_build_only() {
     assert!(!text.contains("build_only"), "{text}");
 }
 
+/// A rename the build makes certain is written to `link_names` with a change
+/// line in words, replacing the unexplained `build_only` the plan held
+/// before; the plan's `symbols` stay the source's and the unit answers each
+/// name's link name. Cleared, the key goes with a line of its own.
+#[test]
+fn reconcile_writes_and_clears_link_names() {
+    let dir = temp_dir("plan-linknames");
+    let path = dir.join("plan.toml");
+    let base = ComputedUnit {
+        id: "u-xxhash".into(),
+        files: vec!["lib/xxhash.c".into()],
+        symbols: vec!["XXH32".into(), "XXH64".into(), "XXH_versionNumber".into()],
+        interface: vec![
+            "unsigned int XXH32 (const void* input, size_t len, unsigned int seed)".into(),
+            "unsigned long long XXH64 (const void* input, size_t len, unsigned long long s)".into(),
+            "unsigned XXH_versionNumber (void)".into(),
+        ],
+        ..lz4hc_unit()
+    };
+    let mut computed = vec![ComputedUnit {
+        build_only: vec!["LZ4_XXH32".into(), "LZ4_XXH64".into()],
+        ..base.clone()
+    }];
+    plan::reconcile(&path, "demo", &computed).unwrap();
+    computed[0].build_only.clear();
+    computed[0].link_names = [
+        ("XXH32", "LZ4_XXH32"),
+        ("XXH64", "LZ4_XXH64"),
+        ("XXH_versionNumber", "LZ4_XXH_versionNumber"),
+    ]
+    .into_iter()
+    .map(|(s, b)| (s.to_string(), b.to_string()))
+    .collect();
+    let changes = plan::reconcile(&path, "demo", &computed).unwrap();
+    assert_eq!(
+        changes,
+        [
+            "unit u-xxhash: this build puts LZ4_ in front of its 3 function names (XXH32 is \
+             built as LZ4_XXH32) — recorded"
+        ]
+    );
+    let loaded = Plan::load(&path).unwrap();
+    let u = &loaded.units[0];
+    assert!(u.build_only.is_empty());
+    assert_eq!(u.symbols, ["XXH32", "XXH64", "XXH_versionNumber"]);
+    assert_eq!(u.link_name("XXH64"), "LZ4_XXH64");
+    assert_eq!(u.link_name("unknown"), "unknown");
+    assert_eq!(
+        u.link_symbols(),
+        ["LZ4_XXH32", "LZ4_XXH64", "LZ4_XXH_versionNumber"]
+    );
+    assert_eq!(plan::link_prefix(&u.link_names), Some("LZ4_"));
+
+    // The same again: nothing new to say, nothing rewritten.
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(plan::reconcile(&path, "demo", &computed)
+        .unwrap()
+        .is_empty());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+
+    // A partial rename says how many of the functions it covers.
+    computed[0].link_names.remove("XXH_versionNumber");
+    let changes = plan::reconcile(&path, "demo", &computed).unwrap();
+    assert_eq!(
+        changes,
+        [
+            "unit u-xxhash: this build puts LZ4_ in front of 2 of its 3 function names (XXH32 \
+             is built as LZ4_XXH32) — recorded"
+        ]
+    );
+
+    // Cleared: the key goes, said in words.
+    computed[0].link_names.clear();
+    let changes = plan::reconcile(&path, "demo", &computed).unwrap();
+    assert_eq!(
+        changes,
+        ["unit u-xxhash: the build no longer renames its functions"]
+    );
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(!text.contains("link_names"), "{text}");
+}
+
 /// A plan written with neither field reconciles to the very same text.
 #[test]
 fn reconcile_without_build_fields_keeps_the_plan_byte_identical() {
@@ -420,6 +505,7 @@ fn reconcile_without_build_fields_keeps_the_plan_byte_identical() {
     plan::reconcile(&path, "demo", &computed).unwrap();
     let before = std::fs::read_to_string(&path).unwrap();
     assert!(!before.contains("not_built") && !before.contains("build_only"));
+    assert!(!before.contains("link_names"));
     let changes = plan::reconcile(&path, "demo", &computed).unwrap();
     assert!(changes.is_empty(), "{changes:?}");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
@@ -443,6 +529,7 @@ fn adopt_existing_ids_matches_by_file_overlap() {
             interface: vec![],
             not_built: vec![],
             build_only: vec![],
+            link_names: Default::default(),
             depends_on: vec![],
             source_hash: "blake3:x".into(),
         },
@@ -453,6 +540,7 @@ fn adopt_existing_ids_matches_by_file_overlap() {
             interface: vec![],
             not_built: vec![],
             build_only: vec![],
+            link_names: Default::default(),
             depends_on: vec!["u-a".into()],
             source_hash: "blake3:y".into(),
         },
@@ -519,6 +607,7 @@ fn split_cycle_keeps_both_units() {
             interface: vec![],
             not_built: vec![],
             build_only: vec![],
+            link_names: Default::default(),
             depends_on: vec![],
             source_hash: "blake3:b".into(),
         },
@@ -529,6 +618,7 @@ fn split_cycle_keeps_both_units() {
             interface: vec![],
             not_built: vec![],
             build_only: vec![],
+            link_names: Default::default(),
             depends_on: vec!["u-b".into()],
             source_hash: "blake3:a".into(),
         },
@@ -562,6 +652,7 @@ fn reconcile_rejects_duplicate_computed_ids() {
         interface: vec![],
         not_built: vec![],
         build_only: vec![],
+        link_names: Default::default(),
         depends_on: vec![],
         source_hash: "blake3:x".into(),
     };

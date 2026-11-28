@@ -109,6 +109,7 @@ Every entry below, oldest first, one line each: the date, the title as its headi
 - 2026-11-21 — **The piece card comes in titled groups** — This piece, Where it stands, Checks, Functions (n), Helpers (n): a blank line between groups, rows indented, the function names in columns with their lines of C; the headings take the section colour, body text stays plain so colour on words still means a state.
 - 2026-11-25 — **The outer loop turned on for lz4, and a ninth wall on the way** — Anthropic's Messages API port read; the whole-program check and 15 scenarios pass on a copy with the three accepted pieces; `features map` stopped on lz4's macro-static helpers and now takes a function's identity from the facts; the scenarios run 9 of u-lz4's 49 functions, which is what the program uses.
 - 2026-11-27 — **One Re-check for every piece the program has left behind** — an accept changes the program as it stands, so every other piece in Rust goes `features=behind(program)`; `harness verify --behind` and one cockpit action re-check them all, in plan order, stopping at the first that is not green; the rule itself is kept.
+- 2026-11-27 — **A build that puts a prefix in front of a piece's functions is followed, not just flagged** — the scanner reads xxhash.c's two `_update` heads; the plan step records lz4's `LZ4_` rename in `link_names`; `symbols` stay the source's and every place a name meets the linker asks for the built name; a rename the plan cannot explain stops `migrate` and `gen-driver` before any model time.
 
 ## 2026-09-17 — M0 kickoff: research spike (§15)
 
@@ -4778,3 +4779,83 @@ core's, the cockpit's and the new command-line test; the lints; the guide gate).
 
 **Left open.** The Accept itself could offer the re-check when it ends. Nothing tests that the
 stopped ending draws in the attention colour, or a verify that errors (not reds) mid-way.
+
+## 2026-11-27 — A build that puts a prefix in front of a piece's functions is followed, not just flagged
+
+**Seen.** On the lz4 run a person asked a model for u-lz4frame's Rust, which calls xxhash. lz4
+builds `lib/xxhash.c` with `-DXXH_NAMESPACE=LZ4_`: a macro in `xxhash.h` makes the source's
+`XXH32` the object's `LZ4_XXH32`. The plan step had flagged that since 2026-11-19
+(`build_only`) and done nothing more, so the contract offered `XXH32`. Turn 1 declared it and
+the link failed (`Undefined symbols: _XXH32`); turn 2 declared `LZ4_XXH32` and the harness
+refused it as no function of a piece the unit calls. The model stopped, correctly: about
+fifteen minutes and ten dollars, and every piece still to move calls xxhash. A second fault fed
+it: the scanner read `XXH_PUBLIC_API XXH_errorcode XXH32_update (…)` as a function named
+`XXH_errorcode`, and the same for `XXH64_update` (one name, so one record). With a typedef'd
+return type after a macro and a space before the parenthesis, tree-sitter takes the return
+type for the declarator and puts the real name in a parse error just before the parameters;
+without the space, or with a keyword return type (`unsigned int XXH32 (…)`), it reads right.
+
+**Decided** (the design the person's session laid out; this records how it was built).
+- The scanner: a function declarator whose only thing between its name and its parameters is a
+  parse error holding one identifier is named by that identifier. A scan now gives u-xxhash 19
+  functions, `XXH32_update` and `XXH64_update` among them, and no `XXH_errorcode`.
+- The plan step: when the build defines names the plan does not know, and exactly one prefix
+  explains the build (each source name built as itself or as prefix + itself, that built name
+  never another of the unit's source names, at least one renamed, every unknown name prefix +
+  a renamed source name), the rename is certain and goes to a new plan field, `link_names`
+  (source name to built name, the renamed ones only, written only when non-empty). The change
+  line: `unit u-xxhash: this build puts LZ4_ in front of its 19 function names (XXH32 is built
+  as LZ4_XXH32) — recorded`. Otherwise the 2026-11-19 behaviour stays.
+- The plan's `symbols` stay the source's: the code beside the Rust, the planted bugs, the
+  feature map and the prototypes are keyed to the facts and work unchanged. `Unit::link_name`
+  and `Unit::link_symbols` answer what a function is called at the link, and every site where a
+  name meets the linker or a compiled object, or is what a model writes its `extern` and
+  `#[no_mangle]` names from, asks them: `symbol-set`; `driver-shape`'s object rule and
+  `symbols-called` (in verify and in driver validation); the import rule (which now knows a
+  renamed function under both names); the callees a caller may declare
+  (`harness_core::deps::symbols`); the callee prototypes in the caller's prompt; the unit's own
+  `[ABI CONTRACT]`. A section that holds a renamed function gains one line, `In this build
+  these functions are named differently from the source; use the built names: XXH32 is
+  LZ4_XXH32, …`; every other prompt is byte for byte as before. The piece card says `Built under
+  other names: LZ4_ in front of each (XXH32 is LZ4_XXH32)`.
+- This direction was chosen so that a missed link-facing site fails loudly (a red check), where
+  making `symbols` the built names would let a facts-keyed site miss silently. One site did
+  miss silently and is fixed: the import rule knew the program's functions only by their source
+  names, so a piece that does not depend on xxhash could have imported `LZ4_XXH32` unnoticed.
+- The test program: it includes the unit's header and is compiled with the configuration's
+  flags (lz4's carry `-DXXH_NAMESPACE=LZ4_`), so `XXH32` and `LZ4_XXH32` both compile to a call
+  of `LZ4_XXH32` (checked on the real header). Its contract names the built names; its source
+  lint guards both spellings.
+
+**Guard.** A unit with unexplained `build_only` names, or one that calls such a unit, is refused
+by `harness migrate` and `harness gen-driver` before anything is written or asked: `error:
+u-lz4frame calls u-xxhash, whose build gives its functions names the harness cannot follow
+yet (19 names the source does not have), so no question is posed`. harness-llm refuses the
+same for every other caller. `link_names` entries must be C names on both sides, or the plan
+does not load (the names reach prompts outside the fenced blocks).
+
+**Rejected, for now.** Asking the preprocessor what each name becomes (`cc -E` on a probe with
+the build's flags): it would follow any macro rename, not only a prefix, at the cost of a
+compile step at plan time. Revisit when a rename that is not a plain prefix appears. A suffix
+was not built either: nothing has shown one.
+
+**Proven.** On a copy of the person's lz4 project (theirs untouched): after `scan` and `plan`
+the one change line above, u-xxhash with 19 symbols, its `link_names` and no `build_only`, the
+five accepted pieces untouched; `verify --behind` and the other two verifies all green, every
+`features=current`. u-lz4frame's Rust question, posed without a model, offers `LZ4_XXH32`,
+`LZ4_XXH32_reset`, `LZ4_XXH32_update` and `LZ4_XXH32_digest` with the both-names line;
+u-xxhash's test-program question names the 19 built names. Both unanswered tries were removed.
+The blocked try's candidate on disk is turn 1's: it declared `XXH32`, `XXH32_digest` and
+`XXH32_reset`, which the harness would now refuse before building (not names the link has);
+turn 2's reply declared `LZ4_XXH32`, `LZ4_XXH32_digest` and `LZ4_XXH32_reset`, all of which it
+now allows. With the old plan put back, both commands refuse as above and
+write nothing. In tests, the whole judge on the two-piece fixture with a header rename: the
+test program validates, a Rust exporting the source's name is a red `symbol-set`, one
+exporting the built name is green through the whole program, a caller declaring the built name
+is green, and an import of the built name from outside the dependencies fails `capabilities`.
+
+**Left open.** A piece whose build both renames and leaves a function out under an `#if` is
+still flagged, not followed. The boundary check (opt-in, none of lz4's pieces) renames
+functions at the C source level with `-D` flags, which a header that renames by macro would
+collide with: a compile error, so loud. The TRACTOR benchmark's per-symbol cases match plan
+`symbols` by the source's name, which is what their C calls.

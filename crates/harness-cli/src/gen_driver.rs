@@ -130,6 +130,7 @@ pub fn cmd_gen_driver(args: GenDriverArgs) -> Result<u8> {
         .execution_order()
         .context("plan.toml is structurally invalid; fix it first")?;
     let unit = plan_doc.unit(&unit_id)?;
+    crate::unfollowed_names_first(&plan_doc, unit)?;
     let facts = crate::load_facts(&ctx, &ledger)?;
     let closure = facts.include_closure(&unit.files);
     if hash::file_set_hash_on_disk(&ctx.root, &closure)? != unit.source_hash {

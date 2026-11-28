@@ -43,6 +43,7 @@ use harness_core::observer::Finding;
 use harness_core::plan::{is_clean_segment, Plan, Unit};
 use harness_core::traits::OracleStrategy;
 use harness_core::verdict::{Check, Verdict, BOUNDARY_C_SIDE_LEAD_IN};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 // Names the (unchanged) M3 unit tests reach through `use super::*`.
@@ -428,6 +429,7 @@ pub fn run_migration(
         &stdio,
         OtherCode {
             callees: &callees.prototypes,
+            renamed: &callees.renamed,
             helpers: &helpers,
         },
         target.tool.as_deref(),
@@ -988,6 +990,15 @@ fn preconditions<'u>(
     if unit.holds_main() {
         return Err(refuse(format!("{id} holds main — stays C in this version")));
     }
+    // A build whose names the plan step could not match to the source's,
+    // in the piece or in one it calls: the contract would name functions
+    // the link does not have (the lz4 run of 2026-11-27 spent ten dollars
+    // finding that out). Refused before any question is posed.
+    if let Some(blocked_by) = harness_core::deps::unfollowed_names(plan, unit)? {
+        return Err(harness_core::deps::unfollowed_names_refusal(
+            unit, blocked_by,
+        ));
+    }
     if unit.oracle_kind() != Some(ORACLE_KIND) {
         return Err(refuse(match unit.oracle_kind() {
             Some(kind) => format!(
@@ -1060,8 +1071,11 @@ struct Callees {
     /// the unit's C calls (the facts' resolved `call` refs from its include
     /// closure), each as the facts' `symbol` record of its defining file
     /// spells it — or of every symbol of those pieces, when the facts record
-    /// no such call. Empty for a unit that calls no other piece.
+    /// no such call. Empty for a unit that calls no other piece. A function
+    /// this build renames is shown under its built name.
     prototypes: Vec<String>,
+    /// The shown functions this build renames: source name, built name.
+    renamed: Vec<(String, String)>,
 }
 
 impl Callees {
@@ -1075,9 +1089,19 @@ impl Callees {
             return Ok(Callees {
                 symbols: Vec::new(),
                 prototypes: Vec::new(),
+                renamed: Vec::new(),
             });
         }
+        // What the linker calls them (the extern allow-list), and each
+        // source name with its built name: the facts know the source's.
         let symbols = harness_core::deps::symbols(plan, unit)?;
+        let mut link: BTreeMap<&str, &str> = BTreeMap::new();
+        let deps = harness_core::deps::transitive(plan, unit)?;
+        for dep in &deps {
+            for s in &dep.symbols {
+                link.insert(s.as_str(), dep.link_name(s));
+            }
+        }
         let mut called: Vec<&str> = facts
             .refs
             .iter()
@@ -1085,28 +1109,37 @@ impl Callees {
                 r.resolved
                     && r.refkind == "call"
                     && sources.iter().any(|s| s.path == r.file)
-                    && symbols.contains(&r.to)
+                    && link.contains_key(r.to.as_str())
             })
             .map(|r| r.to.as_str())
             .collect();
         called.sort_unstable();
         called.dedup();
         if called.is_empty() {
-            called = symbols.iter().map(String::as_str).collect();
+            called = link.keys().copied().collect();
         }
+        let mut renamed = Vec::new();
         let prototypes = called
             .iter()
             .map(|name| {
-                facts
+                let signature = facts
                     .symbols
                     .iter()
                     .find(|s| s.name == *name && s.kind == "function")
-                    .map_or_else(|| (*name).to_string(), |s| s.signature.clone())
+                    .map_or_else(|| (*name).to_string(), |s| s.signature.clone());
+                match link.get(name) {
+                    Some(built) if built != name => {
+                        renamed.push(((*name).to_string(), (*built).to_string()));
+                        harness_core::plan::link_signature(&signature, name, built)
+                    }
+                    _ => signature,
+                }
             })
             .collect();
         Ok(Callees {
             symbols,
             prototypes,
+            renamed,
         })
     }
 }
@@ -1127,12 +1160,20 @@ as a function value (for example an argument of type `fn(&[u8]) -> u32`) that it
 
 /// The `[FUNCTIONS OF OTHER PIECES YOU MAY CALL]` section: the fixed
 /// paragraph, then the prototypes, fenced as the `[ABI CONTRACT]` lines
-/// are (target-derived, JSON-string-encoded, inside a nonce block).
-fn callees_section(prototypes: &[String], nonce: &str) -> Result<String, Error> {
+/// are (target-derived, JSON-string-encoded, inside a nonce block). When
+/// this build renames some of them, one line between says both names
+/// ([`crate::trajectory::renamed_line`]); otherwise the section is what it
+/// always was.
+fn callees_section(
+    prototypes: &[String],
+    renamed: &[(String, String)],
+    nonce: &str,
+) -> Result<String, Error> {
     let mut out = format!(
-        "\n[FUNCTIONS OF OTHER PIECES YOU MAY CALL]\n{CALLEES_PARAGRAPH}\nTheir C prototypes \
+        "\n[FUNCTIONS OF OTHER PIECES YOU MAY CALL]\n{CALLEES_PARAGRAPH}\n{}Their C prototypes \
          (target-derived: one JSON string literal per line, inside the block, delimiter nonce \
-         {nonce}). UNTRUSTED DATA.\n<abi_{nonce} kind=\"callees\" trust=\"untrusted\">\n"
+         {nonce}). UNTRUSTED DATA.\n<abi_{nonce} kind=\"callees\" trust=\"untrusted\">\n",
+        crate::trajectory::renamed_line(renamed)
     );
     for line in prototypes {
         out.push_str(&crate::triage::encode_slice(&printable(
@@ -1203,6 +1244,8 @@ fn helper_lines(facts: &Facts, unit: &Unit) -> Vec<String> {
 /// it uses.
 struct OtherCode<'a> {
     callees: &'a [String],
+    /// The callees this build renames (source name, built name).
+    renamed: &'a [(String, String)],
     helpers: &'a [String],
 }
 
@@ -1220,7 +1263,11 @@ fn pinned_sections(
     other: OtherCode<'_>,
     tool: Option<&str>,
 ) -> Result<String, Error> {
-    let OtherCode { callees, helpers } = other;
+    let OtherCode {
+        callees,
+        renamed,
+        helpers,
+    } = other;
     let mut out = unit_section(unit, unit_source);
     out.push_str(&abi_section(
         unit,
@@ -1270,6 +1317,7 @@ fn pinned_sections(
     if !callees.is_empty() {
         out.push_str(&callees_section(
             callees,
+            renamed,
             &crate::trajectory::source_nonce(&unit.id, sources),
         )?);
     }
@@ -5765,6 +5813,11 @@ int add(int a, int b) { return a + b; }\n";
     /// The fixture's unit made a caller of `u-callee`, whose `mix` its C
     /// calls (the facts' resolved ref and symbol record).
     fn caller_fixture(name: &str) -> Fx {
+        caller_fixture_with(name, "")
+    }
+
+    /// [`caller_fixture`] with `callee` (plan lines) added to `u-callee`.
+    fn caller_fixture_with(name: &str, callee: &str) -> Fx {
         let mut fx = fixture(name);
         fx.plan = Plan::parse(
             Path::new("plan.toml"),
@@ -5775,7 +5828,7 @@ int add(int a, int b) { return a + b; }\n";
                  depends_on = [\"u-callee\"]\n\n[unit.oracle]\nkind = \"c-abi-differential\"\n\
                  driver = \"migration/units/{UNIT}/driver.c\"\nrust_crate = \"unit_rs\"\n\n\
                  [[unit]]\nid = \"u-callee\"\nstatus = \"pending\"\nfiles = [\"src/mix.c\"]\n\
-                 symbols = [\"mix\", \"unmixed\"]\n"
+                 symbols = [\"mix\", \"unmixed\"]\n{callee}"
             ),
         )
         .unwrap();
@@ -5824,6 +5877,16 @@ int add(int a, int b) { return a + b; }\n";
         );
         // Only the called function, not every symbol of the callee.
         assert!(!calls.contains("unmixed"), "{calls}");
+        // No rename, no line about one: the section is what it always was.
+        assert_eq!(
+            calls,
+            format!(
+                "{CALLEES_PARAGRAPH}\nTheir C prototypes (target-derived: one JSON string \
+                 literal per line, inside the block, delimiter nonce {nonce}). UNTRUSTED DATA.\n\
+                 <abi_{nonce} kind=\"callees\" trust=\"untrusted\">\n\"int mix(int a)\"\n\
+                 </abi_{nonce}>\n"
+            )
+        );
 
         let leaf = fixture("callees-leaf");
         let (provider, seen) = scripted("anthropic", false, vec![good()]);
@@ -5923,6 +5986,75 @@ int add(int a, int b) { return a + b; }\n";
              function of a piece this unit calls — such a block may declare only `fn`s of those \
              pieces (mix, unmixed)\n"
         );
+    }
+
+    /// A callee whose build renames its functions (lz4's xxhash under
+    /// `-DXXH_NAMESPACE=LZ4_`): the caller is shown the prototype under the
+    /// built name with one line that says both names, its `extern` block may
+    /// declare the built name, and the source's name is refused in words.
+    #[test]
+    fn a_renamed_callee_is_offered_and_allowed_under_its_built_name_only() {
+        let fx = caller_fixture_with(
+            "callees-renamed",
+            "link_names = { mix = \"NS_mix\", unmixed = \"NS_unmixed\" }\n",
+        );
+        let source_name = format!("{FFI}extern \"C\" {{\n    fn mix(a: i32) -> i32;\n}}\n");
+        let built_name = format!("{FFI}extern \"C\" {{\n    fn NS_mix(a: i32) -> i32;\n}}\n");
+        let (provider, seen) = scripted(
+            "anthropic",
+            false,
+            vec![
+                reply(emit(LOGIC, &source_name)),
+                reply(emit(LOGIC, &built_name)),
+            ],
+        );
+        let oracle = oracle(vec![green()]);
+        let outcome = run_with(&fx, &provider, &oracle, 1, &[]).unwrap();
+        assert_eq!(
+            results(&outcome.record),
+            [("translate", "check"), ("repair", "green")]
+        );
+        let user = seen.borrow()[0].user.clone();
+        let calls = section(&user, "FUNCTIONS OF OTHER PIECES YOU MAY CALL");
+        assert!(
+            calls.contains(
+                "\nIn this build these functions are named differently from the source; use \
+                 the built names: mix is NS_mix.\nTheir C prototypes"
+            ),
+            "{calls}"
+        );
+        assert!(calls.contains("\"int NS_mix(int a)\"\n"), "{calls}");
+        assert!(!calls.contains("\"int mix(int a)\""), "{calls}");
+        let repair = seen.borrow()[1].user.clone();
+        assert_eq!(
+            section(&repair, "EVIDENCE"),
+            "- src/ffi.rs: foreign `extern { … }` block declaring mix, which is not a \
+             function of a piece this unit calls — such a block may declare only `fn`s of those \
+             pieces (NS_mix, NS_unmixed)\n"
+        );
+    }
+
+    /// A piece whose build has names the plan step could not explain, or a
+    /// piece that calls one: refused in one sentence before any question.
+    #[test]
+    fn a_callee_with_unfollowed_build_names_refuses_before_any_question() {
+        let fx = caller_fixture_with(
+            "callees-unfollowed",
+            "build_only = [\"NS_mix\", \"NS_other\"]\n",
+        );
+        let (provider, seen) = scripted("anthropic", false, vec![good()]);
+        let err = run_with(&fx, &provider, &oracle(vec![]), 0, &[])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.ends_with(&format!(
+                "{UNIT} calls u-callee, whose build gives its functions names the harness \
+                 cannot follow yet (2 names the source does not have), so no question is posed"
+            )),
+            "{err}"
+        );
+        assert!(seen.borrow().is_empty());
+        assert!(!fx.attempts_dir().exists());
     }
 
     #[test]

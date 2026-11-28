@@ -16,7 +16,7 @@ A driver that cannot tell broken C from the real thing could not catch a broken 
 |---|---|
 | `driver-build` | Does it compile, with strict warnings, and link against the unit's C (and the original C of the pieces it calls)? |
 | `driver-shape` | Does it define only `main` and call only the unit and harmless standard functions? Does its text pass the rule check (the lint)? |
-| `symbols-called` | Does it call every public function of the unit? |
+| `symbols-called` | Does it call every public function of the unit? (Under the names the build gives them, when it renames them.) |
 | `determinism` | Do three runs print exactly the same bytes? |
 | `opt-levels` | Does it print the same with the compiler's speed-ups off (`-O0`) and on (`-O2`)? |
 | `sanitizers` | Does it run clean under the **sanitizers** (builds that catch misuse)? |

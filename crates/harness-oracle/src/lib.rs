@@ -1064,7 +1064,9 @@ impl CAbiDifferential {
             },
             &rust_lib,
             panic_abort,
-            &unit.symbols,
+            // The names the link has: a build that renames the unit's
+            // functions (the plan's `link_names`) is matched by them.
+            &unit.link_symbols(),
         )?;
         let symbols_ok = symbol_check.passed;
         checks.push(symbol_check);
@@ -1080,7 +1082,12 @@ impl CAbiDifferential {
             &rust_lib,
             &crate_dir,
             &capabilities::unit_classes(&facts, unit),
-            &capabilities::ProgramFns::of(&facts, unit, &dep_plan.symbols()),
+            &capabilities::ProgramFns::of(
+                &facts,
+                unit,
+                &dep_plan.symbols(),
+                &deps::program_link_names(target, root),
+            ),
         )?;
         let caps_ok = caps.passed;
         checks.push(caps);
@@ -1112,10 +1119,10 @@ impl CAbiDifferential {
                 let source = std::fs::read(&prep.driver).map_err(|e| Error::io(&prep.driver, e))?;
                 let lint = harness_scan::lint_driver(
                     &source,
-                    &unit.symbols,
+                    &driver_lint_names(unit),
                     &unit_header_names(target, &facts, unit),
                 );
-                shape::shape_check(shape::object_violations(&syms, &unit.symbols), lint)
+                shape::shape_check(shape::object_violations(&syms, &unit.link_symbols()), lint)
             }
         };
         let shape_ok = shape_check.passed;
@@ -1873,6 +1880,18 @@ pub(crate) fn load_facts(target: &TargetContext) -> Result<Facts, Error> {
         )));
     }
     Facts::load(&facts_path)
+}
+
+/// The names the driver's source lint guards (only called or prototyped,
+/// never `#define`d, `#undef`d or taken as a value): the unit's symbols
+/// under both names when the build renames them. A driver reaches a
+/// renamed function through the unit's header by either spelling, so the
+/// lint holds both; the object is held to the built names
+/// ([`harness_core::Unit::link_symbols`]).
+pub(crate) fn driver_lint_names(unit: &Unit) -> Vec<String> {
+    let mut names = unit.symbols.clone();
+    names.extend(unit.link_names.values().cloned());
+    names
 }
 
 /// The quoted-include names a driver may use for the unit's own headers:

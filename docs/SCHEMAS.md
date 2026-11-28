@@ -105,7 +105,11 @@ interface = ["int ZopfliLengthLimitedCodeLengths(const size_t*, int, int, unsign
 not_built = ["LZ4HC_hexOut"]  # present only when non-empty: in the source but not compiled
                           # in this build (the project map says so), left out of symbols
 build_only = ["LZ4_XXH32"]    # present only when non-empty: functions the build defines that
-                          # the scan does not know; nothing was left out of symbols
+                          # the scan does not know and no prefix explains; nothing was left
+                          # out of symbols
+link_names = { XXH32 = "LZ4_XXH32" }  # present only when non-empty: the functions this build
+                          # compiles under a prefixed name, source name to built name (the
+                          # renamed ones only); both sides C names, else the plan is refused
 depends_on = []           # unit ids
 test_strategy = "..."
 done_criteria = "..."
@@ -130,6 +134,23 @@ replaces = ["src/zopfli/katajainen.c"]
   `status` otherwise.
 - **Writer model:** planner owns membership/derived fields; `harness verify` owns
   `status`; humans/LLM own everything else (annotations, strategy text).
+- **What the build said (2026-11-19, 2026-11-27).** With a project map, `harness plan`
+  compares each unit's planned functions with what its compiled files define
+  (`planner::keep_built`). Names the build lacks and no unknown names: they go to
+  `not_built` (change line `unit <id>: left out <names> — in the source, not compiled in
+  this build`; back: `unit <id>: no longer leaves out <names>`). Unknown names: when exactly
+  one prefix explains them all — every source name is built as itself or as prefix + itself
+  (then never another of the unit's source names), at least one is renamed, and every
+  unknown name is prefix + a renamed source name — the rename goes to `link_names`
+  (`unit <id>: this build puts LZ4_ in front of its 19 function names (XXH32 is built as
+  LZ4_XXH32) — recorded`; a partial one reads `… in front of 3 of its 5 function names …`;
+  gone: `unit <id>: the build no longer renames its functions`). Otherwise the names go to
+  `build_only` (`unit <id>: the build's function names differ from the source's (<n> the
+  scan does not know) — nothing left out`). `symbols` and `interface` always keep the
+  source's names: everything keyed to the facts reads them. Every place a name meets the
+  linker, a compiled object or the names a model writes its `extern` and `#[no_mangle]`
+  from asks `Unit::link_name` / `Unit::link_symbols` ("Renamed functions" under "What the
+  Rust may call").
 
 ## Verdicts (committed evidence: units/<id>/oracle-latest.json, oracle-last-green.json)
 
@@ -444,7 +465,8 @@ shadowing forging green — all fixed below).
 - **Symbol-set check** (oracle check `symbol-set`, applies to every verification):
   the candidate staticlib's defined external symbols that are not Rust-mangled, minus
   a baseline captured from an empty harness-owned crate built with the same
-  toolchain, must equal the unit's `symbols` exactly. A candidate exporting `printf`,
+  toolchain, must equal the unit's `symbols` exactly (as the link names them: a function
+  in the plan's `link_names` by its built name). A candidate exporting `printf`,
   `malloc`, or any other extra global cannot go green. The same check rejects
   **pre-main constructors**: symbols placed in `__mod_init_func` / `__mod_term_func` /
   `__init_offsets` (macOS) or `.init_array` / `.fini_array` / `.ctors` / `.dtors`
@@ -2706,3 +2728,24 @@ staticlibs, staticlibs callers' first.
   replay unchanged.
 - **The piece holding `main`** (its plan symbols name `main`) is refused by `migrate`:
   `<id> holds main — stays C in this version`. Every other unit may move whatever it calls.
+- **Renamed functions (2026-11-27).** A unit whose plan entry has `link_names` (a build flag
+  that puts a prefix in front of its functions, lz4's `-DXXH_NAMESPACE=LZ4_`) is judged
+  under the built names: `symbol-set` wants them exported; `driver-shape` lets the test
+  program's object reference them and `symbols-called` wants each referenced (the test program
+  includes the unit's header, compiled with the build's flags, so the source's spelling and
+  the built one both compile to the built name; the source lint guards both spellings). A
+  caller's source rule check allows the callee's built names, never its source names; the
+  import rule knows a renamed function under both names, so importing it by its built name
+  from a piece the unit does not depend on fails `capabilities`. The prompts: the unit's
+  `[ABI CONTRACT]` shows its signatures and symbols under the built names, the callees'
+  prototypes are shown under theirs, and each section with a renamed function gains one line
+  `In this build these functions are named differently from the source; use the built
+  names: XXH32 is LZ4_XXH32, …` (after the symbols block; in the callees section after its
+  paragraph). A prompt with no renamed function is byte for byte what it was.
+- **A build whose names the harness cannot follow.** `harness migrate` and `harness
+  gen-driver` refuse, before anything is written or asked (exit 1), a unit that has
+  `build_only` names or depends, transitively, on one that has: `error: <unit>'s build gives
+  its functions names the harness cannot follow yet (<n> names the source does not have), so
+  no question is posed`, or `error: <unit> calls <callee>, whose build gives its functions …`
+  (no "invalid plan:": the plan is right). harness-llm refuses the same again, as an invalid
+  plan, for every other caller (harness-mcp, the cockpit's chat).

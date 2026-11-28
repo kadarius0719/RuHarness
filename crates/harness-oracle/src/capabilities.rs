@@ -307,8 +307,16 @@ pub(crate) struct ProgramFns {
 impl ProgramFns {
     /// From the facts (`symbol` records of kind `function`, public — a
     /// file-local static has no linkable name) and the dependencies'
-    /// symbols.
-    pub(crate) fn of(facts: &Facts, unit: &Unit, callable: &[String]) -> ProgramFns {
+    /// symbols as the linker names them. `renamed` is the program's renamed
+    /// functions (source name to built name): a function the build renames
+    /// is the program's under both names, so importing it by its built name
+    /// from a piece the unit does not call is refused as by any other.
+    pub(crate) fn of(
+        facts: &Facts,
+        unit: &Unit,
+        callable: &[String],
+        renamed: &BTreeMap<String, String>,
+    ) -> ProgramFns {
         ProgramFns {
             defined: facts
                 .symbols
@@ -319,7 +327,7 @@ impl ProgramFns {
                         && !s.name.contains("::")
                         && !unit.symbols.contains(&s.name)
                 })
-                .map(|s| s.name.clone())
+                .flat_map(|s| std::iter::once(s.name.clone()).chain(renamed.get(&s.name).cloned()))
                 .collect(),
             callable: callable.iter().cloned().collect(),
         }

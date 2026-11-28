@@ -167,6 +167,7 @@ fn compute_units_with(
             interface,
             not_built: Vec::new(),
             build_only: Vec::new(),
+            link_names: BTreeMap::new(),
             depends_on: Vec::new(), // filled below once all ids exist
             source_hash: hash::file_set_hash(&pairs),
         });
@@ -205,7 +206,8 @@ fn compute_units_with(
 /// `interface` lines) to `not_built`, in their planned order, when the build
 /// defines no name the plan does not know and shares at least one with it;
 /// when the build does define names the plan does not know (a build flag
-/// that renames them), nothing is removed and those names go to
+/// that renames them), nothing is removed: when one prefix explains them all
+/// ([`prefix_rename`]) the rename goes to `link_names`, else the names go to
 /// `build_only`, sorted. A build that defines none of the unit's functions
 /// changes nothing.
 pub fn keep_built(units: &mut [ComputedUnit], built: &BTreeMap<String, BTreeSet<String>>) {
@@ -228,7 +230,10 @@ pub fn keep_built(units: &mut [ComputedUnit], built: &BTreeMap<String, BTreeSet<
             .map(|n| n.to_string())
             .collect();
         if !build_only.is_empty() {
-            unit.build_only = build_only;
+            match prefix_rename(&unit.symbols, &defined, &build_only) {
+                Some(link_names) => unit.link_names = link_names,
+                None => unit.build_only = build_only,
+            }
             continue;
         }
         let shared = unit.symbols.iter().any(|s| defined.contains(s.as_str()));
@@ -258,6 +263,57 @@ pub fn keep_built(units: &mut [ComputedUnit], built: &BTreeMap<String, BTreeSet<
         unit.interface = interface;
         unit.not_built = not_built;
     }
+}
+
+/// The rename a build flag makes certain (lz4's `-DXXH_NAMESPACE=LZ4_`
+/// puts `LZ4_` in front of every xxhash function): source name to built
+/// name, for the renamed functions only, when exactly one prefix `P`
+/// explains the build. With `symbols` the unit's source names, `defined`
+/// what its objects define and `build_only` the defined names the plan does
+/// not know: every source name is built as itself or as `P` + itself (and
+/// then that built name is no source name of the unit: two functions never
+/// share one name at the link), at least one is renamed, and every
+/// build-only name is `P` + a renamed source name. `None` otherwise, and the
+/// names stay unexplained in `build_only`.
+///
+/// Only a prefix: a suffix or any other macro rename is left unexplained
+/// until one is seen. Under these rules two prefixes cannot both fit (each
+/// would rename exactly the source names the build lacks onto exactly the
+/// build-only names, so both are as long as each other and equal); the
+/// count is kept as a guard all the same.
+fn prefix_rename(
+    symbols: &[String],
+    defined: &BTreeSet<&str>,
+    build_only: &[String],
+) -> Option<BTreeMap<String, String>> {
+    let planned: BTreeSet<&str> = symbols.iter().map(String::as_str).collect();
+    let candidates: BTreeSet<&str> = build_only
+        .iter()
+        .flat_map(|b| {
+            symbols
+                .iter()
+                .filter_map(move |s| b.strip_suffix(s.as_str()).filter(|p| !p.is_empty()))
+        })
+        .collect();
+    let with = |prefix: &str| -> Option<BTreeMap<String, String>> {
+        let mut renamed = BTreeMap::new();
+        for s in symbols {
+            if defined.contains(s.as_str()) {
+                continue;
+            }
+            let built = format!("{prefix}{s}");
+            if !defined.contains(built.as_str()) || planned.contains(built.as_str()) {
+                return None;
+            }
+            renamed.insert(s.clone(), built);
+        }
+        let explained: BTreeSet<&str> = renamed.values().map(String::as_str).collect();
+        (!renamed.is_empty() && build_only.iter().all(|b| explained.contains(b.as_str())))
+            .then_some(renamed)
+    };
+    let mut fits = candidates.into_iter().filter_map(with);
+    let first = fits.next()?;
+    fits.next().is_none().then_some(first)
 }
 
 /// The largest project map [`built_functions`] reads.
@@ -498,6 +554,7 @@ mod tests {
             interface: symbols.iter().map(|s| format!("int {s}(void)")).collect(),
             not_built: Vec::new(),
             build_only: Vec::new(),
+            link_names: BTreeMap::new(),
             depends_on: Vec::new(),
             source_hash: String::new(),
         }
@@ -546,6 +603,103 @@ mod tests {
         assert_eq!(units[0].interface.len(), 2);
         assert!(units[0].not_built.is_empty());
         assert_eq!(units[0].build_only, ["LZ4_XXH32", "LZ4_XXH64"]);
+    }
+
+    fn names(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(s, b)| (s.to_string(), b.to_string()))
+            .collect()
+    }
+
+    /// lz4's xxhash.c built with `-DXXH_NAMESPACE=LZ4_`: every function is
+    /// built as `LZ4_` + its source name. The rename is recorded; `symbols`
+    /// and `interface` keep the source's names and nothing is unexplained.
+    #[test]
+    fn keep_built_records_a_prefix_every_name_is_built_under() {
+        let mut units = vec![unit(&["x.c"], &["XXH32", "XXH32_update", "XXH64"])];
+        let before = units[0].clone();
+        keep_built(
+            &mut units,
+            &built(&[("x.c", &["LZ4_XXH32", "LZ4_XXH32_update", "LZ4_XXH64"])]),
+        );
+        assert_eq!(units[0].symbols, before.symbols);
+        assert_eq!(units[0].interface, before.interface);
+        assert!(units[0].not_built.is_empty() && units[0].build_only.is_empty());
+        assert_eq!(
+            units[0].link_names,
+            names(&[
+                ("XXH32", "LZ4_XXH32"),
+                ("XXH32_update", "LZ4_XXH32_update"),
+                ("XXH64", "LZ4_XXH64"),
+            ])
+        );
+    }
+
+    /// Some functions built as themselves, the others under the prefix:
+    /// only the renamed ones are recorded.
+    #[test]
+    fn keep_built_records_only_the_renamed_functions() {
+        let mut units = vec![unit(&["a.c"], &["a", "b", "c"])];
+        keep_built(&mut units, &built(&[("a.c", &["a", "NS_b", "NS_c"])]));
+        assert_eq!(units[0].link_names, names(&[("b", "NS_b"), ("c", "NS_c")]));
+        assert!(units[0].build_only.is_empty());
+    }
+
+    /// A build that matches the scan renames nothing.
+    #[test]
+    fn keep_built_records_no_rename_when_the_names_match() {
+        let mut units = vec![unit(&["a.c"], &["a", "b"])];
+        keep_built(&mut units, &built(&[("a.c", &["a", "b"])]));
+        assert!(units[0].link_names.is_empty());
+    }
+
+    /// A build-only name that no renamed source name explains: the rename
+    /// is not certain, so nothing is recorded but the unexplained names.
+    #[test]
+    fn keep_built_records_no_rename_when_a_build_name_is_unexplained() {
+        let mut units = vec![unit(&["a.c"], &["a", "b"])];
+        keep_built(
+            &mut units,
+            &built(&[("a.c", &["NS_a", "NS_b", "NS_extra"])]),
+        );
+        assert!(units[0].link_names.is_empty());
+        assert_eq!(units[0].build_only, ["NS_a", "NS_b", "NS_extra"]);
+        // A source name built neither as itself nor under the prefix.
+        let mut units = vec![unit(&["a.c"], &["a", "b", "gone"])];
+        keep_built(&mut units, &built(&[("a.c", &["NS_a", "NS_b"])]));
+        assert!(units[0].link_names.is_empty());
+        assert_eq!(units[0].build_only, ["NS_a", "NS_b"]);
+    }
+
+    /// Two prefixes that each read the build's one unknown name as a source
+    /// name renamed (`p_w_x` is `p_` + `w_x` and `p_w_` + `x`): neither is
+    /// certain, so nothing is recorded. Each would also give a renamed
+    /// function the name of another of the unit's functions, which no build
+    /// can do; under the rule two prefixes can never both fit.
+    #[test]
+    fn keep_built_records_no_rename_when_two_prefixes_could_explain_it() {
+        let mut units = vec![unit(&["a.c"], &["x", "w_x", "p_x", "p_w_w_x"])];
+        keep_built(&mut units, &built(&[("a.c", &["p_x", "p_w_x", "p_w_w_x"])]));
+        assert!(units[0].link_names.is_empty());
+        assert_eq!(units[0].build_only, ["p_w_x"]);
+    }
+
+    /// The scanner's misread of xxhash.c's `_update` heads (a function named
+    /// `XXH_errorcode`, no `XXH32_update`) left a source name the build
+    /// lacks and a build name no source name explains: no rename. With the
+    /// heads read right, the rename is certain.
+    #[test]
+    fn keep_built_finds_the_rename_once_the_scan_reads_every_head() {
+        let build = built(&[("x.c", &["LZ4_XXH32", "LZ4_XXH32_update"])]);
+        let mut misread = vec![unit(&["x.c"], &["XXH32", "XXH_errorcode"])];
+        keep_built(&mut misread, &build);
+        assert!(misread[0].link_names.is_empty());
+        assert_eq!(misread[0].build_only, ["LZ4_XXH32", "LZ4_XXH32_update"]);
+        let mut read = vec![unit(&["x.c"], &["XXH32", "XXH32_update"])];
+        keep_built(&mut read, &build);
+        assert_eq!(read[0].link_names.len(), 2);
+        assert!(read[0].build_only.is_empty());
     }
 
     /// A unit with a file the map does not hold as compiled is untouched.
